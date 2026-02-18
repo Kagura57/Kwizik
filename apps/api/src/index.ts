@@ -1,5 +1,6 @@
 import { cors } from "@elysiajs/cors";
 import { Elysia } from "elysia";
+import { musicSearchRoute } from "./routes/music/search";
 import { quizRoutes } from "./routes/quiz";
 import { roomRoutes } from "./routes/room";
 
@@ -13,6 +14,7 @@ export const app = new Elysia()
       allowedHeaders: ["content-type", "authorization"],
     }),
   )
+  .use(musicSearchRoute)
   .use(quizRoutes)
   .use(roomRoutes);
 
