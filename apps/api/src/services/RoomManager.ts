@@ -2,6 +2,8 @@ type GameState = "waiting" | "countdown" | "playing" | "reveal" | "results";
 
 export class RoomManager {
   private gameState: GameState = "waiting";
+  private currentRound = 0;
+  private roundDeadlineMs: number | null = null;
   private answers = new Map<string, string>();
 
   constructor(public readonly roomCode: string) {}
@@ -10,13 +12,25 @@ export class RoomManager {
     return this.gameState;
   }
 
+  round(): number {
+    return this.currentRound;
+  }
+
+  deadlineMs(): number | null {
+    return this.roundDeadlineMs;
+  }
+
   startGame() {
     if (this.gameState !== "waiting") return;
+    this.currentRound = 0;
+    this.roundDeadlineMs = null;
     this.gameState = "countdown";
   }
 
-  forcePlayingRound(_round: number, _deadlineMs: number) {
+  forcePlayingRound(round: number, deadlineMs: number) {
     this.answers.clear();
+    this.currentRound = round;
+    this.roundDeadlineMs = deadlineMs;
     this.gameState = "playing";
   }
 
