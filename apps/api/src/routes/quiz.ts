@@ -10,6 +10,15 @@ function readStringField(body: unknown, key: string): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function readOptionalStringField(body: unknown, key: string) {
+  if (typeof body !== "object" || body === null) return null;
+  const record = body as Record<string, unknown>;
+  const value = record[key];
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export const quizRoutes = new Elysia({ prefix: "/quiz" })
   .post("/create", () => roomStore.createRoom())
   .post("/join", ({ body, set }) => {
@@ -29,14 +38,15 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
 
     return joined;
   })
-  .post("/start", ({ body, set }) => {
+  .post("/start", async ({ body, set }) => {
     const roomCode = readStringField(body, "roomCode");
+    const categoryQuery = readOptionalStringField(body, "categoryQuery") ?? "popular hits";
     if (!roomCode) {
       set.status = 400;
       return { ok: false, error: "INVALID_PAYLOAD" };
     }
 
-    const started = roomStore.startGame(roomCode);
+    const started = await roomStore.startGame(roomCode, categoryQuery);
     if (!started) {
       set.status = 404;
       return { ok: false, error: "ROOM_NOT_FOUND" };

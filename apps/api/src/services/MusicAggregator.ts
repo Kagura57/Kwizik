@@ -19,6 +19,7 @@ type UnifiedSearchOptions = {
   searchers?: Partial<Record<MusicProvider, ProviderSearchFn>>;
   providerOrder?: MusicProvider[];
   targetFallbackCount?: number;
+  allowMockFallback?: boolean;
 };
 
 type UnifiedSearchResult = {
@@ -84,6 +85,30 @@ function readErrorMessage(error: unknown) {
   return "UNKNOWN_ERROR";
 }
 
+function createMockTracks(query: string, limit: number): MusicTrack[] {
+  const safeQuery = query.trim().length > 0 ? query.trim() : "mix";
+  const providers: MusicProvider[] = [
+    "spotify",
+    "deezer",
+    "apple-music",
+    "tidal",
+    "ytmusic",
+    "youtube",
+  ];
+
+  return Array.from({ length: limit }, (_, index) => {
+    const provider = providers[index % providers.length] ?? "spotify";
+    const number = index + 1;
+    return {
+      provider,
+      id: `mock-${provider}-${number}`,
+      title: `${safeQuery} track ${number}`,
+      artist: `Mock Artist ${number}`,
+      previewUrl: null,
+    };
+  });
+}
+
 export async function unifiedMusicSearch(
   query: string,
   limit = 10,
@@ -110,12 +135,26 @@ export async function unifiedMusicSearch(
   );
 
   const fallback = buildFallback(providerResults, providerOrder, targetFallbackCount);
+  const allowMockFallback = options.allowMockFallback ?? true;
+  const fallbackResult =
+    fallback.length > 0 || !allowMockFallback
+      ? fallback
+      : createMockTracks(query, targetFallbackCount);
 
   return {
     query,
     limit: safeLimit,
-    fallback,
+    fallback: fallbackResult,
     results: providerResults,
     providerErrors,
   };
+}
+
+export async function buildTrackPool(categoryQuery: string, size = 8) {
+  const safeSize = Math.max(1, Math.min(size, 50));
+  const aggregated = await unifiedMusicSearch(categoryQuery, safeSize, {
+    targetFallbackCount: safeSize,
+    allowMockFallback: true,
+  });
+  return aggregated.fallback;
 }

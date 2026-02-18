@@ -35,16 +35,30 @@ describe("core flow integration", () => {
       }),
     );
     expect(startRes.status).toBe(200);
-    const started = (await startRes.json()) as { ok: boolean; state?: string };
+    const started = (await startRes.json()) as {
+      ok: boolean;
+      state?: string;
+      poolSize?: number;
+      categoryQuery?: string;
+    };
     expect(started.ok).toBe(true);
     expect(started.state).toBe("countdown");
+    expect((started.poolSize ?? 0) > 0).toBe(true);
+    expect(started.categoryQuery).toBe("popular hits");
 
     const snapshotRes = await app.handle(
       new Request(`http://localhost/room/${created.roomCode}/state`),
     );
     expect(snapshotRes.status).toBe(200);
-    const snapshot = (await snapshotRes.json()) as { state: string; playerCount: number };
+    const snapshot = (await snapshotRes.json()) as {
+      state: string;
+      playerCount: number;
+      poolSize: number;
+      categoryQuery: string;
+    };
     expect(snapshot.state).toBe("countdown");
     expect(snapshot.playerCount).toBe(1);
+    expect(snapshot.poolSize > 0).toBe(true);
+    expect(snapshot.categoryQuery).toBe("popular hits");
   });
 });

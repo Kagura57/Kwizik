@@ -1,4 +1,6 @@
 import { RoomManager } from "./RoomManager";
+import { trackCache } from "./TrackCache";
+import type { MusicTrack } from "./music-types";
 
 type GameState = "waiting" | "countdown" | "playing" | "reveal" | "results";
 
@@ -14,6 +16,8 @@ type RoomSession = {
   manager: RoomManager;
   players: Map<string, Player>;
   nextPlayerNumber: number;
+  trackPool: MusicTrack[];
+  categoryQuery: string;
 };
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -44,6 +48,8 @@ export class RoomStore {
       manager: new RoomManager(roomCode),
       players: new Map(),
       nextPlayerNumber: 1,
+      trackPool: [],
+      categoryQuery: "popular hits",
     };
 
     this.rooms.set(roomCode, session);
@@ -73,15 +79,20 @@ export class RoomStore {
     };
   }
 
-  startGame(roomCode: string) {
+  async startGame(roomCode: string, categoryQuery = "popular hits") {
     const session = this.rooms.get(roomCode);
     if (!session) return null;
 
+    const poolSize = 8;
+    session.categoryQuery = categoryQuery;
+    session.trackPool = await trackCache.getOrBuild(categoryQuery, poolSize);
     session.manager.startGame();
 
     return {
       ok: true as const,
       state: session.manager.state(),
+      poolSize: session.trackPool.length,
+      categoryQuery: session.categoryQuery,
     };
   }
 
@@ -106,6 +117,8 @@ export class RoomStore {
       round: session.manager.round(),
       serverNowMs: Date.now(),
       playerCount: session.players.size,
+      poolSize: session.trackPool.length,
+      categoryQuery: session.categoryQuery,
     };
   }
 

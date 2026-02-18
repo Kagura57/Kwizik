@@ -17,10 +17,14 @@ describe("room snapshot", () => {
       state: string;
       round: number;
       playerCount: number;
+      poolSize: number;
+      categoryQuery: string;
     };
     expect(payload.roomCode).toBe(created.roomCode);
     expect(payload.state).toBe("waiting");
     expect(payload.round).toBe(0);
     expect(payload.playerCount).toBe(0);
+    expect(payload.poolSize).toBe(0);
+    expect(payload.categoryQuery).toBe("popular hits");
   });
 });
