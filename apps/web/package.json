@@ -1,4 +1,7 @@
 {
   "name": "@tunaris/web",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "zustand": "5.0.11"
+  }
 }
