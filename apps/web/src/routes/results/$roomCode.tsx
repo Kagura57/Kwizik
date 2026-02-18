@@ -1,8 +1,40 @@
+import { useQuery } from "@tanstack/react-query";
+import { Link, useParams } from "@tanstack/react-router";
+import { getRoomResults } from "../../lib/api";
+
 export function ResultsPage() {
+  const { roomCode } = useParams({ from: "/results/$roomCode" });
+
+  const resultsQuery = useQuery({
+    queryKey: ["room-results", roomCode],
+    queryFn: () => getRoomResults(roomCode),
+    refetchInterval: 4_000,
+  });
+
   return (
-    <section>
-      <h2>Résultats</h2>
-      <p>Écran des résultats en cours d’implémentation.</p>
+    <section className="card stack">
+      <h2 className="section-title">Résultats</h2>
+      <p className="section-copy">Classement actuel de la room {roomCode}</p>
+
+      {resultsQuery.isError && (
+        <p className="status status-error">Impossible de charger le classement.</p>
+      )}
+
+      {!resultsQuery.isError && (
+        <ol className="list">
+          {(resultsQuery.data?.ranking ?? []).map((entry) => (
+            <li key={entry.playerId}>
+              {entry.displayName} · {entry.score} pts · streak max {entry.maxStreak}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      <div className="button-row">
+        <Link className="btn btn-secondary" to="/">
+          Retour accueil
+        </Link>
+      </div>
     </section>
   );
 }
