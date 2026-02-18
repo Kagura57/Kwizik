@@ -10,6 +10,8 @@ dist/
 build/
 coverage/
 .cache/
+playwright-report/
+test-results/
 
 # Env files
 .env
@@ -27,4 +29,3 @@ pnpm-debug.log*
 .DS_Store
 .idea/
 .vscode/
-
