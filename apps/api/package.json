@@ -1,0 +1,7 @@
+{
+  "name": "@tunaris/api",
+  "type": "module",
+  "dependencies": {
+    "elysia": "^1.3.0"
+  }
+}
