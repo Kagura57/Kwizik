@@ -1,5 +1,6 @@
 import { fetchJsonWithTimeout } from "./http";
 import type { MusicTrack } from "../../services/music-types";
+import { readEnvVar } from "../../lib/env";
 
 type DeezerPayload = {
   data?: Array<{
@@ -35,8 +36,14 @@ export type DeezerPlaylistSummary = {
   trackCount: number | null;
 };
 
+function isDeezerEnabled() {
+  const raw = readEnvVar("DEEZER_ENABLED");
+  if (typeof raw !== "string") return true;
+  return raw.trim().toLowerCase() !== "false";
+}
+
 export async function searchDeezer(query: string, limit = 10): Promise<MusicTrack[]> {
-  const enabled = process.env.DEEZER_ENABLED === "true";
+  const enabled = isDeezerEnabled();
   if (!enabled) return [];
 
   const url = new URL("https://api.deezer.com/search");
@@ -157,9 +164,6 @@ export async function searchDeezerPlaylists(
   query: string,
   limit = 20,
 ): Promise<DeezerPlaylistSummary[]> {
-  const enabled = process.env.DEEZER_ENABLED === "true";
-  if (!enabled) return [];
-
   const safeLimit = Math.max(1, Math.min(limit, 50));
   const trimmed = query.trim();
   if (trimmed.length === 0) return [];

@@ -209,7 +209,7 @@ export function HomePage() {
                 onClick={() => setIsPublicRoom(true)}
               >
                 <strong>Partie publique</strong>
-                <span>Visible dans la liste publique (join setup uniquement)</span>
+                <span>Visible dans la liste publique (join possible en cours)</span>
               </button>
               <button
                 type="button"
@@ -337,7 +337,7 @@ export function HomePage() {
       <article className="panel-card">
         <h2 className="panel-title">Parties publiques</h2>
         <p className="panel-copy">
-          Rejoins une room publique en setup. Une fois lancée, la room n’accepte plus de nouveaux joueurs.
+          Rejoins une room publique à tout moment tant que la partie n’est pas terminée.
         </p>
         <ul className="public-room-list">
           {(publicRoomsQuery.data?.rooms ?? []).map((room) => (

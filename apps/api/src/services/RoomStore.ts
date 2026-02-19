@@ -307,7 +307,7 @@ export class RoomStore {
   joinRoom(roomCode: string, displayName: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    if (session.manager.state() !== "waiting") {
+    if (session.manager.state() === "results") {
       return { status: "room_not_joinable" as const };
     }
 
@@ -571,7 +571,7 @@ export class RoomStore {
         playerCount: session.players.size,
         categoryQuery: session.categoryQuery,
         createdAtMs: session.createdAtMs,
-        canJoin: state === "waiting",
+        canJoin: true,
         deadlineMs: session.manager.deadlineMs(),
         serverNowMs: nowMs,
       });

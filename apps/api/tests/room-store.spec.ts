@@ -152,9 +152,14 @@ describe("RoomStore gameplay progression", () => {
     await store.startGame(roomCode, "popular hits");
 
     nowMs = 5;
-    store.roomState(roomCode);
+    const playingRound1 = store.roomState(roomCode);
+    const round1Track = FIXTURE_TRACKS.find((track) => track.id === playingRound1?.media?.trackId);
     nowMs = 10;
-    store.submitAnswer(roomCode, player.value.playerId, "Alpha Song - Neon Waves");
+    store.submitAnswer(
+      roomCode,
+      player.value.playerId,
+      `${round1Track?.title ?? ""} - ${round1Track?.artist ?? ""}`,
+    );
 
     nowMs = 55;
     store.roomState(roomCode);
@@ -206,7 +211,7 @@ describe("RoomStore gameplay progression", () => {
     expect(playing?.media?.embedUrl).toContain("youtube.com/embed/yt1");
   });
 
-  it("rejects late joins once room leaves setup", async () => {
+  it("accepts late joins while game is running", async () => {
     let nowMs = 0;
     const store = new RoomStore({
       now: () => nowMs,
@@ -227,6 +232,8 @@ describe("RoomStore gameplay progression", () => {
 
     await store.startGame(roomCode, "spotify:popular");
     const lateJoin = store.joinRoom(roomCode, "LatePlayer");
-    expect(lateJoin.status).toBe("room_not_joinable");
+    expect(lateJoin.status).toBe("ok");
+    if (lateJoin.status !== "ok") return;
+    expect(lateJoin.value.playerCount).toBe(2);
   });
 });

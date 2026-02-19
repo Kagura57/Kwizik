@@ -40,6 +40,7 @@ function playlistWeight(item: UnifiedPlaylistOption) {
   let score = item.trackCount ?? 0;
   const owner = (item.owner ?? "").toLowerCase();
   const name = item.name.toLowerCase();
+  if (item.provider === "spotify") score += 160;
   if (item.provider === "spotify" && owner.includes("spotify")) score += 300;
   if (item.provider === "deezer" && owner.includes("deezer")) score += 120;
   if (name.includes("top") || name.includes("hits") || name.includes("viral")) score += 40;

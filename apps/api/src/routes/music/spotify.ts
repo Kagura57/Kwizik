@@ -50,6 +50,11 @@ type SpotifyPlaylistCollectionPayload = {
     items?: SpotifyPlaylistItem[];
   };
 };
+type SpotifyOEmbedPayload = {
+  title?: string;
+  author_name?: string;
+  thumbnail_url?: string;
+};
 type SpotifyBrowseCategoriesPayload = {
   categories?: {
     items?: Array<{
@@ -79,14 +84,18 @@ export async function searchSpotify(query: string, limit = 10): Promise<MusicTra
   const token = await getSpotifyAccessToken();
   if (!token) return [];
   const safeLimit = Math.max(1, Math.min(limit, 50));
+  const market = readSpotifyMarket();
 
-  const url = new URL("https://api.spotify.com/v1/search");
-  url.searchParams.set("type", "track");
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", String(safeLimit));
-  url.searchParams.set("market", readSpotifyMarket());
+  const buildUrl = (withMarket: boolean) => {
+    const url = new URL("https://api.spotify.com/v1/search");
+    url.searchParams.set("type", "track");
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", String(safeLimit));
+    if (withMarket) url.searchParams.set("market", market);
+    return url;
+  };
 
-  const payload = (await fetchJsonWithTimeout(url, {
+  let payload = (await fetchJsonWithTimeout(buildUrl(true), {
     headers: { authorization: `Bearer ${token}` },
   }, {
     context: {
@@ -94,6 +103,18 @@ export async function searchSpotify(query: string, limit = 10): Promise<MusicTra
       query,
     },
   })) as SpotifyPayload | null;
+
+  if (!payload) {
+    payload = (await fetchJsonWithTimeout(buildUrl(false), {
+      headers: { authorization: `Bearer ${token}` },
+    }, {
+      context: {
+        provider: "spotify",
+        route: "search_tracks_fallback_no_market",
+        query,
+      },
+    })) as SpotifyPayload | null;
+  }
 
   const items = payload?.tracks?.items ?? [];
   const mapped = items
@@ -140,6 +161,8 @@ const DEFAULT_SPOTIFY_CATEGORY_PRESETS: SpotifyPlaylistCategory[] = [
   { id: "anime", label: "Anime", query: "Anime Now" },
 ];
 const itunesPreviewCache = new Map<string, string | null>();
+const SPOTIFY_WEB_SEARCH_TIMEOUT_MS = 4_000;
+const SPOTIFY_PLAYLIST_ID_REGEX = /(?:\/|\\\/)playlist(?:\/|\\\/)([a-zA-Z0-9]{22})/g;
 
 function safeDecodeURIComponent(value: string) {
   try {
@@ -252,6 +275,81 @@ function sortPlaylistsForBlindtest(playlists: SpotifyPlaylistSummary[]) {
     if (scoreDelta !== 0) return scoreDelta;
     return left.name.localeCompare(right.name);
   });
+}
+
+function extractSpotifyPlaylistIdsFromHtml(html: string, limit: number) {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const match of html.matchAll(SPOTIFY_PLAYLIST_ID_REGEX)) {
+    const id = match[1]?.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= limit) break;
+  }
+  return ids;
+}
+
+async function fetchTextWithTimeout(url: URL, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      },
+    });
+    if (!response.ok) return null;
+    return await response.text();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function searchSpotifyPlaylistsViaWeb(query: string, limit: number): Promise<SpotifyPlaylistSummary[]> {
+  const safeLimit = Math.max(1, Math.min(limit, 50));
+  const searchUrl = new URL(`https://open.spotify.com/search/${encodeURIComponent(query)}/playlists`);
+  const html = await fetchTextWithTimeout(searchUrl, SPOTIFY_WEB_SEARCH_TIMEOUT_MS);
+  if (!html) return [];
+
+  const ids = extractSpotifyPlaylistIdsFromHtml(html, safeLimit * 3);
+  if (ids.length <= 0) return [];
+
+  const playlists: SpotifyPlaylistSummary[] = [];
+  for (const id of ids) {
+    const oembedUrl = new URL("https://open.spotify.com/oembed");
+    oembedUrl.searchParams.set("url", `https://open.spotify.com/playlist/${id}`);
+
+    const payload = (await fetchJsonWithTimeout(oembedUrl, {}, {
+      timeoutMs: 3_500,
+      retries: 0,
+      context: {
+        provider: "spotify",
+        route: "search_playlists_web_oembed",
+        query,
+        playlistId: id,
+      },
+    })) as SpotifyOEmbedPayload | null;
+
+    const name = payload?.title?.trim();
+    if (!name) continue;
+    playlists.push({
+      id,
+      name,
+      description: "",
+      imageUrl: payload?.thumbnail_url?.trim() ?? null,
+      externalUrl: `https://open.spotify.com/playlist/${id}`,
+      owner: payload?.author_name?.trim() ?? null,
+      trackCount: null,
+    });
+    if (playlists.length >= safeLimit) break;
+  }
+
+  return sortPlaylistsForBlindtest(dedupePlaylists(playlists)).slice(0, safeLimit);
 }
 
 function normalizeText(value: string) {
@@ -432,14 +530,18 @@ export async function searchSpotifyPlaylists(query: string, limit = 20): Promise
   if (!token) return [];
 
   const safeLimit = Math.max(1, Math.min(limit, 50));
-  const url = new URL("https://api.spotify.com/v1/search");
-  url.searchParams.set("type", "playlist");
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", String(safeLimit));
-  url.searchParams.set("market", readSpotifyMarket());
+  const market = readSpotifyMarket();
+  const buildUrl = (withMarket: boolean) => {
+    const url = new URL("https://api.spotify.com/v1/search");
+    url.searchParams.set("type", "playlist");
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", String(safeLimit));
+    if (withMarket) url.searchParams.set("market", market);
+    return url;
+  };
 
-  const payload = (await fetchJsonWithTimeout(
-    url,
+  let payload = (await fetchJsonWithTimeout(
+    buildUrl(true),
     {
       headers: { authorization: `Bearer ${token}` },
     },
@@ -452,14 +554,83 @@ export async function searchSpotifyPlaylists(query: string, limit = 20): Promise
     },
   )) as SpotifyPlaylistSearchPayload | null;
 
+  if (!payload) {
+    payload = (await fetchJsonWithTimeout(
+      buildUrl(false),
+      {
+        headers: { authorization: `Bearer ${token}` },
+      },
+      {
+        context: {
+          provider: "spotify",
+          route: "search_playlists_fallback_no_market",
+          query,
+        },
+      },
+    )) as SpotifyPlaylistSearchPayload | null;
+  }
+
   const items = payload?.playlists?.items ?? [];
-  return sortPlaylistsForBlindtest(
+  const fromSearch = sortPlaylistsForBlindtest(
     dedupePlaylists(
       items
         .map((item) => toPlaylistSummary(item))
         .filter((value): value is SpotifyPlaylistSummary => value !== null),
     ),
   ).slice(0, safeLimit);
+  if (fromSearch.length > 0) return fromSearch;
+
+  const featuredBuildUrl = (withCountry: boolean) => {
+    const url = new URL("https://api.spotify.com/v1/browse/featured-playlists");
+    if (withCountry) url.searchParams.set("country", market);
+    url.searchParams.set("limit", String(safeLimit));
+    const locale = readSpotifyLocale();
+    if (locale) {
+      url.searchParams.set("locale", locale);
+    }
+    return url;
+  };
+
+  let featuredPayload = (await fetchJsonWithTimeout(
+    featuredBuildUrl(true),
+    {
+      headers: { authorization: `Bearer ${token}` },
+    },
+    {
+      context: {
+        provider: "spotify",
+        route: "search_playlists_featured_fallback",
+        query,
+      },
+    },
+  )) as SpotifyPlaylistCollectionPayload | null;
+
+  if (!featuredPayload) {
+    featuredPayload = (await fetchJsonWithTimeout(
+      featuredBuildUrl(false),
+      {
+        headers: { authorization: `Bearer ${token}` },
+      },
+      {
+        context: {
+          provider: "spotify",
+          route: "search_playlists_featured_fallback_no_country",
+          query,
+        },
+      },
+    )) as SpotifyPlaylistCollectionPayload | null;
+  }
+
+  const featured = sortPlaylistsForBlindtest(
+    dedupePlaylists(
+      (featuredPayload?.playlists?.items ?? [])
+        .map((item) => toPlaylistSummary(item))
+        .filter((value): value is SpotifyPlaylistSummary => value !== null),
+    ),
+  ).slice(0, safeLimit);
+  if (featured.length > 0) return featured;
+
+  return searchSpotifyPlaylistsViaWeb(query, safeLimit);
 }
 
 export async function fetchSpotifyPlaylistsForCategory(

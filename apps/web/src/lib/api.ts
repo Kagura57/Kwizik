@@ -37,6 +37,15 @@ type ApiErrorPayload = {
   error?: unknown;
 };
 
+class HttpStatusError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 export type RoomState = {
   roomCode: string;
   state: "waiting" | "countdown" | "playing" | "reveal" | "leaderboard" | "results";
@@ -240,8 +249,20 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
           error: details,
           attempts: attempt + 1,
         });
-        throw new Error(details);
+        throw new HttpStatusError(details, response.status);
       } catch (error) {
+        if (error instanceof HttpStatusError) {
+          logClientEvent("warn", "api_request_terminal_http_error", {
+            requestId,
+            base,
+            path,
+            method,
+            status: error.status,
+            error: error.message,
+          });
+          throw error;
+        }
+
         const message = error instanceof Error ? error.message : "HTTP_UNKNOWN";
         lastError = error instanceof Error ? error : new Error(message);
 

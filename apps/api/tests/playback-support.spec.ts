@@ -28,4 +28,3 @@ describe("playback support", () => {
     expect(playable).toBe(false);
   });
 });
-

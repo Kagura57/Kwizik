@@ -4,6 +4,7 @@ import { fetchSpotifyPlaylistTracks, fetchSpotifyPopularTracks } from "../routes
 import { searchYouTube } from "../routes/music/youtube";
 import { searchYTMusic } from "../routes/music/ytmusic";
 import { logEvent } from "../lib/logger";
+import { readEnvVar } from "../lib/env";
 import type { MusicTrack } from "./music-types";
 import { buildTrackPool } from "./MusicAggregator";
 
@@ -170,15 +171,43 @@ function fallbackQueryFromParsed(parsed: ParsedTrackSource) {
   }
 }
 
+const AD_TRACK_PATTERNS = [
+  /\b(advert(?:isement|ising)?|ad\s*break|commercial)\b/i,
+  /\b(pub|publicite|annonce|sponsor\w*)\b/i,
+  /\bdeezer\s*(ads?|pub|advert)\b/i,
+];
+
+function normalizeAdText(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLikelyAdTrack(track: Pick<MusicTrack, "title" | "artist">) {
+  const text = normalizeAdText(`${track.title} ${track.artist}`);
+  return AD_TRACK_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function nonEmptySlice(tracks: MusicTrack[], size: number) {
   const safeSize = Math.max(1, size);
-  const withPreview = tracks.filter((track) => Boolean(track.previewUrl));
-  const withoutPreview = tracks.filter((track) => !track.previewUrl);
+  const sanitized = tracks.filter((track) => !isLikelyAdTrack(track));
+  const withPreview = sanitized.filter((track) => Boolean(track.previewUrl));
+  const withoutPreview = sanitized.filter((track) => !track.previewUrl);
   return [...withPreview, ...withoutPreview].slice(0, safeSize);
 }
 
-const youtubeTrackCache = new Map<string, MusicTrack | null>();
-const YOUTUBE_RESOLVE_BUDGET_MAX = 10;
+type YouTubeTrackCacheEntry = {
+  track: MusicTrack;
+  expiresAt: number;
+};
+
+const youtubeTrackCache = new Map<string, YouTubeTrackCacheEntry>();
+const YOUTUBE_TRACK_CACHE_TTL_MS = 24 * 60 * 60_000;
+const YOUTUBE_RESOLVE_BUDGET_MAX = 3;
 
 function signature(track: Pick<MusicTrack, "title" | "artist">) {
   return `${track.title.trim().toLowerCase()}::${track.artist.trim().toLowerCase()}`;
@@ -207,7 +236,7 @@ function dedupeTracks(tracks: MusicTrack[], size: number) {
 
 async function searchPlayableYouTube(query: string, limit: number): Promise<MusicTrack[]> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
-  const hasYtMusicSearch = (process.env.YTMUSIC_SEARCH_URL ?? "").trim().length > 0;
+  const hasYtMusicSearch = (readEnvVar("YTMUSIC_SEARCH_URL") ?? "").trim().length > 0;
 
   if (hasYtMusicSearch) {
     const ytmusic = await searchYTMusic(query, safeLimit);
@@ -223,6 +252,8 @@ async function searchPlayableYouTube(query: string, limit: number): Promise<Musi
 }
 
 async function resolveYouTubePlayback(track: MusicTrack) {
+  if (isLikelyAdTrack(track)) return null;
+
   if (isYouTubeLikeTrack(track)) {
     return {
       ...track,
@@ -233,13 +264,17 @@ async function resolveYouTubePlayback(track: MusicTrack) {
   }
 
   const key = signature(track);
-  if (youtubeTrackCache.has(key)) {
-    return youtubeTrackCache.get(key) ?? null;
+  const cached = youtubeTrackCache.get(key);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) {
+      return cached.track;
+    }
+    youtubeTrackCache.delete(key);
   }
 
   const query = `${track.title} ${track.artist} official audio`;
   const candidates = await searchPlayableYouTube(query, 3);
-  const picked = candidates[0] ?? null;
+  const picked = candidates.find((candidate) => !isLikelyAdTrack(candidate)) ?? null;
   const resolved = picked
     ? ({
         provider: picked.provider === "youtube" ? "youtube" : "ytmusic",
@@ -251,7 +286,12 @@ async function resolveYouTubePlayback(track: MusicTrack) {
       } satisfies MusicTrack)
     : null;
 
-  youtubeTrackCache.set(key, resolved);
+  if (resolved) {
+    youtubeTrackCache.set(key, {
+      track: resolved,
+      expiresAt: Date.now() + YOUTUBE_TRACK_CACHE_TTL_MS,
+    });
+  }
   return resolved;
 }
 
@@ -263,9 +303,28 @@ async function prioritizeYouTubePlayback(tracks: MusicTrack[], size: number, fil
   let youtubeResolved = 0;
   let queryResolved = 0;
   let directResolveAttempts = 0;
+
+  if (result.length < safeSize && fillQuery.trim().length > 0) {
+    const fillQueries = [fillQuery, `${fillQuery} official audio`, `${fillQuery} music playlist`];
+    for (const query of fillQueries) {
+      if (result.length >= safeSize) break;
+      const candidates = await searchPlayableYouTube(query, Math.min(10, safeSize));
+      for (const track of candidates) {
+        if (result.length >= safeSize) break;
+        if (isLikelyAdTrack(track)) continue;
+        const key = signature(track);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        queryResolved += 1;
+        result.push(track);
+      }
+    }
+  }
+
+  const remaining = Math.max(0, safeSize - result.length);
   const resolveBudget = Math.min(
     scoped.length,
-    Math.min(YOUTUBE_RESOLVE_BUDGET_MAX, Math.max(4, Math.ceil(safeSize / 2))),
+    Math.min(YOUTUBE_RESOLVE_BUDGET_MAX, Math.max(1, Math.ceil(remaining / 2))),
   );
 
   for (const track of scoped) {
@@ -280,22 +339,6 @@ async function prioritizeYouTubePlayback(tracks: MusicTrack[], size: number, fil
       seen.add(key);
       youtubeResolved += 1;
       result.push(youtubePlayback);
-    }
-  }
-
-  if (result.length < safeSize && fillQuery.trim().length > 0) {
-    const fillQueries = [fillQuery, `${fillQuery} official audio`, `${fillQuery} music playlist`];
-    for (const query of fillQueries) {
-      if (result.length >= safeSize) break;
-      const candidates = await searchPlayableYouTube(query, safeSize);
-      for (const track of candidates) {
-        if (result.length >= safeSize) break;
-        const key = signature(track);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        queryResolved += 1;
-        result.push(track);
-      }
     }
   }
 
@@ -322,7 +365,16 @@ export async function resolveTrackPoolFromSource(
   try {
     if (parsed.type === "spotify_playlist" && parsed.payload) {
       const tracks = await fetchSpotifyPlaylistTracks(parsed.payload.playlistId, safeSize);
-      if (tracks.length > 0) return prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+      if (tracks.length > 0) {
+        const prioritized = await prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+        if (prioritized.length > 0) return prioritized;
+        logEvent("warn", "track_source_priority_empty_fallback", {
+          sourceType: parsed.type,
+          categoryQuery: options.categoryQuery,
+          requestedSize: safeSize,
+          inputCount: tracks.length,
+        });
+      }
       logEvent("warn", "track_source_empty_fallback", {
         sourceType: parsed.type,
         categoryQuery: options.categoryQuery,
@@ -332,7 +384,16 @@ export async function resolveTrackPoolFromSource(
 
     if (parsed.type === "spotify_popular") {
       const tracks = await fetchSpotifyPopularTracks(safeSize);
-      if (tracks.length > 0) return prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+      if (tracks.length > 0) {
+        const prioritized = await prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+        if (prioritized.length > 0) return prioritized;
+        logEvent("warn", "track_source_priority_empty_fallback", {
+          sourceType: parsed.type,
+          categoryQuery: options.categoryQuery,
+          requestedSize: safeSize,
+          inputCount: tracks.length,
+        });
+      }
       logEvent("warn", "track_source_empty_fallback", {
         sourceType: parsed.type,
         categoryQuery: options.categoryQuery,
@@ -342,7 +403,16 @@ export async function resolveTrackPoolFromSource(
 
     if (parsed.type === "deezer_playlist" && parsed.payload) {
       const tracks = await fetchDeezerPlaylistTracks(parsed.payload.playlistId, safeSize);
-      if (tracks.length > 0) return prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+      if (tracks.length > 0) {
+        const prioritized = await prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+        if (prioritized.length > 0) return prioritized;
+        logEvent("warn", "track_source_priority_empty_fallback", {
+          sourceType: parsed.type,
+          categoryQuery: options.categoryQuery,
+          requestedSize: safeSize,
+          inputCount: tracks.length,
+        });
+      }
       logEvent("warn", "track_source_empty_fallback", {
         sourceType: parsed.type,
         categoryQuery: options.categoryQuery,
@@ -352,7 +422,16 @@ export async function resolveTrackPoolFromSource(
 
     if (parsed.type === "deezer_chart") {
       const tracks = await fetchDeezerChartTracks(safeSize);
-      if (tracks.length > 0) return prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+      if (tracks.length > 0) {
+        const prioritized = await prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+        if (prioritized.length > 0) return prioritized;
+        logEvent("warn", "track_source_priority_empty_fallback", {
+          sourceType: parsed.type,
+          categoryQuery: options.categoryQuery,
+          requestedSize: safeSize,
+          inputCount: tracks.length,
+        });
+      }
       logEvent("warn", "track_source_empty_fallback", {
         sourceType: parsed.type,
         categoryQuery: options.categoryQuery,
@@ -362,7 +441,16 @@ export async function resolveTrackPoolFromSource(
 
     if (parsed.type === "anilist_users" && parsed.payload) {
       const tracks = await fetchAniListUsersOpeningTracks(parsed.payload.usernames, safeSize);
-      if (tracks.length > 0) return prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+      if (tracks.length > 0) {
+        const prioritized = await prioritizeYouTubePlayback(tracks, safeSize, parsed.query);
+        if (prioritized.length > 0) return prioritized;
+        logEvent("warn", "track_source_priority_empty_fallback", {
+          sourceType: parsed.type,
+          categoryQuery: options.categoryQuery,
+          requestedSize: safeSize,
+          inputCount: tracks.length,
+        });
+      }
       logEvent("warn", "track_source_empty_fallback", {
         sourceType: parsed.type,
         categoryQuery: options.categoryQuery,

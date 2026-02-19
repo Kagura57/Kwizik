@@ -64,6 +64,31 @@ async function wait(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function readResponseErrorDetail(response: Response) {
+  try {
+    const raw = (await response.text()).trim();
+    if (raw.length === 0) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        error?: string | { message?: string; errors?: Array<{ reason?: string; message?: string }> };
+      };
+      if (typeof parsed.error === "string" && parsed.error.length > 0) return parsed.error;
+      if (parsed.error && typeof parsed.error === "object") {
+        if (typeof parsed.error.message === "string" && parsed.error.message.length > 0) {
+          return parsed.error.message;
+        }
+        const reason = parsed.error.errors?.[0]?.reason?.trim();
+        if (reason) return reason;
+      }
+    } catch {
+      // Keep raw text fallback when response is not JSON.
+    }
+    return raw.slice(0, 200);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchJsonWithTimeout(
   input: string | URL,
   init: RequestInit = {},
@@ -103,10 +128,12 @@ export async function fetchJsonWithTimeout(
 
       const retryable = shouldRetryStatus(response.status);
       if (!retryable || attempt >= options.retries) {
+        const errorDetail = await readResponseErrorDetail(response);
         logEvent("warn", "music_http_non_ok", {
           url: logUrl,
           status: response.status,
           attempt: attempt + 1,
+          errorDetail,
           ...options.context,
         });
         if (provider) {
@@ -115,6 +142,7 @@ export async function fetchJsonWithTimeout(
             success: false,
             latencyMs: Date.now() - startedAt,
             status: response.status,
+            error: errorDetail ?? `HTTP_${response.status}`,
             attempts: attempt + 1,
           });
         }

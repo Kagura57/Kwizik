@@ -27,6 +27,19 @@ function resolveStatus(status: unknown) {
 }
 
 function buildHealthDetailsPayload() {
+  const deezerEnabledRaw = readEnvVar("DEEZER_ENABLED");
+  const deezerEnabled =
+    typeof deezerEnabledRaw !== "string" || deezerEnabledRaw.trim().toLowerCase() !== "false";
+  const hasYouTubeApiKey =
+    typeof readEnvVar("YOUTUBE_API_KEY") === "string" &&
+    (readEnvVar("YOUTUBE_API_KEY")?.length ?? 0) > 0;
+  const hasYouTubeApiKeys =
+    typeof readEnvVar("YOUTUBE_API_KEYS") === "string" &&
+    (readEnvVar("YOUTUBE_API_KEYS")?.length ?? 0) > 0;
+  const hasYouTubeInvidiousInstances =
+    typeof readEnvVar("YOUTUBE_INVIDIOUS_INSTANCES") === "string" &&
+    (readEnvVar("YOUTUBE_INVIDIOUS_INSTANCES")?.length ?? 0) > 0;
+
   return {
     ok: true as const,
     service: "tunaris-api",
@@ -37,10 +50,10 @@ function buildHealthDetailsPayload() {
     providers: providerMetricsSnapshot(),
     integrations: {
       spotify: spotifyAuthDiagnostics(),
-      deezerEnabled: readEnvVar("DEEZER_ENABLED") === "true",
-      hasYouTubeApiKey:
-        typeof readEnvVar("YOUTUBE_API_KEY") === "string" &&
-        (readEnvVar("YOUTUBE_API_KEY")?.length ?? 0) > 0,
+      deezerEnabled,
+      hasYouTubeApiKey,
+      hasYouTubeApiKeys,
+      hasYouTubeInvidiousInstances,
       hasYtMusicSearchUrl:
         typeof readEnvVar("YTMUSIC_SEARCH_URL") === "string" &&
         (readEnvVar("YTMUSIC_SEARCH_URL")?.length ?? 0) > 0,

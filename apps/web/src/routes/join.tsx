@@ -76,7 +76,7 @@ export function JoinPage() {
         </form>
 
         <p className={joinMutation.isError ? "status error" : "status"}>
-          {joinErrorCode === "ROOM_NOT_JOINABLE" && "La room n’accepte plus de nouveaux joueurs."}
+          {joinErrorCode === "ROOM_NOT_JOINABLE" && "La room est terminée et n’accepte plus de nouveaux joueurs."}
           {joinMutation.isError && joinErrorCode !== "ROOM_NOT_JOINABLE" && "Impossible de rejoindre cette room."}
         </p>
 

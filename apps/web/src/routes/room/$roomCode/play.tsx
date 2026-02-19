@@ -356,9 +356,6 @@ export function RoomPlayPage() {
                   </button>
                 ))}
               </div>
-              {mcqLocked && submittedMcq && (
-                <p className="answer-lock">Réponse verrouillée: {submittedMcq.choice}</p>
-              )}
             </>
           )}
 
@@ -379,11 +376,8 @@ export function RoomPlayPage() {
                 type="submit"
                 disabled={answerMutation.isPending || !session.playerId || textLocked}
               >
-                {textLocked ? "Réponse verrouillée" : answerMutation.isPending ? "Envoi..." : "Valider"}
+                {textLocked ? "Réponse envoyée" : answerMutation.isPending ? "Envoi..." : "Valider"}
               </button>
-              {textLocked && submittedText && (
-                <p className="answer-lock">Réponse verrouillée: {submittedText.value}</p>
-              )}
             </form>
           )}
 
@@ -416,7 +410,7 @@ export function RoomPlayPage() {
             }
           >
             {startErrorCode === "NO_TRACKS_FOUND" &&
-              "Aucune piste YouTube jouable trouvée. Change de playlist/source et vérifie YOUTUBE_API_KEY."}
+              "Aucune piste YouTube jouable trouvée. Vérifie YOUTUBE_API_KEY (quota inclus) ou configure YTMUSIC_SEARCH_URL."}
             {!session.playerId && "Tu dois rejoindre la room pour répondre."}
             {snapshotQuery.isError && "Synchronisation impossible."}
             {answerMutation.isError && "Réponse refusée."}

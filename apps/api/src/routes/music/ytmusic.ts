@@ -1,5 +1,6 @@
 import { fetchJsonWithTimeout } from "./http";
 import type { MusicTrack } from "../../services/music-types";
+import { readEnvVar } from "../../lib/env";
 
 type YTMusicPayload = {
   data?: Array<{
@@ -12,7 +13,7 @@ type YTMusicPayload = {
 };
 
 export async function searchYTMusic(query: string, limit = 10): Promise<MusicTrack[]> {
-  const searchUrl = process.env.YTMUSIC_SEARCH_URL;
+  const searchUrl = readEnvVar("YTMUSIC_SEARCH_URL");
   if (!searchUrl) return [];
 
   const url = new URL(searchUrl);

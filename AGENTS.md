@@ -21,3 +21,12 @@ Before every development step (analysis, code changes, refactor, test, review), 
 
 If a step starts without a visible **Skills Check** and **Gap Check**, the step is invalid and must be restarted with the protocol.
 
+## Product Contract (Mandatory)
+
+- **Discovery/catalog/search** can use multiple providers (Spotify, Deezer, etc.).
+- **Gameplay playback and reveal media must remain YouTube-only** (`youtube` / `ytmusic`).
+- Do not introduce non-YouTube playback fallbacks for in-game rounds unless explicitly requested by the user.
+- YouTube quota mitigation order:
+  1. YouTube Data API keys (single or rotated via `YOUTUBE_API_KEYS`)
+  2. YTMusic custom endpoint (`YTMUSIC_SEARCH_URL`) when configured
+  3. No-key fallbacks (Invidious instances and YouTube web/oEmbed lookups)
