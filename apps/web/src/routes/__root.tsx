@@ -40,15 +40,7 @@ export function RootLayout() {
           Tunaris
         </Link>
         <p className="brand-subtitle">Live Blindtest Arena</p>
-        <div className="topbar-meta" />
-        <nav className="topbar-nav">
-          <Link className="ghost-btn" to="/">
-            Accueil
-          </Link>
-          <Link className="ghost-btn" to="/join">
-            Rejoindre
-          </Link>
-        </nav>
+        <p className="topbar-meta">Crée une room, rejoins en un code, et lance la partie en direct.</p>
       </header>
       <Outlet />
     </main>

@@ -149,6 +149,29 @@ function randomShuffle<T>(values: T[]) {
   return copied;
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutErrorCode: string,
+) {
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(timeoutErrorCode));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function trackSignature(track: Pick<MusicTrack, "provider" | "id" | "title" | "artist">) {
   return `${track.provider}:${track.id}:${track.title.toLowerCase()}:${track.artist.toLowerCase()}`;
 }
@@ -232,9 +255,15 @@ export class RoomStore {
     if (!track) return [];
 
     const correct = asChoiceLabel(track);
+    const previousCorrectAnswers = new Set(
+      session.trackPool
+        .slice(0, Math.max(0, round - 1))
+        .map(asChoiceLabel),
+    );
     const distractors = session.trackPool
       .filter((candidate) => candidate.id !== track.id)
       .map(asChoiceLabel)
+      .filter((value) => !previousCorrectAnswers.has(value))
       .filter((value, index, source) => source.indexOf(value) === index);
 
     const randomizedDistractors = randomShuffle(distractors);
@@ -631,8 +660,47 @@ export class RoomStore {
 
     const poolSize = Math.max(1, this.config.maxRounds);
     const resolvedQuery = session.categoryQuery;
-    const startupPoolSize = Math.min(poolSize, Math.max(6, Math.min(10, poolSize)));
-    const rawTrackPool = await this.getTrackPool(resolvedQuery, startupPoolSize);
+    const startupPoolSize = Math.min(poolSize, Math.max(3, Math.min(4, poolSize)));
+    const startupLoadStartedAt = Date.now();
+    logEvent("info", "room_start_trackpool_loading_begin", {
+      roomCode,
+      categoryQuery: resolvedQuery,
+      startupPoolSize,
+      requestedRounds: poolSize,
+      players: session.players.size,
+    });
+
+    let rawTrackPool: MusicTrack[];
+    try {
+      rawTrackPool = await withTimeout(
+        this.getTrackPool(resolvedQuery, startupPoolSize),
+        15_000,
+        "TRACK_POOL_LOAD_TIMEOUT",
+      );
+    } catch (error) {
+      logEvent("warn", "room_start_trackpool_loading_failed", {
+        roomCode,
+        categoryQuery: resolvedQuery,
+        startupPoolSize,
+        requestedRounds: poolSize,
+        durationMs: Date.now() - startupLoadStartedAt,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+      });
+      return {
+        ok: false as const,
+        error: "NO_TRACKS_FOUND" as const,
+      };
+    }
+
+    logEvent("info", "room_start_trackpool_loading_done", {
+      roomCode,
+      categoryQuery: resolvedQuery,
+      startupPoolSize,
+      requestedRounds: poolSize,
+      durationMs: Date.now() - startupLoadStartedAt,
+      rawTrackPoolSize: rawTrackPool.length,
+    });
+
     const playablePool = rawTrackPool.filter((track) => isTrackPlayable(track));
     const cleanPool = playablePool.filter((track) => !looksLikePromotionalTrack(track));
     session.trackPool = randomShuffle(cleanPool).slice(0, startupPoolSize);

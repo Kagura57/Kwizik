@@ -41,15 +41,40 @@ const WAVE_BARS = Array.from({ length: 48 }, (_, index) => ({
   delaySec: (index % 8) * 0.08,
 }));
 
-function providerLabel(provider: UnifiedPlaylistOption["provider"]) {
-  return provider === "spotify" ? "Spotify" : "Deezer";
+function stripProviderMentions(value: string | null | undefined) {
+  if (!value) return "";
+  return value
+    .replace(/\bspotify\b/gi, "")
+    .replace(/\bdeezer\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function playlistSecondaryLabel(playlist: UnifiedPlaylistOption) {
+  const description = stripProviderMentions(playlist.description);
+  if (description.length > 0) return description;
+  const owner = stripProviderMentions(playlist.owner);
+  if (owner.length > 0) return owner;
+  return "Playlist musicale";
+}
+
+function playlistDisplayName(name: string) {
+  const sanitized = stripProviderMentions(name);
+  return sanitized.length > 0 ? sanitized : name;
 }
 
 function formatTrackCountLabel(value: number | null | undefined) {
   if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
     return `${Math.floor(value)} titres`;
   }
-  return "Track count inconnu";
+  return "Nombre de titres indisponible";
+}
+
+function revealArtworkUrl(reveal: { provider: UnifiedPlaylistOption["provider"] | "youtube" | "apple-music" | "tidal"; trackId: string }) {
+  if (reveal.provider === "youtube") {
+    return `https://i.ytimg.com/vi/${reveal.trackId}/hqdefault.jpg`;
+  }
+  return null;
 }
 
 function isUnifiedPlaylistOption(value: unknown): value is UnifiedPlaylistOption {
@@ -83,6 +108,7 @@ export function RoomPlayPage() {
   const [submittedText, setSubmittedText] = useState<{ round: number; value: string } | null>(null);
   const [sourceMode, setSourceMode] = useState<SourceMode>("playlist");
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
+  const [debouncedPlaylistQuery, setDebouncedPlaylistQuery] = useState("top hits");
   const [aniListUsers, setAniListUsers] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
@@ -110,7 +136,15 @@ export function RoomPlayPage() {
   const isHost = Boolean(session.playerId && state?.hostPlayerId === session.playerId);
   const isWaitingLobby = state?.state === "waiting";
   const currentPlayer = state?.players.find((player) => player.playerId === session.playerId) ?? null;
-  const normalizedPlaylistQuery = playlistQuery.trim();
+  const typedPlaylistQuery = playlistQuery.trim();
+  const normalizedPlaylistQuery = debouncedPlaylistQuery.trim();
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedPlaylistQuery(playlistQuery);
+    }, 320);
+    return () => window.clearTimeout(timeoutId);
+  }, [playlistQuery]);
 
   const playlistSearchQuery = useQuery({
     queryKey: ["lobby-playlist-search", normalizedPlaylistQuery],
@@ -283,7 +317,10 @@ export function RoomPlayPage() {
     if (!state?.deadlineMs) return null;
     return state.deadlineMs - clockNow;
   }, [clockNow, state?.deadlineMs]);
-  const progress = phaseProgress(state?.state, remainingMs);
+  const progress =
+    state?.state === "reveal" || state?.state === "leaderboard"
+      ? 1
+      : phaseProgress(state?.state, remainingMs);
   const youtubePlayback = useMemo(() => {
     if (!state?.media?.embedUrl || !state.media.trackId) return null;
     if (state.media.provider !== "youtube") return null;
@@ -331,6 +368,7 @@ export function RoomPlayPage() {
     submittedText !== null &&
     submittedText.round === state.round;
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
+  const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -449,12 +487,10 @@ export function RoomPlayPage() {
       }
     }
     clearSession();
-    navigate({ to: "/join" });
+    navigate({ to: "/" });
   }
 
   const playlistOptions = playlistSearchQuery.data?.playlists ?? [];
-  const playlistSearchErrorCode =
-    playlistSearchQuery.error instanceof Error ? playlistSearchQuery.error.message : null;
   const topThree = (state?.leaderboard ?? []).slice(0, 3);
   const podiumByRank = new Map(topThree.map((entry) => [entry.rank, entry]));
   const podiumSlots = [
@@ -465,7 +501,7 @@ export function RoomPlayPage() {
 
   return (
     <section className="blindtest-stage">
-      <article className={`stage-main arena-layout${isResults ? " results-with-chat" : ""}`}>
+      <article className={`stage-main arena-layout${isResults ? " results-fullscreen" : ""}`}>
         {!isResults && (
           <aside className="arena-side leaderboard-side">
             <h2 className="side-title">Classement live</h2>
@@ -515,7 +551,6 @@ export function RoomPlayPage() {
           {state?.state === "waiting" && (
             <div className="waiting-box">
               <h2>Lobby: tout le monde doit être prêt avant le lancement.</h2>
-              <p className="status">Source actuelle: {state.categoryQuery || "Aucune playlist sélectionnée"}</p>
 
               {isHost ? (
                 <div className="field-block">
@@ -527,7 +562,7 @@ export function RoomPlayPage() {
                       onClick={() => setSourceMode("playlist")}
                     >
                       <strong>Playlists musique</strong>
-                      <span>Spotify + Deezer</span>
+                      <span>Catalogue multi-plateformes</span>
                     </button>
                     <button
                       type="button"
@@ -541,25 +576,38 @@ export function RoomPlayPage() {
 
                   {sourceMode === "playlist" && (
                     <>
-                      <label>
-                        <span>Recherche playlist</span>
-                        <input
-                          value={playlistQuery}
-                          onChange={(event) => setPlaylistQuery(event.currentTarget.value)}
-                          maxLength={120}
-                          placeholder="Ex: top hits, rap 2000, anime openings"
-                        />
-                      </label>
-                      {normalizedPlaylistQuery.length < 2 && (
+                      <div className="playlist-search-shell">
+                        <p className="playlist-search-kicker">Recherche playlist</p>
+                        <div className="playlist-search-input-wrap">
+                          <input
+                            id="playlist-search-input"
+                            aria-label="Recherche playlist"
+                            value={playlistQuery}
+                            onChange={(event) => setPlaylistQuery(event.currentTarget.value)}
+                            maxLength={120}
+                            placeholder="Ex: top hits, rap 2000, anime openings"
+                          />
+                        </div>
+                      </div>
+                      {typedPlaylistQuery.length < 2 && (
                         <p className="status">Tape au moins 2 caractères pour chercher une playlist.</p>
                       )}
-                      {normalizedPlaylistQuery.length >= 2 && playlistSearchQuery.isPending && (
+                      {typedPlaylistQuery.length >= 2 &&
+                        typedPlaylistQuery !== normalizedPlaylistQuery && (
+                          <p className="status">Recherche en cours...</p>
+                        )}
+                      {typedPlaylistQuery.length >= 2 &&
+                        typedPlaylistQuery === normalizedPlaylistQuery &&
+                        playlistSearchQuery.isPending && (
                         <p className="status">Recherche en cours...</p>
                       )}
-                      {normalizedPlaylistQuery.length >= 2 && playlistSearchQuery.isError && (
-                        <p className="status">Recherche indisponible ({playlistSearchErrorCode ?? "UNKNOWN_ERROR"}).</p>
+                      {typedPlaylistQuery.length >= 2 &&
+                        typedPlaylistQuery === normalizedPlaylistQuery &&
+                        playlistSearchQuery.isError && (
+                        <p className="status">Recherche temporairement indisponible.</p>
                       )}
-                      {normalizedPlaylistQuery.length >= 2 &&
+                      {typedPlaylistQuery.length >= 2 &&
+                        typedPlaylistQuery === normalizedPlaylistQuery &&
                         !playlistSearchQuery.isPending &&
                         !playlistSearchQuery.isError &&
                         playlistOptions.length === 0 && (
@@ -580,10 +628,8 @@ export function RoomPlayPage() {
                               <div className="playlist-card-placeholder" aria-hidden="true" />
                             )}
                             <div>
-                              <strong>{playlist.name}</strong>
-                              <p>
-                                {providerLabel(playlist.provider)} - {playlist.owner ?? "Editorial"}
-                              </p>
+                              <strong>{playlistDisplayName(playlist.name)}</strong>
+                              <p>{playlistSecondaryLabel(playlist)}</p>
                               <small>
                                 {formatTrackCountLabel(playlist.trackCount)}
                               </small>
@@ -705,12 +751,19 @@ export function RoomPlayPage() {
 
           {(state?.state === "reveal" || state?.state === "leaderboard") &&
             state?.reveal && (
-              <div className="reveal-box large">
-                <p className="kicker">Reveal</p>
-                <h3>
-                  {state.reveal.title} - {state.reveal.artist}
-                </h3>
-                <p>Réponse attendue: {state.reveal.acceptedAnswer}</p>
+              <div className="reveal-box large reveal-glass">
+                <div className="reveal-cover">
+                  {revealArtwork ? (
+                    <img src={revealArtwork} alt={`${state.reveal.title} cover`} />
+                  ) : (
+                    <div className="reveal-cover-fallback" aria-hidden="true" />
+                  )}
+                </div>
+                <div className="reveal-content">
+                  <p className="kicker">Reveal</p>
+                  <h3 className="reveal-title">{state.reveal.title}</h3>
+                  <p className="reveal-artist">{state.reveal.artist}</p>
+                </div>
               </div>
             )}
 
@@ -786,13 +839,15 @@ export function RoomPlayPage() {
           </p>
         </div>
 
-        <aside className="arena-side meta-side">
-          <h2 className="side-title">Chat</h2>
-          <p className="panel-copy">Le chat joueur arrive ici (roadmap).</p>
-          <button className="ghost-btn" type="button" onClick={leaveRoom}>
-            Quitter la room
-          </button>
-        </aside>
+        {!isResults && (
+          <aside className="arena-side meta-side">
+            <h2 className="side-title">Chat</h2>
+            <p className="panel-copy">Le chat joueur arrive ici (roadmap).</p>
+            <button className="ghost-btn" type="button" onClick={leaveRoom}>
+              Quitter la room
+            </button>
+          </aside>
+        )}
       </article>
 
       <audio

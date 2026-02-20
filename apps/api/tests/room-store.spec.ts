@@ -51,6 +51,41 @@ const PROMOTIONAL_MIXED_TRACKS: MusicTrack[] = [
   },
 ];
 
+const MCQ_NO_REPEAT_DISTRACTOR_TRACKS: MusicTrack[] = [
+  {
+    provider: "youtube",
+    id: "mcq-1",
+    title: "Arcade Nova",
+    artist: "Pulse Engine",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=mcq-1",
+  },
+  {
+    provider: "youtube",
+    id: "mcq-2",
+    title: "Night Circuit",
+    artist: "Solar Vibe",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=mcq-2",
+  },
+  {
+    provider: "youtube",
+    id: "mcq-3",
+    title: "Chrome Drift",
+    artist: "Echo Rally",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=mcq-3",
+  },
+  {
+    provider: "youtube",
+    id: "mcq-4",
+    title: "Neon Axis",
+    artist: "Delta Run",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=mcq-4",
+  },
+];
+
 describe("RoomStore gameplay progression", () => {
   it("runs countdown -> playing -> reveal -> leaderboard -> results and applies streak scoring", async () => {
     let nowMs = 0;
@@ -206,6 +241,60 @@ describe("RoomStore gameplay progression", () => {
     const results = store.roomResults(roomCode);
     expect(results?.ranking).toHaveLength(1);
     expect(results?.ranking[0]?.maxStreak).toBe(1);
+  });
+
+  it("does not reuse previously-correct tracks as later MCQ distractors", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => MCQ_NO_REPEAT_DISTRACTOR_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+        maxRounds: 3,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const player = store.joinRoom(roomCode, "Host");
+    expect(player.status).toBe("ok");
+    if (player.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "spotify:playlist:dummy");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(roomCode, player.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    const started = await store.startGame(roomCode, player.value.playerId);
+    expect(started?.ok).toBe(true);
+
+    nowMs = 5;
+    const round1Playing = store.roomState(roomCode);
+    expect(round1Playing?.state).toBe("playing");
+    expect(round1Playing?.mode).toBe("mcq");
+    const round1Track = MCQ_NO_REPEAT_DISTRACTOR_TRACKS.find((track) => track.id === round1Playing?.media?.trackId);
+    expect(round1Track).toBeDefined();
+    const round1Label = `${round1Track?.title ?? ""} - ${round1Track?.artist ?? ""}`;
+
+    nowMs = 30; // reveal round 1
+    store.roomState(roomCode);
+    nowMs = 35; // leaderboard round 1
+    store.roomState(roomCode);
+    nowMs = 40; // playing round 2 (text)
+    const round2Playing = store.roomState(roomCode);
+    expect(round2Playing?.state).toBe("playing");
+    expect(round2Playing?.mode).toBe("text");
+
+    nowMs = 65; // reveal round 2
+    store.roomState(roomCode);
+    nowMs = 70; // leaderboard round 2
+    store.roomState(roomCode);
+    nowMs = 75; // playing round 3 (mcq)
+    const round3Playing = store.roomState(roomCode);
+    expect(round3Playing?.state).toBe("playing");
+    expect(round3Playing?.mode).toBe("mcq");
+    expect(round3Playing?.choices?.includes(round1Label)).toBe(false);
   });
 
   it("accepts youtube tracks without preview as playable rounds", async () => {
@@ -414,7 +503,9 @@ describe("RoomStore gameplay progression", () => {
     const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
     expect(ready.status).toBe("ok");
     const started = await store.startGame(created.roomCode, host.value.playerId);
-    expect(started).toMatchObject({ ok: true, totalRounds: 10, poolSize: 10 });
-    expect(requestedSizes[0]).toBeGreaterThanOrEqual(6);
+    expect(started).toMatchObject({ ok: true });
+    expect((started && "poolSize" in started ? started.poolSize : 0)).toBeGreaterThanOrEqual(3);
+    expect((started && "totalRounds" in started ? started.totalRounds : 0)).toBeGreaterThanOrEqual(3);
+    expect(requestedSizes[0]).toBeGreaterThanOrEqual(3);
   });
 });

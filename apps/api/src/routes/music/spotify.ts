@@ -36,8 +36,13 @@ type SpotifyPlaylistItem = {
     display_name?: string;
   };
   tracks?: {
-    total?: number;
+    total?: number | string | null;
+    items?: unknown[];
   };
+  items?: {
+    total?: number | string | null;
+  };
+  track_count?: number | string | null;
 };
 
 type SpotifyPlaylistSearchPayload = {
@@ -58,8 +63,13 @@ type SpotifyPlaylistMetadataPayload = {
     display_name?: string;
   };
   tracks?: {
-    total?: number;
+    total?: number | string | null;
+    items?: unknown[];
   };
+  items?: {
+    total?: number | string | null;
+  };
+  track_count?: number | string | null;
 };
 type SpotifyOEmbedPayload = {
   title?: string;
@@ -178,8 +188,10 @@ const SPOTIFY_PLAYLIST_ID_REGEX = /(?:\/|\\\/)playlist(?:\/|\\\/)([a-zA-Z0-9]{22
 const SPOTIFY_DEV_SEARCH_LIMIT_MAX = 10;
 const SPOTIFY_METADATA_BATCH_SIZE = 3;
 const SPOTIFY_METADATA_BATCH_DELAY_MS = 120;
-const SPOTIFY_METADATA_ENRICHMENT_MAX = 3;
+const SPOTIFY_METADATA_ENRICHMENT_MAX = 2;
 const SPOTIFY_METADATA_TIMEOUT_MS = 1_500;
+const SPOTIFY_TRACK_COUNT_CACHE_TTL_MS = 6 * 60 * 60_000;
+const spotifyTrackCountCache = new Map<string, { value: number; expiresAt: number }>();
 
 function readSpotifyApiMode() {
   const raw = (readEnvVar("SPOTIFY_API_MODE") ?? "").trim().toLowerCase();
@@ -287,6 +299,43 @@ function parseSpotifyTrackCount(raw: unknown) {
   return null;
 }
 
+function parseSpotifyTrackCountFromPayload(
+  payload: Pick<SpotifyPlaylistItem, "tracks" | "items" | "track_count"> | null | undefined,
+) {
+  if (!payload) return null;
+
+  const fromTotal = parseSpotifyTrackCount(payload.tracks?.total);
+  if (fromTotal !== null) return fromTotal;
+
+  const fromItemsTotal = parseSpotifyTrackCount(payload.items?.total);
+  if (fromItemsTotal !== null) return fromItemsTotal;
+
+  const fromTrackCountField = parseSpotifyTrackCount(payload.track_count);
+  if (fromTrackCountField !== null) return fromTrackCountField;
+
+  if (Array.isArray(payload.tracks?.items)) {
+    return payload.tracks.items.length;
+  }
+  return null;
+}
+
+function readCachedTrackCount(playlistId: string) {
+  const cached = spotifyTrackCountCache.get(playlistId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    spotifyTrackCountCache.delete(playlistId);
+    return null;
+  }
+  return cached.value;
+}
+
+function writeCachedTrackCount(playlistId: string, value: number) {
+  spotifyTrackCountCache.set(playlistId, {
+    value,
+    expiresAt: Date.now() + SPOTIFY_TRACK_COUNT_CACHE_TTL_MS,
+  });
+}
+
 function toPlaylistSummary(item: SpotifyPlaylistItem | null | undefined): SpotifyPlaylistSummary | null {
   if (!item?.id) return null;
   const name = item.name?.trim();
@@ -298,7 +347,7 @@ function toPlaylistSummary(item: SpotifyPlaylistItem | null | undefined): Spotif
     imageUrl: item.images?.[0]?.url ?? null,
     externalUrl: item.external_urls?.spotify ?? `https://open.spotify.com/playlist/${item.id}`,
     owner: item.owner?.display_name?.trim() ?? null,
-    trackCount: parseSpotifyTrackCount(item.tracks?.total),
+    trackCount: parseSpotifyTrackCountFromPayload(item) ?? readCachedTrackCount(item.id),
   };
 }
 
@@ -340,20 +389,35 @@ async function enrichPlaylistTrackCounts(
   playlists: SpotifyPlaylistSummary[],
   maxEnrichment = SPOTIFY_METADATA_ENRICHMENT_MAX,
 ) {
-  const pending = playlists
+  const fromCache = playlists.map((playlist) => {
+    if (playlist.trackCount !== null) return playlist;
+    const cached = readCachedTrackCount(playlist.id);
+    if (cached === null) return playlist;
+    return {
+      ...playlist,
+      trackCount: cached,
+    };
+  });
+
+  const pending = fromCache
     .filter((playlist) => playlist.trackCount === null)
     .slice(0, Math.max(0, maxEnrichment));
-  if (pending.length <= 0) return playlists;
+  if (pending.length <= 0) return fromCache;
 
   const enrichedCounts = new Map<string, number>();
   for (let index = 0; index < pending.length; index += SPOTIFY_METADATA_BATCH_SIZE) {
     const chunk = pending.slice(index, index + SPOTIFY_METADATA_BATCH_SIZE);
     await Promise.all(
       chunk.map(async (playlist) => {
-        const metadata = await fetchSpotifyPlaylistMetadata(token, playlist.id);
-        const trackCount = parseSpotifyTrackCount(metadata?.tracks?.total);
-        if (trackCount !== null) {
-          enrichedCounts.set(playlist.id, trackCount);
+        try {
+          const metadata = await fetchSpotifyPlaylistMetadata(token, playlist.id);
+          const trackCount = parseSpotifyTrackCountFromPayload(metadata);
+          if (trackCount !== null) {
+            enrichedCounts.set(playlist.id, trackCount);
+            writeCachedTrackCount(playlist.id, trackCount);
+          }
+        } catch {
+          // Keep partial results when one metadata call fails.
         }
       }),
     );
@@ -362,8 +426,8 @@ async function enrichPlaylistTrackCounts(
     }
   }
 
-  if (enrichedCounts.size <= 0) return playlists;
-  return playlists.map((playlist) => {
+  if (enrichedCounts.size <= 0) return fromCache;
+  return fromCache.map((playlist) => {
     const trackCount = enrichedCounts.get(playlist.id);
     if (typeof trackCount !== "number") return playlist;
     return {
@@ -910,7 +974,11 @@ export async function fetchSpotifyPopularPlaylists(limit = 20): Promise<SpotifyP
   return sortPlaylistsForBlindtest(dedupePlaylists(merged)).slice(0, safeLimit);
 }
 
-export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20): Promise<MusicTrack[]> {
+export async function fetchSpotifyPlaylistTracks(
+  playlistId: string,
+  limit = 20,
+  options: { enrichPreview?: boolean } = {},
+): Promise<MusicTrack[]> {
   const token = await getSpotifyAccessToken();
   if (!token) return [];
 
@@ -962,6 +1030,7 @@ export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20)
           headers: { authorization: `Bearer ${token}` },
         },
         {
+          retries: 0,
           context: {
             provider: "spotify",
             route: variant.route,
@@ -1018,9 +1087,10 @@ export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20)
   }
 
   const previewBefore = deduped.filter((track) => Boolean(track.previewUrl)).length;
+  const shouldEnrichPreview = options.enrichPreview ?? safeLimit <= 50;
   const previewTarget = safeLimit <= 50 ? safeLimit : 20;
   const enriched =
-    safeLimit <= 50 ? await enrichSpotifyTracksWithPreview(deduped, previewTarget) : deduped;
+    shouldEnrichPreview ? await enrichSpotifyTracksWithPreview(deduped, previewTarget) : deduped;
   const previewAfter = enriched.filter((track) => Boolean(track.previewUrl)).length;
   logEvent("info", "spotify_playlist_preview_coverage", {
     playlistId: normalizedPlaylistId,
@@ -1037,14 +1107,17 @@ export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20)
   return prioritizeByPreview(enriched, safeLimit).slice(0, safeLimit);
 }
 
-export async function fetchSpotifyPopularTracks(limit = 20): Promise<MusicTrack[]> {
+export async function fetchSpotifyPopularTracks(
+  limit = 20,
+  options: { enrichPreview?: boolean } = {},
+): Promise<MusicTrack[]> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
   const playlistIds = readPopularPlaylistIds();
   const merged: MusicTrack[] = [];
   const seen = new Set<string>();
 
   for (const playlistId of playlistIds) {
-    const tracks = await fetchSpotifyPlaylistTracks(playlistId, safeLimit);
+    const tracks = await fetchSpotifyPlaylistTracks(playlistId, safeLimit, options);
     for (const track of tracks) {
       const signature = `${track.title.toLowerCase()}::${track.artist.toLowerCase()}`;
       if (seen.has(signature)) continue;

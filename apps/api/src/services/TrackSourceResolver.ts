@@ -403,7 +403,7 @@ async function resolveYouTubePlayback(track: MusicTrack) {
 async function prioritizeYouTubePlayback(
   tracks: MusicTrack[],
   size: number,
-  input: { fillQuery: string; allowQueryFill: boolean },
+  input: { fillQuery: string; allowQueryFill: boolean; maxResolveBudget?: number },
 ) {
   const safeSize = Math.max(1, size);
   const scoped = nonEmptySlice(tracks, Math.max(safeSize * 3, safeSize));
@@ -414,13 +414,17 @@ async function prioritizeYouTubePlayback(
   let directResolveAttempts = 0;
 
   const remaining = Math.max(0, safeSize - result.length);
-  const resolveBudget = Math.min(
+  const computedBudget = Math.min(
     scoped.length,
     Math.max(
       YOUTUBE_RESOLVE_BUDGET_MIN,
       Math.min(YOUTUBE_RESOLVE_BUDGET_MAX, Math.max(safeSize * 2, remaining * 4)),
     ),
   );
+  const resolveBudget =
+    typeof input.maxResolveBudget === "number"
+      ? Math.min(scoped.length, Math.max(YOUTUBE_RESOLVE_BUDGET_MIN, Math.floor(input.maxResolveBudget)))
+      : computedBudget;
   const candidates = scoped.slice(0, resolveBudget);
   let cursor = 0;
   await Promise.all(
@@ -486,6 +490,14 @@ function fillQueryForParsedSource(parsed: ParsedTrackSource) {
   return "";
 }
 
+function sourceFetchLimit(size: number) {
+  return Math.min(60, Math.max(16, size * 2));
+}
+
+function sourceResolveBudget(size: number) {
+  return Math.min(5, Math.max(3, Math.ceil(size / 2)));
+}
+
 export async function resolveTrackPoolFromSource(
   options: ResolveTrackPoolOptions,
 ): Promise<MusicTrack[]> {
@@ -496,7 +508,10 @@ export async function resolveTrackPoolFromSource(
     if (parsed.type === "spotify_playlist" && parsed.payload) {
       const tracks = await fetchSpotifyPlaylistTracks(
         parsed.payload.playlistId,
-        500,
+        sourceFetchLimit(safeSize),
+        {
+          enrichPreview: false,
+        },
       );
       if (tracks.length > 0) {
         const prioritized = await prioritizeYouTubePlayback(
@@ -505,6 +520,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
+            maxResolveBudget: sourceResolveBudget(safeSize),
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -524,7 +540,9 @@ export async function resolveTrackPoolFromSource(
     }
 
     if (parsed.type === "spotify_popular") {
-      const tracks = await fetchSpotifyPopularTracks(Math.min(50, Math.max(safeSize * 3, safeSize)));
+      const tracks = await fetchSpotifyPopularTracks(Math.min(50, Math.max(safeSize * 3, safeSize)), {
+        enrichPreview: false,
+      });
       if (tracks.length > 0) {
         const prioritized = await prioritizeYouTubePlayback(
           tracks,
@@ -532,6 +550,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
+            maxResolveBudget: sourceResolveBudget(safeSize),
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -551,7 +570,7 @@ export async function resolveTrackPoolFromSource(
     }
 
     if (parsed.type === "deezer_playlist" && parsed.payload) {
-      const tracks = await fetchDeezerPlaylistTracks(parsed.payload.playlistId, 500);
+      const tracks = await fetchDeezerPlaylistTracks(parsed.payload.playlistId, sourceFetchLimit(safeSize));
       if (tracks.length > 0) {
         const prioritized = await prioritizeYouTubePlayback(
           tracks,
@@ -559,6 +578,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
+            maxResolveBudget: sourceResolveBudget(safeSize),
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -586,6 +606,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
+            maxResolveBudget: sourceResolveBudget(safeSize),
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -616,6 +637,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
+            maxResolveBudget: sourceResolveBudget(safeSize),
           },
         );
         if (prioritized.length > 0) return prioritized;

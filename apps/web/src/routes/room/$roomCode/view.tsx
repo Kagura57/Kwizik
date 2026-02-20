@@ -31,6 +31,13 @@ const WAVE_BARS = Array.from({ length: 64 }, (_, index) => ({
   delaySec: (index % 10) * 0.07,
 }));
 
+function revealArtworkUrl(reveal: { provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube"; trackId: string }) {
+  if (reveal.provider === "youtube") {
+    return `https://i.ytimg.com/vi/${reveal.trackId}/hqdefault.jpg`;
+  }
+  return null;
+}
+
 export function RoomViewPage() {
   const { roomCode } = useParams({ from: "/room/$roomCode/view" });
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -68,7 +75,10 @@ export function RoomViewPage() {
     if (!state?.deadlineMs) return null;
     return state.deadlineMs - clockNow;
   }, [clockNow, state?.deadlineMs]);
-  const progress = phaseProgress(state?.state, remainingMs);
+  const progress =
+    state?.state === "reveal" || state?.state === "leaderboard"
+      ? 1
+      : phaseProgress(state?.state, remainingMs);
   const youtubePlayback = useMemo(() => {
     if (!state?.media?.embedUrl || !state.media.trackId) return null;
     if (state.media.provider !== "youtube") return null;
@@ -104,6 +114,7 @@ export function RoomViewPage() {
     (state?.state === "reveal" || state?.state === "leaderboard");
   const isResults = state?.state === "results";
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
+  const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -214,12 +225,19 @@ export function RoomViewPage() {
 
         {(state?.state === "reveal" || state?.state === "leaderboard" || state?.state === "results") &&
           state?.reveal && (
-            <div className="reveal-box large">
-              <p className="kicker">Reveal</p>
-              <h3>
-                {state.reveal.title} - {state.reveal.artist}
-              </h3>
-              <p>{state.reveal.acceptedAnswer}</p>
+            <div className="reveal-box large reveal-glass">
+              <div className="reveal-cover">
+                {revealArtwork ? (
+                  <img src={revealArtwork} alt={`${state.reveal.title} cover`} />
+                ) : (
+                  <div className="reveal-cover-fallback" aria-hidden="true" />
+                )}
+              </div>
+              <div className="reveal-content">
+                <p className="kicker">Reveal</p>
+                <h3 className="reveal-title">{state.reveal.title}</h3>
+                <p className="reveal-artist">{state.reveal.artist}</p>
+              </div>
             </div>
           )}
 

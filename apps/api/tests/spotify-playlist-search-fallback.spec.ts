@@ -257,4 +257,39 @@ describe("spotify playlist search fallback", () => {
     const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(calledUrls.some((url) => url.includes("/v1/playlists/search-no-total-1?"))).toBe(true);
   });
+
+  it("reads track count from items.total when provided by payload variant", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/search?")) {
+        return Promise.resolve(
+          jsonResponse({
+            playlists: {
+              items: [
+                {
+                  id: "search-items-total-1",
+                  name: "Items Total Playlist",
+                  description: "Payload variant using items.total",
+                  images: [{ url: "https://cdn.example.com/search-items-total.jpg" }],
+                  external_urls: { spotify: "https://open.spotify.com/playlist/search-items-total-1" },
+                  owner: { display_name: "Spotify" },
+                  items: { total: 142 },
+                },
+              ],
+            },
+          }),
+        );
+      }
+
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const playlists = await searchSpotifyPlaylists("items total", 5);
+    expect(playlists).toHaveLength(1);
+    expect(playlists[0]).toMatchObject({
+      id: "search-items-total-1",
+      trackCount: 142,
+    });
+  });
 });
