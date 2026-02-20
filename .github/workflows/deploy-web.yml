@@ -1,0 +1,21 @@
+name: deploy-web
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "package.json"
+      - "bun.lock"
+      - "railway.toml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: railwayapp/railway-github-action@v1
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          service: web
