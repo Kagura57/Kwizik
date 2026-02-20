@@ -7,6 +7,12 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const schemaPath = join(__dirname, "schema.sql");
 
 export async function runMigrations() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error(
+      "DATABASE_URL is missing. Load .env first (ex: `bun --env-file=../../.env src/db/migrate.ts` or `bun run db:migrate`).",
+    );
+  }
+
   const sql = readFileSync(schemaPath, "utf8");
   await pool.query(sql);
 }

@@ -45,16 +45,22 @@ describe("music env resolution", () => {
 
   it("searchYouTube reads API key via readEnvVar", async () => {
     readEnvVarMock.mockImplementation((key) => (key === "YOUTUBE_API_KEY" ? "file-key" : undefined));
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        items: [
-          {
-            id: { videoId: "abc123" },
-            snippet: { title: "Song", channelTitle: "Artist" },
-          },
-        ],
-      }),
-    );
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/search")) {
+        return Promise.resolve(
+          jsonResponse({
+            items: [
+              {
+                id: { videoId: "abc123" },
+                snippet: { title: "Song", channelTitle: "Artist" },
+              },
+            ],
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const tracks = await searchYouTube("song artist", 1);
@@ -69,5 +75,71 @@ describe("music env resolution", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [urlArg] = fetchMock.mock.calls[0] ?? [];
     expect(String(urlArg)).toContain("key=file-key");
+  });
+
+  it("returns the first api item without secondary video status validation", async () => {
+    readEnvVarMock.mockImplementation((key) => (key === "YOUTUBE_API_KEY" ? "file-key" : undefined));
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/search")) {
+        return Promise.resolve(
+          jsonResponse({
+            items: [
+              {
+                id: { videoId: "embeddable-fallback-1" },
+                snippet: { title: "Fallback Song", channelTitle: "Fallback Artist" },
+              },
+            ],
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const tracks = await searchYouTube("fallback song artist", 1);
+
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]).toMatchObject({
+      provider: "youtube",
+      id: "embeddable-fallback-1",
+      title: "Fallback Song",
+      artist: "Fallback Artist",
+    });
+  });
+
+  it("returns first mappable youtube item when first raw item is invalid", async () => {
+    readEnvVarMock.mockImplementation((key) => (key === "YOUTUBE_API_KEY" ? "file-key" : undefined));
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/search")) {
+        return Promise.resolve(
+          jsonResponse({
+            items: [
+              {
+                id: {},
+                snippet: { title: "Invalid Result", channelTitle: "Invalid Channel" },
+              },
+              {
+                id: { videoId: "valid-youtube-id" },
+                snippet: { title: "Valid Result", channelTitle: "Valid Channel" },
+              },
+            ],
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const tracks = await searchYouTube("valid fallback", 2);
+
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]).toMatchObject({
+      provider: "youtube",
+      id: "valid-youtube-id",
+      title: "Valid Result",
+      artist: "Valid Channel",
+    });
   });
 });

@@ -1,6 +1,10 @@
 import { fetchAniListUsersOpeningTracks } from "../routes/music/anilist";
 import { fetchDeezerChartTracks, fetchDeezerPlaylistTracks } from "../routes/music/deezer";
-import { fetchSpotifyPlaylistTracks, fetchSpotifyPopularTracks } from "../routes/music/spotify";
+import {
+  fetchSpotifyPlaylistTracks,
+  fetchSpotifyPopularTracks,
+  SPOTIFY_RATE_LIMITED_ERROR,
+} from "../routes/music/spotify";
 import { searchYouTube } from "../routes/music/youtube";
 import { logEvent } from "../lib/logger";
 import type { MusicTrack } from "./music-types";
@@ -68,12 +72,19 @@ function safeDecodeURIComponent(value: string) {
 function normalizeSpotifyPlaylistId(raw: string) {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return "";
-  const decoded = safeDecodeURIComponent(trimmed);
-  const fromUri = decoded.match(/spotify:playlist:([a-zA-Z0-9]+)/i)?.[1];
-  if (fromUri) return fromUri;
+  let decoded = safeDecodeURIComponent(trimmed);
+  for (let index = 0; index < 4; index += 1) {
+    const stripped = decoded.replace(/^spotify:playlist:/i, "").trim();
+    if (stripped === decoded) break;
+    decoded = stripped;
+  }
   const fromUrl = decoded.match(/spotify\.com\/playlist\/([a-zA-Z0-9]+)/i)?.[1];
   if (fromUrl) return fromUrl;
-  return decoded.replace(/[?#].*$/, "").trim();
+  const fromUri = decoded.match(/spotify:playlist:([a-zA-Z0-9]+)/i)?.[1];
+  if (fromUri) return fromUri;
+  const normalized = decoded.replace(/[?#].*$/, "").replace(/\/+$/, "").trim();
+  const plainId = normalized.match(/([a-zA-Z0-9]{8,})$/)?.[1];
+  return plainId ?? normalized;
 }
 
 function normalizeDeezerPlaylistId(raw: string) {
@@ -163,24 +174,6 @@ const AD_TRACK_PATTERNS = [
   /\b(app\s+store|play\s+store|music\s+app)\b/i,
 ];
 
-const MATCH_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "audio",
-  "by",
-  "feat",
-  "featuring",
-  "from",
-  "music",
-  "official",
-  "officiel",
-  "song",
-  "the",
-  "video",
-  "with",
-]);
-
 function normalizeAdText(value: string) {
   return value
     .normalize("NFKD")
@@ -196,18 +189,31 @@ function isLikelyAdTrack(track: Pick<MusicTrack, "title" | "artist">) {
   return AD_TRACK_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-function toMatchWords(value: string) {
-  return normalizeAdText(value)
-    .split(" ")
-    .map((word) => word.trim())
-    .filter((word) => word.length > 1 && !MATCH_STOP_WORDS.has(word));
+function sanitizeTrackSearchValue(value: string) {
+  return value
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\[[^\]]*\]/g, " ")
+    .replace(/\b(feat|featuring|ft)\.?[^-]*$/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function overlapRatio(expected: string[], candidate: string[]) {
-  if (expected.length <= 0 || candidate.length <= 0) return 0;
-  const candidateSet = new Set(candidate);
-  const matched = expected.filter((word) => candidateSet.has(word)).length;
-  return matched / expected.length;
+function buildYouTubeQueryVariants(track: Pick<MusicTrack, "title" | "artist">) {
+  const title = track.title.trim();
+  const artist = track.artist.trim();
+  const sanitizedTitle = sanitizeTrackSearchValue(title);
+
+  return Array.from(
+    new Set(
+      [
+        `${artist} - ${title}`,
+        `${artist} - ${sanitizedTitle}`,
+        `${artist} ${title}`,
+      ]
+        .map((query) => query.replace(/\s+/g, " ").trim())
+        .filter((query) => query.length > 0),
+    ),
+  );
 }
 
 function randomShuffle<T>(values: T[]) {
@@ -245,52 +251,6 @@ function signature(track: Pick<MusicTrack, "title" | "artist">) {
   return `${track.title.trim().toLowerCase()}::${track.artist.trim().toLowerCase()}`;
 }
 
-function scoreYouTubeCandidate(
-  source: Pick<MusicTrack, "title" | "artist">,
-  candidate: Pick<MusicTrack, "title" | "artist">,
-) {
-  const expectedTitle = normalizeAdText(source.title);
-  const expectedArtist = normalizeAdText(source.artist);
-  const candidateTitle = normalizeAdText(candidate.title);
-  const candidateArtist = normalizeAdText(candidate.artist);
-  const candidateCombined = `${candidateTitle} ${candidateArtist}`.trim();
-  const expectedTitleWords = toMatchWords(source.title);
-  const expectedArtistWords = toMatchWords(source.artist);
-  const candidateTitleWords = toMatchWords(candidate.title);
-  const candidateCombinedWords = toMatchWords(`${candidate.title} ${candidate.artist}`);
-
-  let score = 0;
-  if (expectedTitle === candidateTitle) score += 8;
-  else if (expectedTitle.includes(candidateTitle) || candidateTitle.includes(expectedTitle)) score += 5;
-  const titleOverlap = overlapRatio(expectedTitleWords, candidateTitleWords);
-  score += Math.round(titleOverlap * 4);
-
-  const artistContains =
-    expectedArtist.length > 0 &&
-    (candidateCombined.includes(expectedArtist) || expectedArtist.includes(candidateArtist));
-  if (expectedArtist === candidateArtist) score += 6;
-  else if (artistContains) score += 4;
-  const artistOverlap = overlapRatio(expectedArtistWords, candidateCombinedWords);
-  score += Math.round(artistOverlap * 3);
-
-  const titleMatched =
-    expectedTitle.length > 0 &&
-    (expectedTitle === candidateTitle ||
-      expectedTitle.includes(candidateTitle) ||
-      candidateTitle.includes(expectedTitle) ||
-      titleOverlap >= 0.45);
-  const artistMatched =
-    expectedArtist.length <= 0 || expectedArtist === candidateArtist || artistContains || artistOverlap >= 0.34;
-
-  return {
-    score,
-    titleOverlap,
-    artistOverlap,
-    titleMatched,
-    artistMatched,
-  };
-}
-
 function isYouTubeLikeTrack(track: Pick<MusicTrack, "provider" | "sourceUrl">) {
   if (track.provider === "youtube") return true;
   const source = track.sourceUrl?.toLowerCase() ?? "";
@@ -319,8 +279,6 @@ async function searchPlayableYouTube(query: string, limit: number): Promise<Musi
 }
 
 async function resolveYouTubePlayback(track: MusicTrack) {
-  if (isLikelyAdTrack(track)) return null;
-
   if (isYouTubeLikeTrack(track)) {
     return {
       ...track,
@@ -339,65 +297,42 @@ async function resolveYouTubePlayback(track: MusicTrack) {
     youtubeTrackCache.delete(key);
   }
 
-  const candidateMap = new Map<string, MusicTrack>();
-  const queryVariants = Array.from(
-    new Set(
-      [
-        `${track.title} ${track.artist} official audio`,
-        `${track.artist} ${track.title}`,
-      ]
-        .map((query) => query.trim())
-        .filter((query) => query.length > 0),
-    ),
-  );
-
-  for (const query of queryVariants) {
-    const candidates = await searchPlayableYouTube(query, 5);
-    for (const candidate of candidates) {
-      if (isLikelyAdTrack(candidate)) continue;
-      const key = candidate.id.trim().toLowerCase();
-      if (key.length <= 0 || candidateMap.has(key)) continue;
-      candidateMap.set(key, candidate);
-    }
-  }
-
-  const picked = [...candidateMap.values()]
-    .map((candidate) => ({
-      candidate,
-      ...scoreYouTubeCandidate(track, candidate),
-    }))
-    .filter((candidate) => candidate.titleMatched && candidate.artistMatched)
-    .sort((left, right) => {
-      const byScore = right.score - left.score;
-      if (byScore !== 0) return byScore;
-      return right.titleOverlap - left.titleOverlap;
-    })[0];
-
-  const selected =
-    picked && (
-      picked.score >= 5 ||
-      (picked.score >= 4 && picked.titleOverlap >= 0.6 && picked.artistOverlap >= 0.2)
-    )
-      ? picked.candidate
-      : null;
-  const resolved = selected
-    ? ({
-        provider: "youtube",
-        id: selected.id,
+  const queryVariants = buildYouTubeQueryVariants(track);
+  for (const searchQuery of queryVariants) {
+    let candidates: MusicTrack[] = [];
+    try {
+      candidates = await searchPlayableYouTube(searchQuery, 5);
+    } catch (error) {
+      logEvent("warn", "track_source_youtube_query_failed", {
+        query: searchQuery,
         title: track.title,
         artist: track.artist,
-        previewUrl: null,
-        sourceUrl: selected.sourceUrl ?? `https://www.youtube.com/watch?v=${selected.id}`,
-      } satisfies MusicTrack)
-    : null;
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+      });
+      continue;
+    }
 
-  if (resolved) {
+    const selected = candidates[0] ?? null;
+    if (!selected) continue;
+
+    const resolved = {
+      provider: "youtube" as const,
+      id: selected.id,
+      title: track.title,
+      artist: track.artist,
+      durationSec: track.durationSec ?? null,
+      previewUrl: null,
+      sourceUrl: selected.sourceUrl ?? `https://www.youtube.com/watch?v=${selected.id}`,
+    } satisfies MusicTrack;
+
     youtubeTrackCache.set(key, {
       track: resolved,
       expiresAt: Date.now() + YOUTUBE_TRACK_CACHE_TTL_MS,
     });
+    return resolved;
   }
-  return resolved;
+
+  return null;
 }
 
 async function prioritizeYouTubePlayback(
@@ -406,7 +341,7 @@ async function prioritizeYouTubePlayback(
   input: { fillQuery: string; allowQueryFill: boolean; maxResolveBudget?: number },
 ) {
   const safeSize = Math.max(1, size);
-  const scoped = nonEmptySlice(tracks, Math.max(safeSize * 3, safeSize));
+  const scoped = nonEmptySlice(tracks, Math.max(tracks.length, safeSize));
   const result: MusicTrack[] = [];
   const seen = new Set<string>();
   let youtubeResolved = 0;
@@ -439,10 +374,26 @@ async function prioritizeYouTubePlayback(
         seen.add(key);
 
         directResolveAttempts += 1;
-        const youtubePlayback = await resolveYouTubePlayback(track);
+        let youtubePlayback: MusicTrack | null = null;
+        try {
+          youtubePlayback = await resolveYouTubePlayback(track);
+        } catch (error) {
+          logEvent("warn", "track_source_direct_resolve_failed", {
+            title: track.title,
+            artist: track.artist,
+            error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+          });
+          continue;
+        }
         if (youtubePlayback) {
           youtubeResolved += 1;
           result.push(youtubePlayback);
+        } else {
+          logEvent("debug", "track_source_youtube_track_skipped", {
+            title: track.title,
+            artist: track.artist,
+            reason: "NO_YOUTUBE_MATCH",
+          });
         }
       }
     }),
@@ -458,7 +409,16 @@ async function prioritizeYouTubePlayback(
     );
     for (const query of fillQueries) {
       if (result.length >= safeSize) break;
-      const candidates = await searchPlayableYouTube(query, Math.min(10, safeSize));
+      let candidates: MusicTrack[] = [];
+      try {
+        candidates = await searchPlayableYouTube(query, Math.min(10, safeSize));
+      } catch (error) {
+        logEvent("warn", "track_source_query_fill_failed", {
+          query,
+          error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+        });
+        continue;
+      }
       for (const track of candidates) {
         if (result.length >= safeSize) break;
         if (isLikelyAdTrack(track)) continue;
@@ -494,10 +454,6 @@ function sourceFetchLimit(size: number) {
   return Math.min(60, Math.max(16, size * 2));
 }
 
-function sourceResolveBudget(size: number) {
-  return Math.min(5, Math.max(3, Math.ceil(size / 2)));
-}
-
 export async function resolveTrackPoolFromSource(
   options: ResolveTrackPoolOptions,
 ): Promise<MusicTrack[]> {
@@ -520,7 +476,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
-            maxResolveBudget: sourceResolveBudget(safeSize),
+            maxResolveBudget: tracks.length,
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -550,7 +506,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
-            maxResolveBudget: sourceResolveBudget(safeSize),
+            maxResolveBudget: tracks.length,
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -578,7 +534,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
-            maxResolveBudget: sourceResolveBudget(safeSize),
+            maxResolveBudget: tracks.length,
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -606,7 +562,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
-            maxResolveBudget: sourceResolveBudget(safeSize),
+            maxResolveBudget: tracks.length,
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -637,7 +593,7 @@ export async function resolveTrackPoolFromSource(
           {
             fillQuery: fillQueryForParsedSource(parsed),
             allowQueryFill: parsed.type === "search",
-            maxResolveBudget: sourceResolveBudget(safeSize),
+            maxResolveBudget: tracks.length,
           },
         );
         if (prioritized.length > 0) return prioritized;
@@ -662,6 +618,10 @@ export async function resolveTrackPoolFromSource(
       allowQueryFill: parsed.type === "search",
     });
   } catch (error) {
+    if (error instanceof Error && error.message === SPOTIFY_RATE_LIMITED_ERROR) {
+      throw error;
+    }
+
     logEvent("warn", "track_source_resolution_failed", {
       sourceType: parsed.type,
       categoryQuery: options.categoryQuery,

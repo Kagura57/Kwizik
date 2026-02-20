@@ -5,6 +5,7 @@ export type MusicTrack = {
   id: string;
   title: string;
   artist: string;
+  durationSec?: number | null;
   previewUrl: string | null;
   sourceUrl: string | null;
 };

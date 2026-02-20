@@ -2,12 +2,14 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import {
+  HttpStatusError,
   kickPlayer,
   leaveRoom as leaveRoomApi,
   replayRoom,
   searchPlaylistsAcrossProviders,
   setPlayerReady,
   setRoomSource,
+  skipRoomRound,
   startRoom,
   submitRoomAnswer,
   type UnifiedPlaylistOption,
@@ -110,6 +112,8 @@ export function RoomPlayPage() {
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
   const [debouncedPlaylistQuery, setDebouncedPlaylistQuery] = useState("top hits");
   const [aniListUsers, setAniListUsers] = useState("");
+  const [spotifyRateLimitUntilMs, setSpotifyRateLimitUntilMs] = useState<number | null>(null);
+  const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
 
@@ -247,7 +251,18 @@ export function RoomPlayPage() {
         playerId: session.playerId,
       });
     },
-    onSuccess: () => snapshotQuery.refetch(),
+    onSuccess: () => {
+      setSpotifyRateLimitUntilMs(null);
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      if (error instanceof HttpStatusError && error.message === "SPOTIFY_RATE_LIMITED") {
+        const retryAfterMs = error.retryAfterMs && error.retryAfterMs > 0 ? error.retryAfterMs : 10_000;
+        setSpotifyRateLimitUntilMs(Date.now() + retryAfterMs);
+        return;
+      }
+      setSpotifyRateLimitUntilMs(null);
+    },
   });
 
   const sourceMutation = useMutation({
@@ -297,6 +312,17 @@ export function RoomPlayPage() {
     onSuccess: () => snapshotQuery.refetch(),
   });
 
+  const skipMutation = useMutation({
+    mutationFn: () => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return skipRoomRound({
+        roomCode,
+        playerId: session.playerId,
+      });
+    },
+    onSuccess: () => snapshotQuery.refetch(),
+  });
+
   const answerMutation = useMutation({
     mutationFn: (value: string) =>
       submitRoomAnswer({
@@ -312,6 +338,12 @@ export function RoomPlayPage() {
   const readyErrorCode = readyMutation.error instanceof Error ? readyMutation.error.message : null;
   const kickErrorCode = kickMutation.error instanceof Error ? kickMutation.error.message : null;
   const replayErrorCode = replayMutation.error instanceof Error ? replayMutation.error.message : null;
+  const skipErrorCode = skipMutation.error instanceof Error ? skipMutation.error.message : null;
+  const spotifyCooldownRemainingMs = useMemo(() => {
+    if (!spotifyRateLimitUntilMs) return 0;
+    return Math.max(0, spotifyRateLimitUntilMs - clockNow);
+  }, [clockNow, spotifyRateLimitUntilMs]);
+  const spotifyCooldownRemainingSec = Math.max(1, Math.ceil(spotifyCooldownRemainingMs / 1000));
 
   const remainingMs = useMemo(() => {
     if (!state?.deadlineMs) return null;
@@ -369,6 +401,53 @@ export function RoomPlayPage() {
     submittedText.round === state.round;
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
+
+  useEffect(() => {
+    const iframe = youtubeIframeRef.current;
+    if (!iframe || !activeYoutubeEmbed) return;
+    const iframeWindow = iframe.contentWindow;
+    if (!iframeWindow) return;
+    const iframeId = `tunaris-youtube-${stableYoutubePlayback?.key ?? "unknown"}`;
+    iframe.id = iframeId;
+
+    const subscribe = () => {
+      const baseEvent = { id: iframeId, channel: "widget" };
+      iframeWindow.postMessage(JSON.stringify({ event: "listening", ...baseEvent }), "*");
+      iframeWindow.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: "addEventListener",
+          args: ["onError"],
+          ...baseEvent,
+        }),
+        "*",
+      );
+    };
+    subscribe();
+    const subscribeInterval = window.setInterval(subscribe, 1_000);
+
+    function onMessage(event: MessageEvent) {
+      if (event.source !== iframeWindow) return;
+      if (typeof event.origin !== "string" || !event.origin.includes("youtube.com")) return;
+      if (typeof event.data !== "string") return;
+
+      try {
+        const payload = JSON.parse(event.data) as { event?: string; info?: unknown };
+        if (payload.event !== "onError") return;
+        const code = Number(payload.info);
+        if (![2, 5, 100, 101, 150].includes(code)) return;
+        setAudioError(true);
+      } catch {
+        // Ignore non-JSON postMessage payloads.
+      }
+    }
+
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.clearInterval(subscribeInterval);
+      window.removeEventListener("message", onMessage);
+    };
+  }, [activeYoutubeEmbed, stableYoutubePlayback?.key]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -674,9 +753,13 @@ export function RoomPlayPage() {
                   <button
                     className="solid-btn"
                     onClick={() => startMutation.mutate()}
-                    disabled={startMutation.isPending || !state.canStart}
+                    disabled={startMutation.isPending || !state.canStart || spotifyCooldownRemainingMs > 0}
                   >
-                    {startMutation.isPending ? "Lancement..." : "Lancer la partie"}
+                    {startMutation.isPending
+                      ? "Lancement..."
+                      : spotifyCooldownRemainingMs > 0
+                        ? `Spotify en pause (${spotifyCooldownRemainingSec}s)`
+                        : "Lancer la partie"}
                   </button>
                 )}
                 <Link className="ghost-btn" to="/room/$roomCode/view" params={{ roomCode }}>
@@ -714,9 +797,9 @@ export function RoomPlayPage() {
 
           {state?.state === "playing" && state.mode === "mcq" && (
             <div className="mcq-grid">
-              {(state.choices ?? []).map((choice) => (
+              {(state.choices ?? []).map((choice, index) => (
                 <button
-                  key={choice}
+                  key={`${choice}-${index}`}
                   className={`choice-btn${submittedMcq?.round === state.round && submittedMcq.choice === choice ? " selected" : ""}`}
                   disabled={answerMutation.isPending || !session.playerId || mcqLocked}
                   onClick={() => onSelectChoice(choice)}
@@ -799,16 +882,20 @@ export function RoomPlayPage() {
           )}
 
           {!isResults && activeYoutubeEmbed && (
-            <div className="blindtest-video-shell">
-              <iframe
-                key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
-                className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
-                src={activeYoutubeEmbed}
-                title="Blindtest playback"
-                allow="autoplay; encrypted-media"
-              />
-            </div>
-          )}
+          <div className="blindtest-video-shell">
+            <iframe
+              ref={youtubeIframeRef}
+              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
+              className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
+              src={activeYoutubeEmbed}
+              title="Blindtest playback"
+              allow="autoplay; encrypted-media"
+              onError={() => {
+                setAudioError(true);
+              }}
+            />
+          </div>
+        )}
 
           <p
             className={
@@ -818,13 +905,16 @@ export function RoomPlayPage() {
               sourceMutation.isError ||
               readyMutation.isError ||
               kickMutation.isError ||
-              replayMutation.isError
+              replayMutation.isError ||
+              skipMutation.isError
                 ? "status error"
                 : "status"
             }
           >
             {startErrorCode === "NO_TRACKS_FOUND" &&
               "Aucune piste YouTube jouable trouvée. Vérifie YOUTUBE_API_KEY (quota inclus) ou YOUTUBE_INVIDIOUS_INSTANCES."}
+            {startErrorCode === "SPOTIFY_RATE_LIMITED" &&
+              `Spotify limite temporairement les requêtes. Réessaye dans ${spotifyCooldownRemainingSec}s.`}
             {startErrorCode === "SOURCE_NOT_SET" && "Le host doit choisir une playlist avant de lancer."}
             {startErrorCode === "PLAYERS_NOT_READY" && "Tous les joueurs doivent être prêts."}
             {startErrorCode === "HOST_ONLY" && "Seul le host peut lancer la partie."}
@@ -832,6 +922,8 @@ export function RoomPlayPage() {
             {readyErrorCode === "INVALID_STATE" && "Le statut prêt se gère uniquement dans le lobby."}
             {kickErrorCode === "HOST_ONLY" && "Seul le host peut éjecter un joueur."}
             {replayErrorCode === "HOST_ONLY" && "Seul le host peut relancer une partie."}
+            {skipErrorCode === "HOST_ONLY" && "Seul le host peut passer automatiquement la manche."}
+            {skipErrorCode === "INVALID_STATE" && "La manche ne peut pas être passée dans cet état."}
             {!session.playerId && "Tu dois rejoindre la room pour répondre."}
             {snapshotQuery.isError && "Synchronisation impossible."}
             {answerMutation.isError && "Réponse refusée."}

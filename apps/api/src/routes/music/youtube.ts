@@ -4,7 +4,7 @@ import { readEnvVar } from "../../lib/env";
 
 type YouTubePayload = {
   items?: Array<{
-    id?: { videoId?: string };
+    id?: { videoId?: string } | string;
     snippet?: {
       title?: string;
       channelTitle?: string;
@@ -213,9 +213,9 @@ async function searchYouTubeViaInvidious(
     url.searchParams.set("q", query);
     url.searchParams.set("type", "video");
 
-      const payload = (await fetchJsonWithTimeout(url, {}, {
-        timeoutMs: YOUTUBE_INVIDIOUS_TIMEOUT_MS,
-        retries: 0,
+    const payload = (await fetchJsonWithTimeout(url, {}, {
+      timeoutMs: YOUTUBE_INVIDIOUS_TIMEOUT_MS,
+      retries: 0,
       context: {
         provider: "youtube",
         route: "invidious_search",
@@ -322,7 +322,6 @@ export async function searchYouTube(query: string, limit = 10): Promise<MusicTra
       url.searchParams.set("type", "video");
       url.searchParams.set("maxResults", String(safeLimit));
       url.searchParams.set("q", normalizedQuery);
-      url.searchParams.set("videoEmbeddable", "true");
       url.searchParams.set("key", apiKey);
 
       const payload = (await fetchJsonWithTimeout(
@@ -346,20 +345,19 @@ export async function searchYouTube(query: string, limit = 10): Promise<MusicTra
       apiReceivedResponse = true;
       youtubeSearchBackoffUntilMs = 0;
       const items = payload.items ?? [];
-      const tracks = items
+      const parsedTracks = items
         .map((item) => {
-          const id = item.id?.videoId;
-          const title = item.snippet?.title?.trim();
-          const artist = item.snippet?.channelTitle?.trim();
-          if (!id || !title || !artist) return null;
+          const id =
+            (typeof item.id === "string" ? item.id : item.id?.videoId)?.trim() ?? "";
+          if (!id) return null;
           return {
             provider: "youtube" as const,
             id,
-            title,
-            artist,
+            title: item.snippet?.title?.trim() || normalizedQuery,
+            artist: item.snippet?.channelTitle?.trim() || "Unknown",
             previewUrl: null,
             sourceUrl: `https://www.youtube.com/watch?v=${id}`,
-          };
+          } satisfies MusicTrack;
         })
         .filter((value): value is MusicTrack => value !== null);
 
@@ -368,9 +366,10 @@ export async function searchYouTube(query: string, limit = 10): Promise<MusicTra
         youtubeKeyRotationIndex = usedIndex + 1;
       }
 
-      if (tracks.length > 0) {
-        writeCachedQuery(normalizedQuery, safeLimit, tracks);
-        return tracks;
+      if (parsedTracks.length > 0) {
+        const firstTrack = [parsedTracks[0] as MusicTrack];
+        writeCachedQuery(normalizedQuery, safeLimit, firstTrack);
+        return firstTrack;
       }
     }
   }

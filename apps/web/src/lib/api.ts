@@ -35,12 +35,14 @@ function apiBaseCandidates() {
 
 type ApiErrorPayload = {
   error?: unknown;
+  retryAfterMs?: unknown;
 };
 
-class HttpStatusError extends Error {
+export class HttpStatusError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterMs: number | null = null,
   ) {
     super(message);
   }
@@ -236,10 +238,14 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
         }
 
         let details = `HTTP_${response.status}`;
+        let retryAfterMs: number | null = null;
         try {
           const payload = (await response.json()) as ApiErrorPayload;
           if (typeof payload.error === "string" && payload.error.length > 0) {
             details = payload.error;
+          }
+          if (typeof payload.retryAfterMs === "number" && Number.isFinite(payload.retryAfterMs)) {
+            retryAfterMs = Math.max(0, Math.round(payload.retryAfterMs));
           }
         } catch {
           // Ignore payload parsing failures for non-json error responses.
@@ -264,9 +270,10 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
           method,
           status: response.status,
           error: details,
+          retryAfterMs,
           attempts: attempt + 1,
         });
-        throw new HttpStatusError(details, response.status);
+        throw new HttpStatusError(details, response.status, retryAfterMs);
       } catch (error) {
         if (error instanceof HttpStatusError) {
           logClientEvent("warn", "api_request_terminal_http_error", {
@@ -394,6 +401,18 @@ export async function replayRoom(input: { roomCode: string; playerId: string }) 
     playerCount: number;
     categoryQuery: string;
   }>("/quiz/replay", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function skipRoomRound(input: { roomCode: string; playerId: string }) {
+  return requestJson<{
+    ok: true;
+    state: string;
+    round: number;
+    deadlineMs: number | null;
+  }>("/quiz/skip", {
     method: "POST",
     body: JSON.stringify(input),
   });

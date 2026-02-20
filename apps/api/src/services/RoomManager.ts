@@ -36,6 +36,16 @@ type TickResult = {
   closedRounds: ClosedRound[];
 };
 
+type SkipPlayingRoundInput = {
+  nowMs: number;
+  roundMs: number;
+};
+
+type SkipPlayingRoundResult = {
+  skipped: boolean;
+  closedRound: ClosedRound | null;
+};
+
 export class RoomManager {
   private gameState: GameState = "waiting";
   private currentRound = 0;
@@ -82,6 +92,35 @@ export class RoomManager {
     this.gameState = "countdown";
     this.roundDeadlineMs = input.nowMs + safeCountdownMs;
     return true;
+  }
+
+  skipPlayingRound(input: SkipPlayingRoundInput): SkipPlayingRoundResult {
+    if (this.gameState !== "playing") {
+      return { skipped: false, closedRound: null };
+    }
+
+    const safeRoundMs = Math.max(1, input.roundMs);
+    const closedRound: ClosedRound = {
+      round: this.currentRound,
+      startedAtMs: this.roundStartedAtMs ?? Math.max(0, input.nowMs - safeRoundMs),
+      deadlineMs: input.nowMs,
+      answers: new Map(this.answers),
+    };
+
+    this.answers.clear();
+
+    if (this.currentRound >= this.plannedTotalRounds) {
+      this.gameState = "results";
+      this.roundStartedAtMs = null;
+      this.roundDeadlineMs = null;
+      return { skipped: true, closedRound };
+    }
+
+    this.currentRound += 1;
+    this.gameState = "playing";
+    this.roundStartedAtMs = input.nowMs;
+    this.roundDeadlineMs = input.nowMs + safeRoundMs;
+    return { skipped: true, closedRound };
   }
 
   forcePlayingRound(round: number, deadlineMs: number, startedAtMs?: number) {

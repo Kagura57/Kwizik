@@ -211,8 +211,8 @@ export function RoomViewPage() {
 
         {state?.state === "playing" && state.mode === "mcq" && state.choices && (
           <div className="projection-choices">
-            {state.choices.map((choice) => (
-              <div key={choice} className="projection-choice">
+            {state.choices.map((choice, index) => (
+              <div key={`${choice}-${index}`} className="projection-choice">
                 {choice}
               </div>
             ))}
@@ -249,6 +249,10 @@ export function RoomViewPage() {
               src={activeYoutubeEmbed}
               title="Projection playback"
               allow="autoplay; encrypted-media"
+              onError={() => {
+                setAudioError(true);
+                setIframeEpoch((value) => value + 1);
+              }}
             />
           </div>
         )}

@@ -7,6 +7,7 @@ type DeezerPayload = {
   data?: Array<{
     id?: number;
     title?: string;
+    duration?: number;
     artist?: { name?: string };
     preview?: string | null;
   }>;
@@ -67,11 +68,16 @@ export async function searchDeezer(query: string, limit = 10): Promise<MusicTrac
       const title = item.title?.trim();
       const artist = item.artist?.name?.trim();
       if (!id || !title || !artist) return null;
+      const durationSec =
+        typeof item.duration === "number" && Number.isFinite(item.duration)
+          ? Math.max(1, Math.round(item.duration))
+          : null;
       return {
         provider: "deezer" as const,
         id: String(id),
         title,
         artist,
+        durationSec,
         previewUrl: item.preview ?? null,
         sourceUrl: `https://www.deezer.com/track/${id}`,
       };
@@ -97,11 +103,16 @@ export async function fetchDeezerChartTracks(limit = 20): Promise<MusicTrack[]> 
       const title = item.title?.trim();
       const artist = item.artist?.name?.trim();
       if (!id || !title || !artist) return null;
+      const durationSec =
+        typeof item.duration === "number" && Number.isFinite(item.duration)
+          ? Math.max(1, Math.round(item.duration))
+          : null;
       return {
         provider: "deezer" as const,
         id: String(id),
         title,
         artist,
+        durationSec,
         previewUrl: item.preview ?? null,
         sourceUrl: `https://www.deezer.com/track/${id}`,
       };
@@ -143,11 +154,16 @@ export async function fetchDeezerPlaylistTracks(
       const key = String(id);
       if (seen.has(key)) continue;
       seen.add(key);
+      const durationSec =
+        typeof item.duration === "number" && Number.isFinite(item.duration)
+          ? Math.max(1, Math.round(item.duration))
+          : null;
       tracks.push({
         provider: "deezer",
         id: key,
         title,
         artist,
+        durationSec,
         previewUrl: item.preview ?? null,
         sourceUrl: `https://www.deezer.com/track/${id}`,
       });

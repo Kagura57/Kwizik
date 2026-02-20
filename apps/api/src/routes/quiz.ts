@@ -92,7 +92,9 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
     }
 
     if (started.ok === false) {
-      if (started.error === "NO_TRACKS_FOUND") {
+      if (started.error === "SPOTIFY_RATE_LIMITED") {
+        set.status = 429;
+      } else if (started.error === "NO_TRACKS_FOUND") {
         set.status = 422;
       } else if (started.error === "PLAYER_NOT_FOUND") {
         set.status = 404;
@@ -252,6 +254,39 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       state: result.state,
       playerCount: result.playerCount,
       categoryQuery: result.categoryQuery,
+    };
+  })
+  .post("/skip", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.skipCurrentRound(roomCode, playerId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+
+    return {
+      ok: true as const,
+      state: result.state,
+      round: result.round,
+      deadlineMs: result.deadlineMs,
     };
   })
   .post("/answer", ({ body, set }) => {

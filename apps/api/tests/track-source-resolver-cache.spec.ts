@@ -53,7 +53,7 @@ describe("track source resolver cache behavior", () => {
     let youtubeCalls = 0;
     searchYouTubeMock.mockImplementation(async () => {
       youtubeCalls += 1;
-      if (youtubeCalls <= 2) return [];
+      if (youtubeCalls <= 3) return [];
       return [
         {
           provider: "youtube",
@@ -282,5 +282,46 @@ describe("track source resolver cache behavior", () => {
 
     expect(resolved.length).toBeGreaterThan(3);
     expect(resolved.length).toBeLessThanOrEqual(8);
+  });
+
+  it("iterates across playlist candidates until requested rounds are filled", async () => {
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([]);
+    fetchDeezerPlaylistTracksMock.mockResolvedValue(
+      Array.from({ length: 50 }, (_, index) => ({
+        provider: "deezer" as const,
+        id: `dz-playlist-${index + 1}`,
+        title: `Playlist Song ${index + 1}`,
+        artist: "Playlist Artist",
+        previewUrl: `https://cdn.example/p-${index + 1}.mp3`,
+        sourceUrl: `https://www.deezer.com/track/${index + 1}`,
+      })),
+    );
+
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      const match = query.match(/playlist song (\d+)/i);
+      if (!match) return [];
+      const index = Number.parseInt(match[1] ?? "0", 10);
+      if (index <= 40) return [];
+
+      const id = `yt-playlist-${index}`;
+      return [
+        {
+          provider: "youtube",
+          id,
+          title: `Playlist Song ${index} Official Audio`,
+          artist: "Playlist Artist",
+          previewUrl: null,
+          sourceUrl: `https://www.youtube.com/watch?v=${id}`,
+        },
+      ];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "deezer:playlist:3155776842",
+      size: 10,
+    });
+
+    expect(resolved).toHaveLength(10);
+    expect(new Set(resolved.map((track) => track.id)).size).toBe(10);
   });
 });

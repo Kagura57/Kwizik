@@ -16,6 +16,14 @@ describe("track source resolver", () => {
     expect(parsed.payload).toEqual({ playlistId: "37i9dQZEVXbMDoHDwVN2tF" });
   });
 
+  it("normalizes spotify playlist id from nested prefix + URL payload", () => {
+    const parsed = parseTrackSource(
+      "spotify:playlist:spotify:playlist:https://open.spotify.com/playlist/37i9dQZEVXbMDoHDwVN2tF?si=abc123",
+    );
+    expect(parsed.type).toBe("spotify_playlist");
+    expect(parsed.payload).toEqual({ playlistId: "37i9dQZEVXbMDoHDwVN2tF" });
+  });
+
   it("normalizes deezer playlist id from full URL", () => {
     const parsed = parseTrackSource("deezer:playlist:https://www.deezer.com/fr/playlist/3155776842");
     expect(parsed.type).toBe("deezer_playlist");

@@ -49,6 +49,14 @@ const PROMOTIONAL_MIXED_TRACKS: MusicTrack[] = [
     previewUrl: null,
     sourceUrl: "https://www.youtube.com/watch?v=clean-1",
   },
+  {
+    provider: "youtube",
+    id: "clean-2",
+    title: "Silver Horizon",
+    artist: "Nova Tide",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=clean-2",
+  },
 ];
 
 const MCQ_NO_REPEAT_DISTRACTOR_TRACKS: MusicTrack[] = [
@@ -297,6 +305,52 @@ describe("RoomStore gameplay progression", () => {
     expect(round3Playing?.choices?.includes(round1Label)).toBe(false);
   });
 
+  it("always returns 4 unique MCQ choices even when distractors are scarce", async () => {
+    let nowMs = 0;
+    const singleTrack: MusicTrack[] = [
+      {
+        provider: "youtube",
+        id: "solo-1",
+        title: "Walking On A Dream",
+        artist: "Empire Of The Sun",
+        previewUrl: null,
+        sourceUrl: "https://www.youtube.com/watch?v=solo-1",
+      },
+    ];
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => singleTrack,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const player = store.joinRoom(roomCode, "Host");
+    expect(player.status).toBe("ok");
+    if (player.status !== "ok") return;
+
+    store.setRoomSource(roomCode, player.value.playerId, "spotify:playlist:dummy");
+    store.setPlayerReady(roomCode, player.value.playerId, true);
+    const started = await store.startGame(roomCode, player.value.playerId);
+    expect(started).toMatchObject({ ok: true });
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.mode).toBe("mcq");
+    const choices = playing?.choices ?? [];
+    expect(choices).toHaveLength(4);
+    expect(new Set(choices).size).toBe(4);
+    expect(
+      choices.filter((choice) => choice === "Walking On A Dream - Empire Of The Sun"),
+    ).toHaveLength(1);
+  });
+
   it("accepts youtube tracks without preview as playable rounds", async () => {
     let nowMs = 0;
     const store = new RoomStore({
@@ -392,7 +446,7 @@ describe("RoomStore gameplay progression", () => {
     const playing = store.roomState(roomCode);
     expect(playing?.state).toBe("playing");
     const label = playing?.media?.trackId ?? "";
-    expect(label).toBe("clean-1");
+    expect(["clean-1", "clean-2"]).toContain(label);
   });
 
   it("requires host and 100% ready before start", async () => {
@@ -469,7 +523,7 @@ describe("RoomStore gameplay progression", () => {
     expect(lobby?.readyCount).toBe(0);
   });
 
-  it("starts with a usable initial pool (not capped to 2 tracks)", async () => {
+  it("starts only when the full requested round pool is prepared", async () => {
     const requestedSizes: number[] = [];
     const makeTrack = (index: number): MusicTrack => ({
       provider: "youtube",
@@ -504,8 +558,39 @@ describe("RoomStore gameplay progression", () => {
     expect(ready.status).toBe("ok");
     const started = await store.startGame(created.roomCode, host.value.playerId);
     expect(started).toMatchObject({ ok: true });
-    expect((started && "poolSize" in started ? started.poolSize : 0)).toBeGreaterThanOrEqual(3);
-    expect((started && "totalRounds" in started ? started.totalRounds : 0)).toBeGreaterThanOrEqual(3);
-    expect(requestedSizes[0]).toBeGreaterThanOrEqual(3);
+    expect((started && "poolSize" in started ? started.poolSize : 0)).toBe(10);
+    expect((started && "totalRounds" in started ? started.totalRounds : 0)).toBe(10);
+    expect(requestedSizes[0]).toBeGreaterThanOrEqual(10);
+  });
+
+  it("returns SPOTIFY_RATE_LIMITED when upstream spotify is throttled", async () => {
+    const store = new RoomStore({
+      getTrackPool: async () => {
+        throw new Error("SPOTIFY_RATE_LIMITED");
+      },
+      config: {
+        maxRounds: 10,
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(created.roomCode, host.value.playerId, "spotify:playlist:abc123");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    expect(ready.status).toBe("ok");
+
+    const started = await store.startGame(created.roomCode, host.value.playerId);
+    expect(started).toMatchObject({
+      ok: false,
+      error: "SPOTIFY_RATE_LIMITED",
+    });
   });
 });

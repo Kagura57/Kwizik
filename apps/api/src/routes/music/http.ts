@@ -5,16 +5,32 @@ type FetchJsonOptions = {
   timeoutMs?: number;
   retries?: number;
   retryDelayMs?: number;
+  maxTotalRetryMs?: number | null;
+  maxRetryAfterMs?: number | null;
   context?: Record<string, unknown>;
+  onHttpError?: (details: {
+    status: number;
+    retryAfterMs: number | null;
+    attempt: number;
+    retries: number;
+    errorDetail: string | null;
+    willRetry: boolean;
+  }) => void;
 };
 
-function normalizeOptions(timeoutOrOptions?: number | FetchJsonOptions): Required<FetchJsonOptions> {
+type NormalizedFetchJsonOptions =
+  Required<Omit<FetchJsonOptions, "onHttpError">> & Pick<FetchJsonOptions, "onHttpError">;
+
+function normalizeOptions(timeoutOrOptions?: number | FetchJsonOptions): NormalizedFetchJsonOptions {
   if (typeof timeoutOrOptions === "number") {
     return {
       timeoutMs: timeoutOrOptions,
       retries: 0,
       retryDelayMs: 250,
+      maxTotalRetryMs: null,
+      maxRetryAfterMs: null,
       context: {},
+      onHttpError: undefined,
     };
   }
 
@@ -22,7 +38,16 @@ function normalizeOptions(timeoutOrOptions?: number | FetchJsonOptions): Require
     timeoutMs: timeoutOrOptions?.timeoutMs ?? 4_000,
     retries: Math.max(0, timeoutOrOptions?.retries ?? 2),
     retryDelayMs: Math.max(50, timeoutOrOptions?.retryDelayMs ?? 250),
+    maxTotalRetryMs:
+      typeof timeoutOrOptions?.maxTotalRetryMs === "number" && timeoutOrOptions.maxTotalRetryMs > 0
+        ? timeoutOrOptions.maxTotalRetryMs
+        : null,
+    maxRetryAfterMs:
+      typeof timeoutOrOptions?.maxRetryAfterMs === "number" && timeoutOrOptions.maxRetryAfterMs > 0
+        ? timeoutOrOptions.maxRetryAfterMs
+        : null,
     context: timeoutOrOptions?.context ?? {},
+    onHttpError: timeoutOrOptions?.onHttpError,
   };
 }
 
@@ -140,9 +165,30 @@ export async function fetchJsonWithTimeout(
         return (await response.json()) as unknown;
       }
 
+      const retryAfterMsRaw = response.status === 429
+        ? parseRetryAfterMs(response.headers.get("retry-after"))
+        : null;
+      const retryAfterMs = retryAfterMsRaw !== null && options.maxRetryAfterMs !== null
+        ? Math.min(retryAfterMsRaw, options.maxRetryAfterMs)
+        : retryAfterMsRaw;
       const retryable = shouldRetryStatus(response.status);
-      if (!retryable || attempt >= options.retries) {
+      const retryDelay = retryAfterMs !== null
+        ? Math.max(100, retryAfterMs)
+        : delayMs(options.retryDelayMs, attempt);
+      const retryBudgetExceeded = options.maxTotalRetryMs !== null &&
+        Date.now() - startedAt + retryDelay > options.maxTotalRetryMs;
+      const willRetry = retryable && attempt < options.retries && !retryBudgetExceeded;
+
+      if (!willRetry) {
         const errorDetail = await readResponseErrorDetail(response);
+        options.onHttpError?.({
+          status: response.status,
+          retryAfterMs,
+          attempt: attempt + 1,
+          retries: options.retries + 1,
+          errorDetail,
+          willRetry: false,
+        });
         logEvent("warn", "music_http_non_ok", {
           url: logUrl,
           status: response.status,
@@ -163,12 +209,15 @@ export async function fetchJsonWithTimeout(
         return null;
       }
 
-      const retryAfterMs = response.status === 429
-        ? parseRetryAfterMs(response.headers.get("retry-after"))
-        : null;
-      if (retryAfterMs !== null) {
-        waitOverrideMs = Math.max(100, retryAfterMs);
-      }
+      options.onHttpError?.({
+        status: response.status,
+        retryAfterMs,
+        attempt: attempt + 1,
+        retries: options.retries + 1,
+        errorDetail: null,
+        willRetry: true,
+      });
+      waitOverrideMs = retryDelay;
       logEvent("warn", "music_http_retry_status", {
         url: logUrl,
         status: response.status,
@@ -178,7 +227,11 @@ export async function fetchJsonWithTimeout(
         ...options.context,
       });
     } catch (error) {
-      if (attempt >= options.retries) {
+      const retryDelay = delayMs(options.retryDelayMs, attempt);
+      const retryBudgetExceeded = options.maxTotalRetryMs !== null &&
+        Date.now() - startedAt + retryDelay > options.maxTotalRetryMs;
+
+      if (attempt >= options.retries || retryBudgetExceeded) {
         const errorMessage = error instanceof Error ? error.message : "UNKNOWN_ERROR";
         logEvent("warn", "music_http_failure", {
           url: logUrl,
@@ -206,6 +259,8 @@ export async function fetchJsonWithTimeout(
         error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
         ...options.context,
       });
+
+      waitOverrideMs = retryDelay;
     } finally {
       clearTimeout(timeout);
     }
