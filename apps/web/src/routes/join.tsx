@@ -47,7 +47,7 @@ export function JoinPage() {
     <section className="single-panel">
       <article className="panel-card">
         <h2 className="panel-title">Rejoindre une room</h2>
-        <p className="panel-copy">Aucune distinction host/joueur: entre et joue.</p>
+        <p className="panel-copy">Le premier joueur de la room devient host du lobby.</p>
 
         <form className="panel-form" onSubmit={onSubmit}>
           <label>

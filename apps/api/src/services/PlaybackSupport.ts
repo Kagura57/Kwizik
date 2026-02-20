@@ -9,7 +9,7 @@ export function hasAudioPreview(track: Pick<MusicTrack, "previewUrl">) {
 }
 
 export function hasYouTubePlayback(track: Pick<MusicTrack, "provider" | "sourceUrl">) {
-  if (track.provider === "youtube" || track.provider === "ytmusic") return true;
+  if (track.provider === "youtube") return true;
   if (!hasText(track.sourceUrl)) return false;
   const source = track.sourceUrl?.toLowerCase() ?? "";
   return source.includes("youtube.com/watch") || source.includes("youtu.be/");

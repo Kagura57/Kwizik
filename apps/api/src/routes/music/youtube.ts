@@ -27,6 +27,7 @@ type InvidiousSearchItem = {
 
 const YOUTUBE_FAILURE_BACKOFF_MS = 60_000;
 const YOUTUBE_KEY_COOLDOWN_MS = 30 * 60_000;
+const YOUTUBE_FALLBACK_BACKOFF_MS = 5 * 60_000;
 const YOUTUBE_QUERY_CACHE_TTL_MS = 6 * 60 * 60_000;
 const YOUTUBE_QUERY_MISS_CACHE_TTL_MS = 90_000;
 const YOUTUBE_INVIDIOUS_TIMEOUT_MS = 2_500;
@@ -40,6 +41,7 @@ const DEFAULT_INVIDIOUS_INSTANCES = [
 ];
 
 let youtubeSearchBackoffUntilMs = 0;
+let youtubeFallbackBackoffUntilMs = 0;
 let youtubeKeyRotationIndex = 0;
 let youtubeInvidiousRotationIndex = 0;
 const youtubeKeyCooldownUntilMs = new Map<string, number>();
@@ -53,6 +55,7 @@ const youtubeQueryCache = new Map<
 
 export function resetYouTubeSearchBackoffForTests() {
   youtubeSearchBackoffUntilMs = 0;
+  youtubeFallbackBackoffUntilMs = 0;
   youtubeKeyRotationIndex = 0;
   youtubeInvidiousRotationIndex = 0;
   youtubeKeyCooldownUntilMs.clear();
@@ -122,12 +125,17 @@ function normalizeBaseUrl(raw: string) {
   }
 }
 
-function readInvidiousInstances() {
+function readConfiguredInvidiousInstances() {
   const configured = (readEnvVar("YOUTUBE_INVIDIOUS_INSTANCES") ?? "")
     .split(",")
     .map((value) => normalizeBaseUrl(value))
     .filter((value): value is string => Boolean(value));
-  const candidates = configured.length > 0 ? configured : DEFAULT_INVIDIOUS_INSTANCES;
+  return configured;
+}
+
+function readInvidiousInstances(useDefaults: boolean) {
+  const configured = readConfiguredInvidiousInstances();
+  const candidates = configured.length > 0 ? configured : useDefaults ? DEFAULT_INVIDIOUS_INSTANCES : [];
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const candidate of candidates) {
@@ -191,8 +199,12 @@ function dedupeByVideoId(tracks: MusicTrack[], limit: number) {
   return deduped;
 }
 
-async function searchYouTubeViaInvidious(query: string, safeLimit: number): Promise<MusicTrack[]> {
-  const instances = readInvidiousInstances();
+async function searchYouTubeViaInvidious(
+  query: string,
+  safeLimit: number,
+  options: { allowDefaultInstances: boolean },
+): Promise<MusicTrack[]> {
+  const instances = readInvidiousInstances(options.allowDefaultInstances);
   if (instances.length <= 0) return [];
 
   const ordered = orderedInstancesForAttempt(instances);
@@ -201,9 +213,9 @@ async function searchYouTubeViaInvidious(query: string, safeLimit: number): Prom
     url.searchParams.set("q", query);
     url.searchParams.set("type", "video");
 
-    const payload = (await fetchJsonWithTimeout(url, {}, {
-      timeoutMs: YOUTUBE_INVIDIOUS_TIMEOUT_MS,
-      retries: 0,
+      const payload = (await fetchJsonWithTimeout(url, {}, {
+        timeoutMs: YOUTUBE_INVIDIOUS_TIMEOUT_MS,
+        retries: 0,
       context: {
         provider: "youtube",
         route: "invidious_search",
@@ -285,14 +297,7 @@ async function searchYouTubeViaWeb(query: string, safeLimit: number): Promise<Mu
 
   if (tracks.length > 0) return dedupeByVideoId(tracks, safeLimit);
 
-  return ids.slice(0, safeLimit).map((id) => ({
-    provider: "youtube",
-    id,
-    title: query,
-    artist: "YouTube",
-    previewUrl: null,
-    sourceUrl: `https://www.youtube.com/watch?v=${id}`,
-  }));
+  return [];
 }
 
 export async function searchYouTube(query: string, limit = 10): Promise<MusicTrack[]> {
@@ -320,12 +325,18 @@ export async function searchYouTube(query: string, limit = 10): Promise<MusicTra
       url.searchParams.set("videoEmbeddable", "true");
       url.searchParams.set("key", apiKey);
 
-      const payload = (await fetchJsonWithTimeout(url, {}, {
-        context: {
-          provider: "youtube",
-          query: normalizedQuery,
+      const payload = (await fetchJsonWithTimeout(
+        url,
+        {},
+        {
+          timeoutMs: 3_500,
+          retries: 0,
+          context: {
+            provider: "youtube",
+            query: normalizedQuery,
+          },
         },
-      })) as YouTubePayload | null;
+      )) as YouTubePayload | null;
 
       if (!payload) {
         youtubeKeyCooldownUntilMs.set(apiKey, Date.now() + YOUTUBE_KEY_COOLDOWN_MS);
@@ -364,16 +375,28 @@ export async function searchYouTube(query: string, limit = 10): Promise<MusicTra
     }
   }
 
-  const invidiousTracks = await searchYouTubeViaInvidious(normalizedQuery, safeLimit);
-  if (invidiousTracks.length > 0) {
-    writeCachedQuery(normalizedQuery, safeLimit, invidiousTracks);
-    return invidiousTracks;
-  }
+  const configuredInvidiousInstances = readConfiguredInvidiousInstances();
+  const allowDefaultInvidious = apiKeys.length <= 0;
+  if (youtubeFallbackBackoffUntilMs <= Date.now()) {
+    const invidiousTracks = await searchYouTubeViaInvidious(normalizedQuery, safeLimit, {
+      allowDefaultInstances: allowDefaultInvidious,
+    });
+    if (invidiousTracks.length > 0) {
+      youtubeFallbackBackoffUntilMs = 0;
+      writeCachedQuery(normalizedQuery, safeLimit, invidiousTracks);
+      return invidiousTracks;
+    }
 
-  const webTracks = await searchYouTubeViaWeb(normalizedQuery, safeLimit);
-  if (webTracks.length > 0) {
-    writeCachedQuery(normalizedQuery, safeLimit, webTracks);
-    return webTracks;
+    const webTracks = await searchYouTubeViaWeb(normalizedQuery, safeLimit);
+    if (webTracks.length > 0) {
+      youtubeFallbackBackoffUntilMs = 0;
+      writeCachedQuery(normalizedQuery, safeLimit, webTracks);
+      return webTracks;
+    }
+
+    if (configuredInvidiousInstances.length > 0 || allowDefaultInvidious) {
+      youtubeFallbackBackoffUntilMs = Date.now() + YOUTUBE_FALLBACK_BACKOFF_MS;
+    }
   }
 
   if (apiKeys.length > 0 && !apiReceivedResponse) {

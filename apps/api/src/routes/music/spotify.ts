@@ -50,6 +50,17 @@ type SpotifyPlaylistCollectionPayload = {
     items?: SpotifyPlaylistItem[];
   };
 };
+type SpotifyPlaylistMetadataPayload = {
+  id?: string;
+  name?: string;
+  description?: string;
+  owner?: {
+    display_name?: string;
+  };
+  tracks?: {
+    total?: number;
+  };
+};
 type SpotifyOEmbedPayload = {
   title?: string;
   author_name?: string;
@@ -83,7 +94,7 @@ export type SpotifyPlaylistCategory = {
 export async function searchSpotify(query: string, limit = 10): Promise<MusicTrack[]> {
   const token = await getSpotifyAccessToken();
   if (!token) return [];
-  const safeLimit = Math.max(1, Math.min(limit, 50));
+  const safeLimit = clampSpotifySearchLimit(limit);
   const market = readSpotifyMarket();
 
   const buildUrl = (withMarket: boolean) => {
@@ -140,6 +151,7 @@ type SpotifyPlaylistTrackPayload = {
     track?: SpotifyItem | null;
     item?: SpotifyItem | null;
   }>;
+  total?: number;
 };
 
 const DEFAULT_SPOTIFY_POPULAR_PLAYLIST_IDS = ["37i9dQZEVXbMDoHDwVN2tF"];
@@ -163,6 +175,35 @@ const DEFAULT_SPOTIFY_CATEGORY_PRESETS: SpotifyPlaylistCategory[] = [
 const itunesPreviewCache = new Map<string, string | null>();
 const SPOTIFY_WEB_SEARCH_TIMEOUT_MS = 4_000;
 const SPOTIFY_PLAYLIST_ID_REGEX = /(?:\/|\\\/)playlist(?:\/|\\\/)([a-zA-Z0-9]{22})/g;
+const SPOTIFY_DEV_SEARCH_LIMIT_MAX = 10;
+const SPOTIFY_METADATA_BATCH_SIZE = 3;
+const SPOTIFY_METADATA_BATCH_DELAY_MS = 120;
+const SPOTIFY_METADATA_ENRICHMENT_MAX = 3;
+const SPOTIFY_METADATA_TIMEOUT_MS = 1_500;
+
+function readSpotifyApiMode() {
+  const raw = (readEnvVar("SPOTIFY_API_MODE") ?? "").trim().toLowerCase();
+  if (raw === "extended" || raw === "extended_quota") return "extended";
+  return "development";
+}
+
+function spotifySearchLimitMax() {
+  return readSpotifyApiMode() === "extended" ? 50 : SPOTIFY_DEV_SEARCH_LIMIT_MAX;
+}
+
+function clampSpotifySearchLimit(limit: number) {
+  return Math.max(1, Math.min(limit, spotifySearchLimitMax()));
+}
+
+function isSpotifyBrowseEnabled() {
+  const raw = readEnvVar("SPOTIFY_BROWSE_ENABLED");
+  if (typeof raw === "string") {
+    const normalized = raw.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return readSpotifyApiMode() === "extended";
+}
 
 function safeDecodeURIComponent(value: string) {
   try {
@@ -181,6 +222,10 @@ function normalizeSpotifyPlaylistId(raw: string) {
   const fromUrl = decoded.match(/spotify\.com\/playlist\/([a-zA-Z0-9]+)/i)?.[1];
   if (fromUrl) return fromUrl;
   return decoded.replace(/[?#].*$/, "").trim();
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readPopularPlaylistIds() {
@@ -229,6 +274,19 @@ function normalizeDescription(raw: string | undefined) {
     .trim();
 }
 
+function parseSpotifyTrackCount(raw: unknown) {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw));
+  }
+  if (typeof raw === "string") {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, parsed);
+    }
+  }
+  return null;
+}
+
 function toPlaylistSummary(item: SpotifyPlaylistItem | null | undefined): SpotifyPlaylistSummary | null {
   if (!item?.id) return null;
   const name = item.name?.trim();
@@ -240,7 +298,7 @@ function toPlaylistSummary(item: SpotifyPlaylistItem | null | undefined): Spotif
     imageUrl: item.images?.[0]?.url ?? null,
     externalUrl: item.external_urls?.spotify ?? `https://open.spotify.com/playlist/${item.id}`,
     owner: item.owner?.display_name?.trim() ?? null,
-    trackCount: typeof item.tracks?.total === "number" ? item.tracks.total : null,
+    trackCount: parseSpotifyTrackCount(item.tracks?.total),
   };
 }
 
@@ -277,6 +335,44 @@ function sortPlaylistsForBlindtest(playlists: SpotifyPlaylistSummary[]) {
   });
 }
 
+async function enrichPlaylistTrackCounts(
+  token: string,
+  playlists: SpotifyPlaylistSummary[],
+  maxEnrichment = SPOTIFY_METADATA_ENRICHMENT_MAX,
+) {
+  const pending = playlists
+    .filter((playlist) => playlist.trackCount === null)
+    .slice(0, Math.max(0, maxEnrichment));
+  if (pending.length <= 0) return playlists;
+
+  const enrichedCounts = new Map<string, number>();
+  for (let index = 0; index < pending.length; index += SPOTIFY_METADATA_BATCH_SIZE) {
+    const chunk = pending.slice(index, index + SPOTIFY_METADATA_BATCH_SIZE);
+    await Promise.all(
+      chunk.map(async (playlist) => {
+        const metadata = await fetchSpotifyPlaylistMetadata(token, playlist.id);
+        const trackCount = parseSpotifyTrackCount(metadata?.tracks?.total);
+        if (trackCount !== null) {
+          enrichedCounts.set(playlist.id, trackCount);
+        }
+      }),
+    );
+    if (index + SPOTIFY_METADATA_BATCH_SIZE < pending.length) {
+      await sleep(SPOTIFY_METADATA_BATCH_DELAY_MS);
+    }
+  }
+
+  if (enrichedCounts.size <= 0) return playlists;
+  return playlists.map((playlist) => {
+    const trackCount = enrichedCounts.get(playlist.id);
+    if (typeof trackCount !== "number") return playlist;
+    return {
+      ...playlist,
+      trackCount,
+    };
+  });
+}
+
 function extractSpotifyPlaylistIdsFromHtml(html: string, limit: number) {
   const ids: string[] = [];
   const seen = new Set<string>();
@@ -310,7 +406,11 @@ async function fetchTextWithTimeout(url: URL, timeoutMs: number) {
   }
 }
 
-async function searchSpotifyPlaylistsViaWeb(query: string, limit: number): Promise<SpotifyPlaylistSummary[]> {
+async function searchSpotifyPlaylistsViaWeb(
+  query: string,
+  limit: number,
+  token: string | null = null,
+): Promise<SpotifyPlaylistSummary[]> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
   const searchUrl = new URL(`https://open.spotify.com/search/${encodeURIComponent(query)}/playlists`);
   const html = await fetchTextWithTimeout(searchUrl, SPOTIFY_WEB_SEARCH_TIMEOUT_MS);
@@ -349,7 +449,34 @@ async function searchSpotifyPlaylistsViaWeb(query: string, limit: number): Promi
     if (playlists.length >= safeLimit) break;
   }
 
-  return sortPlaylistsForBlindtest(dedupePlaylists(playlists)).slice(0, safeLimit);
+  const deduped = sortPlaylistsForBlindtest(dedupePlaylists(playlists)).slice(0, safeLimit);
+  if (!token || deduped.length <= 0) return deduped;
+
+  const enriched = await enrichPlaylistTrackCounts(token, deduped);
+  return sortPlaylistsForBlindtest(dedupePlaylists(enriched)).slice(0, safeLimit);
+}
+
+async function fetchSpotifyPlaylistMetadata(token: string, playlistId: string) {
+  const url = new URL(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`);
+  url.searchParams.set("fields", "id,name,description,owner(display_name),tracks(total)");
+
+  const payload = (await fetchJsonWithTimeout(
+    url,
+    {
+      headers: { authorization: `Bearer ${token}` },
+    },
+    {
+      timeoutMs: SPOTIFY_METADATA_TIMEOUT_MS,
+      retries: 0,
+      context: {
+        provider: "spotify",
+        route: "playlist_metadata",
+        playlistId,
+      },
+    },
+  )) as SpotifyPlaylistMetadataPayload | null;
+
+  return payload;
 }
 
 function normalizeText(value: string) {
@@ -482,10 +609,12 @@ export function spotifyPlaylistCategories() {
 }
 
 export async function fetchSpotifyPlaylistCategories(limit = 24): Promise<SpotifyPlaylistCategory[]> {
+  if (!isSpotifyBrowseEnabled()) return spotifyPlaylistCategories();
+
   const token = await getSpotifyAccessToken();
   if (!token) return spotifyPlaylistCategories();
 
-  const safeLimit = Math.max(1, Math.min(limit, 50));
+  const safeLimit = clampSpotifySearchLimit(limit);
   const url = new URL("https://api.spotify.com/v1/browse/categories");
   url.searchParams.set("country", readSpotifyMarket());
   url.searchParams.set("limit", String(safeLimit));
@@ -526,10 +655,9 @@ export async function fetchSpotifyPlaylistCategories(limit = 24): Promise<Spotif
 }
 
 export async function searchSpotifyPlaylists(query: string, limit = 20): Promise<SpotifyPlaylistSummary[]> {
+  const safeLimit = clampSpotifySearchLimit(limit);
   const token = await getSpotifyAccessToken();
-  if (!token) return [];
-
-  const safeLimit = Math.max(1, Math.min(limit, 50));
+  if (!token) return searchSpotifyPlaylistsViaWeb(query, safeLimit, null);
   const market = readSpotifyMarket();
   const buildUrl = (withMarket: boolean) => {
     const url = new URL("https://api.spotify.com/v1/search");
@@ -569,6 +697,15 @@ export async function searchSpotifyPlaylists(query: string, limit = 20): Promise
       },
     )) as SpotifyPlaylistSearchPayload | null;
   }
+  const rawItems = payload?.playlists?.items;
+  logEvent("info", "spotify_playlist_search_raw_payload", {
+    query,
+    requestedLimit: safeLimit,
+    hasPlaylistsObject: Boolean(payload?.playlists),
+    itemsType: Array.isArray(rawItems) ? "array" : typeof rawItems,
+    itemCount: Array.isArray(rawItems) ? rawItems.length : 0,
+    firstItemKeys: Array.isArray(rawItems) && rawItems[0] ? Object.keys(rawItems[0]).slice(0, 10) : [],
+  });
 
   const items = payload?.playlists?.items ?? [];
   const fromSearch = sortPlaylistsForBlindtest(
@@ -578,7 +715,27 @@ export async function searchSpotifyPlaylists(query: string, limit = 20): Promise
         .filter((value): value is SpotifyPlaylistSummary => value !== null),
     ),
   ).slice(0, safeLimit);
-  if (fromSearch.length > 0) return fromSearch;
+  if (fromSearch.length > 0) {
+    const enriched = await enrichPlaylistTrackCounts(token, fromSearch);
+    logEvent("info", "spotify_playlist_search_mapped_payload", {
+      query,
+      requestedLimit: safeLimit,
+      mappedCount: fromSearch.length,
+      enrichedCount: enriched.length,
+      firstMapped: enriched[0]
+        ? {
+            id: enriched[0].id,
+            name: enriched[0].name,
+            trackCount: enriched[0].trackCount,
+          }
+        : null,
+    });
+    return sortPlaylistsForBlindtest(dedupePlaylists(enriched)).slice(0, safeLimit);
+  }
+
+  if (!isSpotifyBrowseEnabled()) {
+    return searchSpotifyPlaylistsViaWeb(query, safeLimit, token);
+  }
 
   const featuredBuildUrl = (withCountry: boolean) => {
     const url = new URL("https://api.spotify.com/v1/browse/featured-playlists");
@@ -628,9 +785,12 @@ export async function searchSpotifyPlaylists(query: string, limit = 20): Promise
         .filter((value): value is SpotifyPlaylistSummary => value !== null),
     ),
   ).slice(0, safeLimit);
-  if (featured.length > 0) return featured;
+  if (featured.length > 0) {
+    const enriched = await enrichPlaylistTrackCounts(token, featured);
+    return sortPlaylistsForBlindtest(dedupePlaylists(enriched)).slice(0, safeLimit);
+  }
 
-  return searchSpotifyPlaylistsViaWeb(query, safeLimit);
+  return searchSpotifyPlaylistsViaWeb(query, safeLimit, token);
 }
 
 export async function fetchSpotifyPlaylistsForCategory(
@@ -640,8 +800,14 @@ export async function fetchSpotifyPlaylistsForCategory(
   const normalizedCategoryId = categoryId.trim().toLowerCase();
   if (!normalizedCategoryId) return [];
 
+  const safeLimit = clampSpotifySearchLimit(limit);
+  if (!isSpotifyBrowseEnabled()) {
+    const category = spotifyPlaylistCategories().find((entry) => entry.id === normalizedCategoryId);
+    const fallbackQuery = category?.query ?? normalizedCategoryId.replace(/[_-]+/g, " ");
+    return searchSpotifyPlaylists(fallbackQuery, safeLimit);
+  }
+
   const token = await getSpotifyAccessToken();
-  const safeLimit = Math.max(1, Math.min(limit, 50));
   const market = readSpotifyMarket();
 
   if (token) {
@@ -678,7 +844,10 @@ export async function fetchSpotifyPlaylistsForCategory(
       ),
     ).slice(0, safeLimit);
 
-    if (categoryPlaylists.length > 0) return categoryPlaylists;
+    if (categoryPlaylists.length > 0) {
+      const enriched = await enrichPlaylistTrackCounts(token, categoryPlaylists);
+      return sortPlaylistsForBlindtest(dedupePlaylists(enriched)).slice(0, safeLimit);
+    }
   }
 
   const category = spotifyPlaylistCategories().find((entry) => entry.id === normalizedCategoryId);
@@ -687,11 +856,12 @@ export async function fetchSpotifyPlaylistsForCategory(
 }
 
 export async function fetchSpotifyPopularPlaylists(limit = 20): Promise<SpotifyPlaylistSummary[]> {
-  const safeLimit = Math.max(1, Math.min(limit, 50));
+  const safeLimit = clampSpotifySearchLimit(limit);
+  const browseEnabled = isSpotifyBrowseEnabled();
   const token = await getSpotifyAccessToken();
   const market = readSpotifyMarket();
 
-  if (token) {
+  if (token && browseEnabled) {
     const featuredUrl = new URL("https://api.spotify.com/v1/browse/featured-playlists");
     featuredUrl.searchParams.set("country", market);
     featuredUrl.searchParams.set("limit", String(safeLimit));
@@ -722,7 +892,10 @@ export async function fetchSpotifyPopularPlaylists(limit = 20): Promise<SpotifyP
       ),
     ).slice(0, safeLimit);
 
-    if (featuredPlaylists.length > 0) return featuredPlaylists;
+    if (featuredPlaylists.length > 0) {
+      const enriched = await enrichPlaylistTrackCounts(token, featuredPlaylists);
+      return sortPlaylistsForBlindtest(dedupePlaylists(enriched)).slice(0, safeLimit);
+    }
   }
 
   const queries = readPopularPlaylistQueries();
@@ -749,9 +922,11 @@ export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20)
     return [];
   }
 
-  const safeLimit = Math.max(1, Math.min(limit, 50));
-  const fetchLimit = Math.min(100, Math.max(safeLimit * 5, safeLimit));
+  const safeLimit = Math.max(1, Math.min(limit, 500));
   const market = readSpotifyMarket();
+  const metadata = await fetchSpotifyPlaylistMetadata(token, normalizedPlaylistId);
+  const metadataTotal = parseSpotifyTrackCount(metadata?.tracks?.total);
+  const pageSize = 100;
   const endpointVariants = [
     {
       endpoint: "items",
@@ -765,30 +940,55 @@ export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20)
 
   let items: SpotifyPlaylistTrackPayload["items"] = [];
   let endpointUsed: (typeof endpointVariants)[number]["endpoint"] | "none" = "none";
+  let pagesFetched = 0;
 
   for (const variant of endpointVariants) {
-    const url = new URL(
-      `https://api.spotify.com/v1/playlists/${encodeURIComponent(normalizedPlaylistId)}/${variant.endpoint}`,
-    );
-    url.searchParams.set("limit", String(fetchLimit));
-    url.searchParams.set("market", market);
+    const pagedItems: NonNullable<SpotifyPlaylistTrackPayload["items"]> = [];
+    let offset = 0;
+    let fetchableTotal = metadataTotal;
+    let sawValidPage = false;
 
-    const payload = (await fetchJsonWithTimeout(
-      url,
-      {
-        headers: { authorization: `Bearer ${token}` },
-      },
-      {
-        context: {
-          provider: "spotify",
-          route: variant.route,
-          playlistId: normalizedPlaylistId,
+    while (offset < safeLimit) {
+      const url = new URL(
+        `https://api.spotify.com/v1/playlists/${encodeURIComponent(normalizedPlaylistId)}/${variant.endpoint}`,
+      );
+      url.searchParams.set("limit", String(Math.min(pageSize, safeLimit - offset)));
+      url.searchParams.set("offset", String(offset));
+      url.searchParams.set("market", market);
+
+      const payload = (await fetchJsonWithTimeout(
+        url,
+        {
+          headers: { authorization: `Bearer ${token}` },
         },
-      },
-    )) as SpotifyPlaylistTrackPayload | null;
+        {
+          context: {
+            provider: "spotify",
+            route: variant.route,
+            playlistId: normalizedPlaylistId,
+            offset,
+          },
+        },
+      )) as SpotifyPlaylistTrackPayload | null;
 
-    if (Array.isArray(payload?.items)) {
-      items = payload.items;
+      if (!Array.isArray(payload?.items)) break;
+      sawValidPage = true;
+      pagesFetched += 1;
+      if (typeof payload.total === "number" && fetchableTotal === null) {
+        fetchableTotal = Math.max(0, payload.total);
+      }
+
+      const pageItems = payload.items;
+      if (pageItems.length <= 0) break;
+      pagedItems.push(...pageItems);
+      offset += pageItems.length;
+
+      if (pageItems.length < pageSize) break;
+      if (fetchableTotal !== null && offset >= fetchableTotal) break;
+    }
+
+    if (sawValidPage) {
+      items = pagedItems;
       endpointUsed = variant.endpoint;
       break;
     }
@@ -805,20 +1005,36 @@ export async function fetchSpotifyPlaylistTracks(playlistId: string, limit = 20)
       acc.push(track);
       return acc;
     }, []);
+
+  if (deduped.length === 0) {
+    logEvent("warn", "spotify_playlist_tracks_empty", {
+      playlistId: normalizedPlaylistId,
+      endpointUsed,
+      metadataTotal,
+      pagesFetched,
+      requestedLimit: safeLimit,
+    });
+    return [];
+  }
+
   const previewBefore = deduped.filter((track) => Boolean(track.previewUrl)).length;
-  const enriched = await enrichSpotifyTracksWithPreview(deduped, safeLimit);
+  const previewTarget = safeLimit <= 50 ? safeLimit : 20;
+  const enriched =
+    safeLimit <= 50 ? await enrichSpotifyTracksWithPreview(deduped, previewTarget) : deduped;
   const previewAfter = enriched.filter((track) => Boolean(track.previewUrl)).length;
   logEvent("info", "spotify_playlist_preview_coverage", {
     playlistId: normalizedPlaylistId,
     market,
     endpointUsed,
     requestedLimit: safeLimit,
+    metadataTotal,
+    pagesFetched,
     fetchedItems: items.length,
     dedupedCount: deduped.length,
     previewBefore,
     previewAfter,
   });
-  return prioritizeByPreview(enriched, safeLimit);
+  return prioritizeByPreview(enriched, safeLimit).slice(0, safeLimit);
 }
 
 export async function fetchSpotifyPopularTracks(limit = 20): Promise<MusicTrack[]> {

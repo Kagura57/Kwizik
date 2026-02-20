@@ -1,60 +1,13 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import {
-  createRoom,
-  getPublicRooms,
-  joinRoom,
-  searchPlaylistsAcrossProviders,
-  type PublicRoomSummary,
-  type UnifiedPlaylistOption,
-} from "../lib/api";
+import { createRoom, getPublicRooms, joinRoom, type PublicRoomSummary } from "../lib/api";
 import { useGameStore } from "../stores/gameStore";
 
-type SourceMode = "playlist" | "anilist";
-
-const FALLBACK_PLAYLIST_OPTION: UnifiedPlaylistOption = {
-  provider: "spotify",
-  id: "spotify-popular-auto",
-  name: "Featured Spotify (auto)",
-  description: "Fallback featured playlists",
-  imageUrl: null,
-  externalUrl: "https://open.spotify.com",
-  owner: "Spotify",
-  trackCount: null,
-  sourceQuery: "spotify:popular",
-};
-
 function formatRoomLabel(room: PublicRoomSummary) {
-  const roundLabel = room.totalRounds > 0 ? `${room.round}/${room.totalRounds}` : "setup";
-  return `${room.state} - ${room.playerCount} joueurs - ${roundLabel}`;
-}
-
-function providerLabel(provider: UnifiedPlaylistOption["provider"]) {
-  if (provider === "spotify") return "Spotify";
-  return "Deezer";
-}
-
-function buildSourceQuery(input: {
-  sourceMode: SourceMode;
-  selectedPlaylist: UnifiedPlaylistOption | null;
-  aniListUsers: string;
-}) {
-  if (input.sourceMode === "anilist") {
-    return `anilist:users:${input.aniListUsers.trim()}`;
-  }
-  return input.selectedPlaylist?.sourceQuery ?? "";
-}
-
-function isSourceReady(input: {
-  sourceMode: SourceMode;
-  selectedPlaylist: UnifiedPlaylistOption | null;
-  aniListUsers: string;
-}) {
-  if (input.sourceMode === "anilist") {
-    return input.aniListUsers.trim().length > 0;
-  }
-  return input.selectedPlaylist !== null;
+  const roundLabel = room.totalRounds > 0 ? `${room.round}/${room.totalRounds}` : "lobby";
+  const source = room.categoryQuery.trim().length > 0 ? room.categoryQuery : "playlist non choisie";
+  return `${room.state} - ${room.playerCount} joueurs - ${roundLabel} - ${source}`;
 }
 
 export function HomePage() {
@@ -62,21 +15,6 @@ export function HomePage() {
   const setSession = useGameStore((state) => state.setSession);
   const [displayName, setDisplayName] = useState("Player One");
   const [isPublicRoom, setIsPublicRoom] = useState(true);
-  const [sourceMode, setSourceMode] = useState<SourceMode>("playlist");
-  const [playlistQuery, setPlaylistQuery] = useState("top hits");
-  const [selectedPlaylist, setSelectedPlaylist] = useState<UnifiedPlaylistOption | null>(
-    FALLBACK_PLAYLIST_OPTION,
-  );
-  const [aniListUsers, setAniListUsers] = useState("");
-
-  const normalizedPlaylistQuery = playlistQuery.trim();
-
-  const playlistSearchQuery = useQuery({
-    queryKey: ["unified-playlist-search", normalizedPlaylistQuery],
-    queryFn: () => searchPlaylistsAcrossProviders({ q: normalizedPlaylistQuery, limit: 24 }),
-    enabled: sourceMode === "playlist" && normalizedPlaylistQuery.length >= 2,
-    staleTime: 2 * 60_000,
-  });
 
   const publicRoomsQuery = useQuery({
     queryKey: ["public-rooms"],
@@ -84,35 +22,9 @@ export function HomePage() {
     refetchInterval: 4_000,
   });
 
-  const playlistOptions = useMemo(() => {
-    const remote = playlistSearchQuery.data?.playlists ?? [];
-    return remote.length > 0 ? remote : [FALLBACK_PLAYLIST_OPTION];
-  }, [playlistSearchQuery.data?.playlists]);
-
-  useEffect(() => {
-    if (sourceMode !== "playlist") {
-      setSelectedPlaylist(null);
-      return;
-    }
-    if (
-      selectedPlaylist &&
-      playlistOptions.some((item) => item.sourceQuery === selectedPlaylist.sourceQuery)
-    ) {
-      return;
-    }
-    setSelectedPlaylist(playlistOptions[0] ?? null);
-  }, [playlistOptions, selectedPlaylist, sourceMode]);
-
   const createRoomMutation = useMutation({
     mutationFn: async () => {
-      const categoryQuery = buildSourceQuery({
-        sourceMode,
-        selectedPlaylist,
-        aniListUsers,
-      });
-
       const created = await createRoom({
-        categoryQuery,
         isPublic: isPublicRoom,
       });
 
@@ -124,7 +36,6 @@ export function HomePage() {
       return {
         roomCode: created.roomCode,
         playerId: joined.playerId,
-        categoryQuery,
       };
     },
     onSuccess: (result) => {
@@ -132,7 +43,7 @@ export function HomePage() {
         roomCode: result.roomCode,
         playerId: result.playerId,
         displayName: displayName.trim() || "Player One",
-        categoryQuery: result.categoryQuery,
+        categoryQuery: "",
       });
       navigate({
         to: "/room/$roomCode/play",
@@ -163,32 +74,15 @@ export function HomePage() {
     },
   });
 
-  const sourceQueryPreview = useMemo(() => {
-    return buildSourceQuery({
-      sourceMode,
-      selectedPlaylist,
-      aniListUsers,
-    });
-  }, [aniListUsers, selectedPlaylist, sourceMode]);
-
   function onCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (
-      !isSourceReady({
-        sourceMode,
-        selectedPlaylist,
-        aniListUsers,
-      })
-    ) {
-      return;
-    }
     createRoomMutation.mutate();
   }
 
   return (
     <section className="home-grid home-grid-balanced">
       <article className="panel-card">
-        <h2 className="panel-title">Créer une room</h2>
+        <h2 className="panel-title">Créer un lobby</h2>
         <form className="panel-form" onSubmit={onCreate}>
           <label>
             <span>Pseudo</span>
@@ -209,7 +103,7 @@ export function HomePage() {
                 onClick={() => setIsPublicRoom(true)}
               >
                 <strong>Partie publique</strong>
-                <span>Visible dans la liste publique (join possible en cours)</span>
+                <span>Visible dans la liste publique</span>
               </button>
               <button
                 type="button"
@@ -217,111 +111,17 @@ export function HomePage() {
                 onClick={() => setIsPublicRoom(false)}
               >
                 <strong>Partie privée</strong>
-                <span>Accessible uniquement avec le code room</span>
+                <span>Accessible avec le code room</span>
               </button>
             </div>
           </div>
 
-          <div className="field-block">
-            <span className="field-label">Source blindtest</span>
-            <div className="source-preset-grid">
-              <button
-                type="button"
-                className={`source-preset-btn${sourceMode === "playlist" ? " active" : ""}`}
-                onClick={() => setSourceMode("playlist")}
-              >
-                <strong>Playlists musique</strong>
-                <span>Recherche Spotify + Deezer unifiée</span>
-              </button>
-              <button
-                type="button"
-                className={`source-preset-btn${sourceMode === "anilist" ? " active" : ""}`}
-                onClick={() => setSourceMode("anilist")}
-              >
-                <strong>AniList anime</strong>
-                <span>Openings/endings depuis la liste utilisateur</span>
-              </button>
-            </div>
-          </div>
+          <p className="status">
+            Le host choisit la playlist dans le lobby, puis lance seulement quand tout le monde est prêt.
+          </p>
 
-          {sourceMode === "playlist" && (
-            <div className="field-block">
-              <label>
-                <span>Recherche playlist (Spotify + Deezer)</span>
-                <input
-                  value={playlistQuery}
-                  onChange={(event) => setPlaylistQuery(event.currentTarget.value)}
-                  maxLength={120}
-                  placeholder="Ex: anime openings, top france, rap 2000"
-                />
-              </label>
-              {normalizedPlaylistQuery.length < 2 && (
-                <p className="status">Tape au moins 2 caractères pour chercher une playlist.</p>
-              )}
-              {playlistSearchQuery.isError && (
-                <p className="status error">Recherche playlists indisponible.</p>
-              )}
-              <div className="playlist-card-grid">
-                {playlistOptions.map((playlist) => (
-                  <button
-                    key={`${playlist.provider}:${playlist.id}`}
-                    type="button"
-                    className={`playlist-card-btn${selectedPlaylist?.sourceQuery === playlist.sourceQuery ? " active" : ""}`}
-                    onClick={() => setSelectedPlaylist(playlist)}
-                  >
-                    {playlist.imageUrl ? (
-                      <img src={playlist.imageUrl} alt={playlist.name} loading="lazy" />
-                    ) : (
-                      <div className="playlist-card-placeholder" aria-hidden="true" />
-                    )}
-                    <div>
-                      <strong>{playlist.name}</strong>
-                      <p>
-                        {providerLabel(playlist.provider)} - {playlist.owner ?? "Editorial"}
-                      </p>
-                      <small>
-                        {playlist.trackCount ? `${playlist.trackCount} titres` : "Track count inconnu"}
-                      </small>
-                    </div>
-                  </button>
-                ))}
-              </div>
-              {(playlistSearchQuery.data?.playlists ?? []).length === 0 &&
-                !playlistSearchQuery.isFetching &&
-                normalizedPlaylistQuery.length >= 2 && (
-                  <p className="status">Aucun résultat direct, fallback featured Spotify utilisé.</p>
-                )}
-            </div>
-          )}
-
-          {sourceMode === "anilist" && (
-            <label>
-              <span>AniList users (csv)</span>
-              <input
-                value={aniListUsers}
-                onChange={(event) => setAniListUsers(event.currentTarget.value)}
-                maxLength={160}
-                placeholder="userA,userB,userC"
-              />
-            </label>
-          )}
-
-          <p className="status">Source utilisée: {sourceQueryPreview || "-"}</p>
-
-          <button
-            id="create-room"
-            className="solid-btn"
-            type="submit"
-            disabled={
-              createRoomMutation.isPending ||
-              !isSourceReady({
-                sourceMode,
-                selectedPlaylist,
-                aniListUsers,
-              })
-            }
-          >
-            {createRoomMutation.isPending ? "Création..." : "Créer et jouer"}
+          <button id="create-room" className="solid-btn" type="submit" disabled={createRoomMutation.isPending}>
+            {createRoomMutation.isPending ? "Création..." : "Créer le lobby"}
           </button>
         </form>
 
@@ -336,9 +136,7 @@ export function HomePage() {
 
       <article className="panel-card">
         <h2 className="panel-title">Parties publiques</h2>
-        <p className="panel-copy">
-          Rejoins une room publique à tout moment tant que la partie n’est pas terminée.
-        </p>
+        <p className="panel-copy">Rejoins un lobby ou une partie publique active.</p>
         <ul className="public-room-list">
           {(publicRoomsQuery.data?.rooms ?? []).map((room) => (
             <li key={room.roomCode}>

@@ -3,7 +3,6 @@ import { searchDeezer } from "../routes/music/deezer";
 import { searchSpotify } from "../routes/music/spotify";
 import { searchTidal } from "../routes/music/tidal";
 import { searchYouTube } from "../routes/music/youtube";
-import { searchYTMusic } from "../routes/music/ytmusic";
 import { logEvent } from "../lib/logger";
 import type { MusicProvider, MusicTrack, ProviderSearchFn } from "./music-types";
 
@@ -12,7 +11,6 @@ export const PROVIDER_ORDER: MusicProvider[] = [
   "deezer",
   "apple-music",
   "tidal",
-  "ytmusic",
   "youtube",
 ];
 
@@ -35,7 +33,6 @@ const DEFAULT_SEARCHERS: Record<MusicProvider, ProviderSearchFn> = {
   deezer: searchDeezer,
   "apple-music": searchAppleMusic,
   tidal: searchTidal,
-  ytmusic: searchYTMusic,
   youtube: searchYouTube,
 };
 
@@ -45,7 +42,6 @@ function defaultResultsMap(): Record<MusicProvider, MusicTrack[]> {
     deezer: [],
     "apple-music": [],
     tidal: [],
-    ytmusic: [],
     youtube: [],
   };
 }

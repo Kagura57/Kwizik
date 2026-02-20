@@ -26,12 +26,32 @@ describe("core flow integration", () => {
     const joined = (await joinRes.json()) as { ok: boolean; playerId?: string };
     expect(joined.ok).toBe(true);
     expect(typeof joined.playerId).toBe("string");
+    const playerId = joined.playerId ?? "";
+    expect(playerId.length).toBeGreaterThan(0);
+
+    const sourceRes = await app.handle(
+      new Request("http://localhost/quiz/source", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ roomCode: created.roomCode, playerId, categoryQuery: "popular hits" }),
+      }),
+    );
+    expect(sourceRes.status).toBe(200);
+
+    const readyRes = await app.handle(
+      new Request("http://localhost/quiz/ready", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ roomCode: created.roomCode, playerId, ready: true }),
+      }),
+    );
+    expect(readyRes.status).toBe(200);
 
     const startRes = await app.handle(
       new Request("http://localhost/quiz/start", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ roomCode: created.roomCode }),
+        body: JSON.stringify({ roomCode: created.roomCode, playerId }),
       }),
     );
     if (startRes.status === 422) {

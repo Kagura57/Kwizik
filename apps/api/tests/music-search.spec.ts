@@ -23,7 +23,7 @@ describe("music search route", () => {
     expect(Array.isArray(fallback)).toBe(true);
     expect((fallback as unknown[]).length).toBeLessThanOrEqual(5);
     expect(Object.keys(payload.results).sort()).toEqual(
-      ["apple-music", "deezer", "spotify", "tidal", "youtube", "ytmusic"].sort(),
+      ["apple-music", "deezer", "spotify", "tidal", "youtube"].sort(),
     );
   });
 });

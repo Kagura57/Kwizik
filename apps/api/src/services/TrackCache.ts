@@ -15,12 +15,13 @@ export class TrackCache {
 
   constructor(private readonly ttlMs = 5 * 60_000) {}
 
-  private key(categoryQuery: string, size: number) {
-    return `${categoryQuery.toLowerCase()}::${size}`;
+  private key(categoryQuery: string) {
+    return categoryQuery.toLowerCase();
   }
 
   async getOrBuild(categoryQuery: string, size: number) {
-    const cacheKey = this.key(categoryQuery, size);
+    const safeSize = Math.max(1, size);
+    const cacheKey = this.key(categoryQuery);
     const now = Date.now();
     const existing = this.entries.get(cacheKey);
 
@@ -30,7 +31,9 @@ export class TrackCache {
         this.entries.delete(cacheKey);
       } else {
         this.cacheHits += 1;
-        return existing.tracks;
+        if (existing.tracks.length >= safeSize) {
+          return existing.tracks.slice(0, safeSize);
+        }
       }
     }
 
@@ -39,7 +42,7 @@ export class TrackCache {
     try {
       const tracks = await resolveTrackPoolFromSource({
         categoryQuery,
-        size,
+        size: safeSize,
       });
       const playableTrackCount = tracks.filter((track) => isTrackPlayable(track)).length;
       if (tracks.length > 0 && playableTrackCount > 0) {
@@ -51,23 +54,23 @@ export class TrackCache {
         logEvent("warn", "track_cache_skip_store_unplayable", {
           cacheKey,
           categoryQuery,
-          size,
+          size: safeSize,
           trackCount: tracks.length,
           playableTrackCount,
         });
       }
-      return tracks;
+      return tracks.slice(0, safeSize);
     } catch (error) {
       logEvent("error", "track_cache_build_failed", {
         cacheKey,
         categoryQuery,
-        size,
+        size: safeSize,
         hasStaleEntry: Boolean(existing),
         error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
       });
 
       if (existing) {
-        return existing.tracks;
+        return existing.tracks.slice(0, safeSize);
       }
 
       throw error;
@@ -75,8 +78,13 @@ export class TrackCache {
   }
 
   stats() {
+    let totalCachedTracks = 0;
+    for (const entry of this.entries.values()) {
+      totalCachedTracks += entry.tracks.length;
+    }
     return {
-      entryCount: this.entries.size,
+      entryCount: totalCachedTracks,
+      keyCount: this.entries.size,
       ttlMs: this.ttlMs,
       cacheHits: this.cacheHits,
       cacheMisses: this.cacheMisses,

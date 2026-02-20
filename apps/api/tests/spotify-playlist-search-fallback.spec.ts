@@ -2,12 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { searchSpotifyPlaylists } from "../src/routes/music/spotify";
 import { resetSpotifyTokenCacheForTests } from "../src/routes/music/spotify-auth";
 
-const readEnvVarMock = vi.fn<(key: string) => string | undefined>();
-
-vi.mock("../src/lib/env", () => ({
-  readEnvVar: (key: string) => readEnvVarMock(key),
-}));
-
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -18,24 +12,24 @@ function jsonResponse(payload: unknown, status = 200) {
 }
 
 describe("spotify playlist search fallback", () => {
-  const envKeys = ["SPOTIFY_ACCESS_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"] as const;
+  const envKeys = [
+    "SPOTIFY_ACCESS_TOKEN",
+    "SPOTIFY_CLIENT_ID",
+    "SPOTIFY_CLIENT_SECRET",
+    "SPOTIFY_API_MODE",
+    "SPOTIFY_BROWSE_ENABLED",
+  ] as const;
   const originalEnv = new Map<string, string | undefined>();
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
-    readEnvVarMock.mockReset();
-    readEnvVarMock.mockImplementation((key) => {
-      const value = process.env[key];
-      if (typeof value !== "string") return undefined;
-      const normalized = value.trim();
-      return normalized.length > 0 ? normalized : undefined;
-    });
     resetSpotifyTokenCacheForTests();
     for (const key of envKeys) {
       originalEnv.set(key, process.env[key]);
-      process.env[key] = " ";
+      delete process.env[key];
     }
     process.env.SPOTIFY_ACCESS_TOKEN = "static-token";
+    process.env.SPOTIFY_BROWSE_ENABLED = "true";
     globalThis.fetch = originalFetch;
   });
 
@@ -107,6 +101,39 @@ describe("spotify playlist search fallback", () => {
     expect(calledUrls.some((url) => url.includes("/v1/browse/featured-playlists"))).toBe(true);
   });
 
+  it("clamps spotify playlist search limit to dev-mode max (10)", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/search?")) {
+        const parsed = new URL(url);
+        expect(parsed.searchParams.get("limit")).toBe("10");
+        return Promise.resolve(
+          jsonResponse({
+            playlists: {
+              items: [
+                {
+                  id: "search-1",
+                  name: "Search Hits",
+                  description: "Search playlist",
+                  images: [{ url: "https://cdn.example.com/search.jpg" }],
+                  external_urls: { spotify: "https://open.spotify.com/playlist/search-1" },
+                  owner: { display_name: "Spotify" },
+                  tracks: { total: 50 },
+                },
+              ],
+            },
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const playlists = await searchSpotifyPlaylists("top hits", 24);
+    expect(playlists).toHaveLength(1);
+    expect(playlists[0]?.id).toBe("search-1");
+  });
+
   it("falls back to spotify web scraping when API endpoints are forbidden", async () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -151,6 +178,20 @@ describe("spotify playlist search fallback", () => {
         );
       }
 
+      if (url.includes("/v1/playlists/")) {
+        const parsed = new URL(url);
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        const id = segments[segments.length - 1] ?? "unknown";
+        return Promise.resolve(
+          jsonResponse({
+            id,
+            name: `Metadata ${id}`,
+            owner: { display_name: "Spotify" },
+            tracks: { total: 42 },
+          }),
+        );
+      }
+
       return Promise.resolve(jsonResponse({}, 404));
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -160,10 +201,60 @@ describe("spotify playlist search fallback", () => {
     expect(playlists[0]).toMatchObject({
       externalUrl: expect.stringContaining("open.spotify.com/playlist/"),
       owner: "Spotify",
+      trackCount: 42,
     });
 
     const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(calledUrls.some((url) => url.startsWith("https://open.spotify.com/search/"))).toBe(true);
     expect(calledUrls.some((url) => url.includes("https://open.spotify.com/oembed?"))).toBe(true);
+  });
+
+  it("hydrates missing trackCount from playlist metadata", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/search?")) {
+        return Promise.resolve(
+          jsonResponse({
+            playlists: {
+              items: [
+                {
+                  id: "search-no-total-1",
+                  name: "Search Missing Total",
+                  description: "Playlist without tracks.total in payload",
+                  images: [{ url: "https://cdn.example.com/search-missing.jpg" }],
+                  external_urls: { spotify: "https://open.spotify.com/playlist/search-no-total-1" },
+                  owner: { display_name: "Spotify" },
+                  tracks: {},
+                },
+              ],
+            },
+          }),
+        );
+      }
+
+      if (url.includes("/v1/playlists/search-no-total-1?")) {
+        return Promise.resolve(
+          jsonResponse({
+            id: "search-no-total-1",
+            name: "Search Missing Total",
+            owner: { display_name: "Spotify" },
+            tracks: { total: 88 },
+          }),
+        );
+      }
+
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const playlists = await searchSpotifyPlaylists("missing total", 5);
+    expect(playlists).toHaveLength(1);
+    expect(playlists[0]).toMatchObject({
+      id: "search-no-total-1",
+      trackCount: 88,
+    });
+
+    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledUrls.some((url) => url.includes("/v1/playlists/search-no-total-1?"))).toBe(true);
   });
 });

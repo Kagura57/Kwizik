@@ -1,89 +1,59 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const fetchSpotifyPlaylistTracksMock = vi.fn();
-const fetchSpotifyPopularTracksMock = vi.fn();
-const fetchDeezerPlaylistTracksMock = vi.fn();
-const fetchDeezerChartTracksMock = vi.fn();
-const fetchAniListUsersOpeningTracksMock = vi.fn();
-const searchYouTubeMock = vi.fn();
-const searchYTMusicMock = vi.fn();
-const buildTrackPoolMock = vi.fn();
-const readEnvVarMock = vi.fn<(key: string) => string | undefined>();
-const logEventMock = vi.fn();
-
-vi.mock("../src/routes/music/anilist", () => ({
-  fetchAniListUsersOpeningTracks: (...args: unknown[]) => fetchAniListUsersOpeningTracksMock(...args),
-}));
-
-vi.mock("../src/routes/music/deezer", () => ({
-  fetchDeezerChartTracks: (...args: unknown[]) => fetchDeezerChartTracksMock(...args),
-  fetchDeezerPlaylistTracks: (...args: unknown[]) => fetchDeezerPlaylistTracksMock(...args),
-}));
-
-vi.mock("../src/routes/music/spotify", () => ({
-  fetchSpotifyPlaylistTracks: (...args: unknown[]) => fetchSpotifyPlaylistTracksMock(...args),
-  fetchSpotifyPopularTracks: (...args: unknown[]) => fetchSpotifyPopularTracksMock(...args),
-}));
-
-vi.mock("../src/routes/music/youtube", () => ({
-  searchYouTube: (...args: unknown[]) => searchYouTubeMock(...args),
-}));
-
-vi.mock("../src/routes/music/ytmusic", () => ({
-  searchYTMusic: (...args: unknown[]) => searchYTMusicMock(...args),
-}));
-
-vi.mock("../src/services/MusicAggregator", () => ({
-  buildTrackPool: (...args: unknown[]) => buildTrackPoolMock(...args),
-}));
-
-vi.mock("../src/lib/env", () => ({
-  readEnvVar: (key: string) => readEnvVarMock(key),
-}));
-
-vi.mock("../src/lib/logger", () => ({
-  logEvent: (...args: unknown[]) => logEventMock(...args),
-}));
-
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as anilistModule from "../src/routes/music/anilist";
+import * as deezerModule from "../src/routes/music/deezer";
+import * as spotifyModule from "../src/routes/music/spotify";
+import * as youtubeModule from "../src/routes/music/youtube";
+import * as aggregatorModule from "../src/services/MusicAggregator";
 import { resolveTrackPoolFromSource } from "../src/services/TrackSourceResolver";
+
+let fetchSpotifyPlaylistTracksMock: ReturnType<typeof vi.fn>;
+let fetchDeezerPlaylistTracksMock: ReturnType<typeof vi.fn>;
+let searchYouTubeMock: ReturnType<typeof vi.fn>;
+let buildTrackPoolMock: ReturnType<typeof vi.fn>;
 
 describe("track source resolver cache behavior", () => {
   beforeEach(() => {
-    fetchSpotifyPlaylistTracksMock.mockReset();
-    fetchSpotifyPopularTracksMock.mockReset();
-    fetchDeezerPlaylistTracksMock.mockReset();
-    fetchDeezerChartTracksMock.mockReset();
-    fetchAniListUsersOpeningTracksMock.mockReset();
-    searchYouTubeMock.mockReset();
-    searchYTMusicMock.mockReset();
-    buildTrackPoolMock.mockReset();
-    readEnvVarMock.mockReset();
-    logEventMock.mockReset();
+    vi.restoreAllMocks();
 
-    readEnvVarMock.mockReturnValue(undefined);
-    fetchSpotifyPlaylistTracksMock.mockResolvedValue([
-      {
-        provider: "spotify",
-        id: "sp-cache-1",
-        title: "Cache Song",
-        artist: "Cache Artist",
-        previewUrl: "https://cdn.example/cache.mp3",
-        sourceUrl: "https://open.spotify.com/track/sp-cache-1",
-      },
-    ]);
-    fetchSpotifyPopularTracksMock.mockResolvedValue([]);
-    fetchDeezerPlaylistTracksMock.mockResolvedValue([]);
-    fetchDeezerChartTracksMock.mockResolvedValue([]);
-    fetchAniListUsersOpeningTracksMock.mockResolvedValue([]);
-    buildTrackPoolMock.mockResolvedValue([]);
-    searchYTMusicMock.mockResolvedValue([]);
+    fetchSpotifyPlaylistTracksMock = vi
+      .spyOn(spotifyModule, "fetchSpotifyPlaylistTracks")
+      .mockResolvedValue([
+        {
+          provider: "spotify",
+          id: "sp-cache-1",
+          title: "Cache Song",
+          artist: "Cache Artist",
+          previewUrl: "https://cdn.example/cache.mp3",
+          sourceUrl: "https://open.spotify.com/track/sp-cache-1",
+        },
+      ]);
+
+    vi.spyOn(spotifyModule, "fetchSpotifyPopularTracks").mockResolvedValue([]);
+
+    fetchDeezerPlaylistTracksMock = vi
+      .spyOn(deezerModule, "fetchDeezerPlaylistTracks")
+      .mockResolvedValue([]);
+
+    vi.spyOn(deezerModule, "fetchDeezerChartTracks").mockResolvedValue([]);
+
+    vi.spyOn(anilistModule, "fetchAniListUsersOpeningTracks").mockResolvedValue([]);
+
+    searchYouTubeMock = vi.spyOn(youtubeModule, "searchYouTube").mockResolvedValue([]);
+
+    buildTrackPoolMock = vi
+      .spyOn(aggregatorModule, "buildTrackPool")
+      .mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("does not cache failed youtube resolutions as permanent null", async () => {
     let youtubeCalls = 0;
     searchYouTubeMock.mockImplementation(async () => {
       youtubeCalls += 1;
-      if (youtubeCalls <= 7) return [];
+      if (youtubeCalls <= 2) return [];
       return [
         {
           provider: "youtube",
@@ -131,6 +101,14 @@ describe("track source resolver cache behavior", () => {
         previewUrl: "https://cdn.example/real.mp3",
         sourceUrl: "https://open.spotify.com/track/sp-real-1",
       },
+      {
+        provider: "spotify",
+        id: "sp-spam-1",
+        title: "Spotify This App Best Free Music Alternative",
+        artist: "Sunday Cal",
+        previewUrl: "https://cdn.example/spam.mp3",
+        sourceUrl: "https://open.spotify.com/track/sp-spam-1",
+      },
     ]);
 
     searchYouTubeMock.mockImplementation(async (query: string) => {
@@ -160,6 +138,19 @@ describe("track source resolver cache behavior", () => {
         ];
       }
 
+      if (query.toLowerCase().includes("alternative")) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-spam-1",
+            title: "Best Free Music Alternative",
+            artist: "Ad Channel",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-spam-1",
+          },
+        ];
+      }
+
       return [];
     });
 
@@ -175,5 +166,121 @@ describe("track source resolver cache behavior", () => {
       title: "Real Song",
       artist: "Real Artist",
     });
+  });
+
+  it("does not inject generic deezer query fillers for deezer playlist sources", async () => {
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([]);
+    fetchDeezerPlaylistTracksMock.mockResolvedValue([
+      {
+        provider: "deezer",
+        id: "dz-real-1",
+        title: "Real Deezer Song",
+        artist: "Real Artist",
+        previewUrl: "https://cdn.example/dz-real.mp3",
+        sourceUrl: "https://www.deezer.com/track/dz-real-1",
+      },
+    ]);
+
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      if (query.toLowerCase().includes("real deezer song")) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-real-dz-1",
+            title: "Real Deezer Song (Official Audio)",
+            artist: "Real Artist",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-real-dz-1",
+          },
+        ];
+      }
+      if (query.toLowerCase().includes("deezer hits")) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-ad-dz-1",
+            title: "Spotify This App Best Free Music Alternative",
+            artist: "Ad Channel",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-ad-dz-1",
+          },
+        ];
+      }
+      return [];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "deezer:playlist:3155776842",
+      size: 2,
+    });
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      provider: "youtube",
+      id: "yt-real-dz-1",
+      title: "Real Deezer Song",
+      artist: "Real Artist",
+    });
+    const calledQueries = searchYouTubeMock.mock.calls.map((call) => String(call[0]).toLowerCase());
+    expect(calledQueries.some((query) => query.includes("deezer hits"))).toBe(false);
+  });
+
+  it("does not invent fallback tracks when playlist source is empty", async () => {
+    fetchDeezerPlaylistTracksMock.mockResolvedValue([]);
+    buildTrackPoolMock.mockResolvedValue([
+      {
+        provider: "youtube",
+        id: "yt-filler-1",
+        title: "Popular Hits Filler",
+        artist: "Auto",
+        previewUrl: null,
+        sourceUrl: "https://www.youtube.com/watch?v=yt-filler-1",
+      },
+    ]);
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "deezer:playlist:3155776842",
+      size: 4,
+    });
+
+    expect(resolved).toEqual([]);
+    expect(buildTrackPoolMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves more than three tracks when source has enough entries", async () => {
+    fetchDeezerPlaylistTracksMock.mockResolvedValue(
+      Array.from({ length: 12 }, (_, index) => ({
+        provider: "deezer" as const,
+        id: `dz-many-${index + 1}`,
+        title: `Many Song ${index + 1}`,
+        artist: "Many Artist",
+        previewUrl: `https://cdn.example/${index + 1}.mp3`,
+        sourceUrl: `https://www.deezer.com/track/${index + 1}`,
+      })),
+    );
+
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      const match = query.match(/many song (\d+)/i);
+      if (!match) return [];
+      const id = `yt-many-${match[1]}`;
+      return [
+        {
+          provider: "youtube",
+          id,
+          title: `Many Song ${match[1]} Official Audio`,
+          artist: "Many Artist",
+          previewUrl: null,
+          sourceUrl: `https://www.youtube.com/watch?v=${id}`,
+        },
+      ];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "deezer:playlist:3155776842",
+      size: 8,
+    });
+
+    expect(resolved.length).toBeGreaterThan(3);
+    expect(resolved.length).toBeLessThanOrEqual(8);
   });
 });

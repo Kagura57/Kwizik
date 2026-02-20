@@ -66,6 +66,11 @@ export class RoomManager {
     return this.plannedTotalRounds;
   }
 
+  setTotalRounds(totalRounds: number) {
+    const safeTotal = Math.max(0, totalRounds);
+    this.plannedTotalRounds = Math.max(this.currentRound, safeTotal);
+  }
+
   startGame(input: StartGameInput) {
     if (this.gameState !== "waiting") return false;
 
@@ -173,5 +178,14 @@ export class RoomManager {
     if (this.answers.has(playerId)) return { accepted: false as const };
     this.answers.set(playerId, { value, submittedAtMs });
     return { accepted: true as const };
+  }
+
+  resetToWaiting() {
+    this.gameState = "waiting";
+    this.currentRound = 0;
+    this.roundDeadlineMs = null;
+    this.roundStartedAtMs = null;
+    this.plannedTotalRounds = 0;
+    this.answers.clear();
   }
 }

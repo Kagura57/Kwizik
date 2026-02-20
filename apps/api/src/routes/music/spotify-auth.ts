@@ -24,23 +24,30 @@ function normalizeAccessToken(raw: string | undefined) {
   return trimmed;
 }
 
+function readTrimmedEnv(key: string) {
+  const value = readEnvVar(key);
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function hasStaticToken() {
-  return normalizeAccessToken(readEnvVar("SPOTIFY_ACCESS_TOKEN")).length > 0;
+  return normalizeAccessToken(readTrimmedEnv("SPOTIFY_ACCESS_TOKEN") ?? undefined).length > 0;
 }
 
 function readStaticToken() {
-  return normalizeAccessToken(readEnvVar("SPOTIFY_ACCESS_TOKEN"));
+  return normalizeAccessToken(readTrimmedEnv("SPOTIFY_ACCESS_TOKEN") ?? undefined);
 }
 
 function hasClientCredentials() {
-  const clientId = readEnvVar("SPOTIFY_CLIENT_ID");
-  const clientSecret = readEnvVar("SPOTIFY_CLIENT_SECRET");
-  return Boolean(clientId && clientId.length > 0 && clientSecret && clientSecret.length > 0);
+  const clientId = readTrimmedEnv("SPOTIFY_CLIENT_ID");
+  const clientSecret = readTrimmedEnv("SPOTIFY_CLIENT_SECRET");
+  return Boolean(clientId && clientSecret);
 }
 
 async function fetchClientCredentialsToken() {
-  const clientId = readEnvVar("SPOTIFY_CLIENT_ID");
-  const clientSecret = readEnvVar("SPOTIFY_CLIENT_SECRET");
+  const clientId = readTrimmedEnv("SPOTIFY_CLIENT_ID");
+  const clientSecret = readTrimmedEnv("SPOTIFY_CLIENT_SECRET");
   if (!clientId || !clientSecret) return null;
 
   const body = new URLSearchParams();

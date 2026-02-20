@@ -71,7 +71,7 @@ export function RoomViewPage() {
   const progress = phaseProgress(state?.state, remainingMs);
   const youtubePlayback = useMemo(() => {
     if (!state?.media?.embedUrl || !state.media.trackId) return null;
-    if (state.media.provider !== "youtube" && state.media.provider !== "ytmusic") return null;
+    if (state.media.provider !== "youtube") return null;
     return {
       key: `${state.media.provider}:${state.media.trackId}`,
       embedUrl: state.media.embedUrl,
@@ -89,8 +89,8 @@ export function RoomViewPage() {
 
     const shouldClear =
       state?.state === "waiting" ||
-      state?.state === "countdown" ||
       state?.state === "playing" ||
+      state?.state === "results" ||
       state?.state === undefined;
     if (shouldClear) {
       setStableYoutubePlayback(null);
@@ -99,7 +99,10 @@ export function RoomViewPage() {
 
   const activeYoutubeEmbed = stableYoutubePlayback?.embedUrl ?? null;
   const usingYouTubePlayback = Boolean(activeYoutubeEmbed);
-  const revealVideoActive = state?.state === "reveal" && usingYouTubePlayback;
+  const revealVideoActive =
+    usingYouTubePlayback &&
+    (state?.state === "reveal" || state?.state === "leaderboard");
+  const isResults = state?.state === "results";
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
 
   useEffect(() => {
@@ -220,14 +223,16 @@ export function RoomViewPage() {
             </div>
           )}
 
-        {activeYoutubeEmbed && (
-          <iframe
-            key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
-            className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
-            src={activeYoutubeEmbed}
-            title="Projection playback"
-            allow="autoplay; encrypted-media"
-          />
+        {!isResults && activeYoutubeEmbed && (
+          <div className="blindtest-video-shell">
+            <iframe
+              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
+              className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
+              src={activeYoutubeEmbed}
+              title="Projection playback"
+              allow="autoplay; encrypted-media"
+            />
+          </div>
         )}
 
         <ol className="leaderboard-list compact">

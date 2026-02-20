@@ -75,24 +75,184 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
   })
   .post("/start", async ({ body, set }) => {
     const roomCode = readStringField(body, "roomCode");
-    const categoryQuery = readOptionalStringField(body, "categoryQuery") ?? "spotify:popular";
+    const playerId = readStringField(body, "playerId");
     if (!roomCode) {
       set.status = 400;
       return { ok: false, error: "INVALID_PAYLOAD" };
     }
+    if (!playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
 
-    const started = await roomStore.startGame(roomCode, categoryQuery);
+    const started = await roomStore.startGame(roomCode, playerId);
     if (!started) {
       set.status = 404;
       return { ok: false, error: "ROOM_NOT_FOUND" };
     }
 
     if (started.ok === false) {
-      set.status = started.error === "NO_TRACKS_FOUND" ? 422 : 400;
+      if (started.error === "NO_TRACKS_FOUND") {
+        set.status = 422;
+      } else if (started.error === "PLAYER_NOT_FOUND") {
+        set.status = 404;
+      } else if (started.error === "HOST_ONLY") {
+        set.status = 403;
+      } else {
+        set.status = 400;
+      }
       return started;
     }
 
     return started;
+  })
+  .post("/source", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const categoryQuery = readStringField(body, "categoryQuery");
+    if (!roomCode || !playerId || !categoryQuery) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.setRoomSource(roomCode, playerId, categoryQuery);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    if (result.status === "invalid_payload") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+    return { ok: true as const, categoryQuery: result.categoryQuery };
+  })
+  .post("/ready", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const ready = readOptionalBooleanField(body, "ready");
+    if (!roomCode || !playerId || ready === null) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.setPlayerReady(roomCode, playerId, ready);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    return { ok: true as const, isReady: result.isReady };
+  })
+  .post("/kick", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const targetPlayerId = readStringField(body, "targetPlayerId");
+    if (!roomCode || !playerId || !targetPlayerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.kickPlayer(roomCode, playerId, targetPlayerId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "target_not_found") {
+      set.status = 404;
+      return { ok: false, error: "TARGET_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    if (result.status === "invalid_payload") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+    return { ok: true as const, playerCount: result.playerCount };
+  })
+  .post("/leave", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.removePlayer(roomCode, playerId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    return {
+      ok: true as const,
+      playerCount: result.playerCount,
+      hostPlayerId: result.hostPlayerId,
+    };
+  })
+  .post("/replay", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.replayRoom(roomCode, playerId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    return {
+      ok: true as const,
+      roomCode: result.roomCode,
+      state: result.state,
+      playerCount: result.playerCount,
+      categoryQuery: result.categoryQuery,
+    };
   })
   .post("/answer", ({ body, set }) => {
     const roomCode = readStringField(body, "roomCode");

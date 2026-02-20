@@ -1,6 +1,7 @@
 import { fetchJsonWithTimeout } from "./http";
 import type { MusicTrack } from "../../services/music-types";
 import { readEnvVar } from "../../lib/env";
+import { logEvent } from "../../lib/logger";
 
 type DeezerPayload = {
   data?: Array<{
@@ -9,6 +10,8 @@ type DeezerPayload = {
     artist?: { name?: string };
     preview?: string | null;
   }>;
+  total?: number;
+  next?: string;
 };
 
 type DeezerPlaylistPayload = {
@@ -111,35 +114,71 @@ export async function fetchDeezerPlaylistTracks(
   playlistId: string,
   limit = 20,
 ): Promise<MusicTrack[]> {
-  const safeLimit = Math.max(1, Math.min(limit, 50));
-  const url = new URL(`https://api.deezer.com/playlist/${encodeURIComponent(playlistId)}/tracks`);
-  url.searchParams.set("limit", String(safeLimit));
+  const target = Math.max(1, Math.min(limit, 2_000));
+  const pageSize = 100;
+  const tracks: MusicTrack[] = [];
+  const seen = new Set<string>();
+  let pageCount = 0;
+  let manualIndex = 0;
+  let nextUrl: URL | null = new URL(`https://api.deezer.com/playlist/${encodeURIComponent(playlistId)}/tracks`);
+  nextUrl.searchParams.set("limit", String(pageSize));
+  nextUrl.searchParams.set("index", "0");
 
-  const payload = (await fetchJsonWithTimeout(url, {}, {
-    context: {
-      provider: "deezer",
-      route: "playlist_tracks",
-      playlistId,
-    },
-  })) as DeezerPayload | null;
+  while (nextUrl && pageCount < 200) {
+    pageCount += 1;
+    const payload = (await fetchJsonWithTimeout(nextUrl, {}, {
+      context: {
+        provider: "deezer",
+        route: "playlist_tracks",
+        playlistId,
+        page: pageCount,
+      },
+    })) as DeezerPayload | null;
 
-  return (payload?.data ?? [])
-    .map((item) => {
+    for (const item of payload?.data ?? []) {
       const id = item.id;
       const title = item.title?.trim();
       const artist = item.artist?.name?.trim();
-      if (!id || !title || !artist) return null;
-      return {
-        provider: "deezer" as const,
-        id: String(id),
+      if (!id || !title || !artist) continue;
+      const key = String(id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tracks.push({
+        provider: "deezer",
+        id: key,
         title,
         artist,
         previewUrl: item.preview ?? null,
         sourceUrl: `https://www.deezer.com/track/${id}`,
-      };
-    })
-    .filter((value): value is MusicTrack => value !== null)
-    .slice(0, safeLimit);
+      });
+
+      if (tracks.length >= target) {
+        return tracks;
+      }
+    }
+
+    if (typeof payload?.next === "string" && payload.next.trim().length > 0) {
+      try {
+        nextUrl = new URL(payload.next);
+        manualIndex += pageSize;
+      } catch {
+        nextUrl = null;
+      }
+      continue;
+    }
+
+    const total = typeof payload?.total === "number" ? payload.total : null;
+    if (total !== null && tracks.length < Math.min(total, target)) {
+      manualIndex += pageSize;
+      nextUrl = new URL(`https://api.deezer.com/playlist/${encodeURIComponent(playlistId)}/tracks`);
+      nextUrl.searchParams.set("limit", String(pageSize));
+      nextUrl.searchParams.set("index", String(manualIndex));
+    } else {
+      nextUrl = null;
+    }
+  }
+
+  return tracks;
 }
 
 function toDeezerPlaylistSummary(
@@ -179,6 +218,14 @@ export async function searchDeezerPlaylists(
       query: trimmed,
     },
   })) as DeezerPlaylistPayload | null;
+  const rawItems = payload?.data;
+  logEvent("info", "deezer_playlist_search_raw_payload", {
+    query: trimmed,
+    requestedLimit: safeLimit,
+    dataType: Array.isArray(rawItems) ? "array" : typeof rawItems,
+    itemCount: Array.isArray(rawItems) ? rawItems.length : 0,
+    firstItemKeys: Array.isArray(rawItems) && rawItems[0] ? Object.keys(rawItems[0]).slice(0, 8) : [],
+  });
 
   const seen = new Set<string>();
   const playlists: DeezerPlaylistSummary[] = [];
@@ -191,6 +238,19 @@ export async function searchDeezerPlaylists(
     playlists.push(playlist);
     if (playlists.length >= safeLimit) break;
   }
+
+  logEvent("info", "deezer_playlist_search_mapped_payload", {
+    query: trimmed,
+    requestedLimit: safeLimit,
+    mappedCount: playlists.length,
+    firstMapped: playlists[0]
+      ? {
+          id: playlists[0].id,
+          name: playlists[0].name,
+          trackCount: playlists[0].trackCount,
+        }
+      : null,
+  });
 
   return playlists;
 }

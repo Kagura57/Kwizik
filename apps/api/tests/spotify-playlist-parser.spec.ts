@@ -12,7 +12,13 @@ function jsonResponse(payload: unknown, status = 200) {
 }
 
 describe("spotify playlist payload parsing", () => {
-  const envKeys = ["SPOTIFY_ACCESS_TOKEN", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"] as const;
+  const envKeys = [
+    "SPOTIFY_ACCESS_TOKEN",
+    "SPOTIFY_CLIENT_ID",
+    "SPOTIFY_CLIENT_SECRET",
+    "SPOTIFY_API_MODE",
+    "SPOTIFY_BROWSE_ENABLED",
+  ] as const;
   const originalEnv = new Map<string, string | undefined>();
   const originalFetch = globalThis.fetch;
 
@@ -98,5 +104,87 @@ describe("spotify playlist payload parsing", () => {
       title: "Song Legacy",
       artist: "Artist Two",
     });
+  });
+
+  it("returns empty tracks when playlist items are unavailable without search fallback", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/playlists/playlist-id/items?")) {
+        return Promise.resolve(jsonResponse({ items: [] }));
+      }
+
+      if (url.includes("/v1/playlists/playlist-id?")) {
+        return Promise.resolve(
+          jsonResponse({
+            id: "playlist-id",
+            name: "Top Rap",
+            owner: { display_name: "Spotify" },
+            tracks: { total: 0 },
+          }),
+        );
+      }
+
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const tracks = await fetchSpotifyPlaylistTracks("playlist-id", 5);
+    expect(tracks).toHaveLength(0);
+    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledUrls.some((url) => url.includes("/v1/search?"))).toBe(false);
+  });
+
+  it("paginates spotify playlist tracks and returns all requested entries", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/playlists/playlist-id?")) {
+        return Promise.resolve(
+          jsonResponse({
+            id: "playlist-id",
+            name: "Big playlist",
+            owner: { display_name: "Spotify" },
+            tracks: { total: 205 },
+          }),
+        );
+      }
+
+      if (url.includes("/v1/playlists/playlist-id/items?")) {
+        const parsed = new URL(url);
+        const offset = Number(parsed.searchParams.get("offset") ?? "0");
+        const limit = Number(parsed.searchParams.get("limit") ?? "100");
+        const pageSize = Math.min(limit, 205 - offset);
+        const pageItems = Array.from({ length: Math.max(0, pageSize) }, (_, index) => {
+          const absolute = offset + index + 1;
+          return {
+            item: {
+              id: `track-${absolute}`,
+              name: `Song ${absolute}`,
+              artists: [{ name: `Artist ${absolute}` }],
+              preview_url: `https://cdn.example.com/${absolute}.mp3`,
+              external_urls: { spotify: `https://open.spotify.com/track/track-${absolute}` },
+            },
+          };
+        });
+        return Promise.resolve(
+          jsonResponse({
+            total: 205,
+            items: pageItems,
+          }),
+        );
+      }
+
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const tracks = await fetchSpotifyPlaylistTracks("playlist-id", 205);
+    expect(tracks).toHaveLength(205);
+    expect(tracks[0]).toMatchObject({ id: "track-1" });
+    expect(tracks[204]).toMatchObject({ id: "track-205" });
+
+    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calledUrls.some((url) => url.includes("offset=0"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("offset=100"))).toBe(true);
+    expect(calledUrls.some((url) => url.includes("offset=200"))).toBe(true);
   });
 });

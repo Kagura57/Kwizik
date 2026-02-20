@@ -54,9 +54,6 @@ function buildHealthDetailsPayload() {
       hasYouTubeApiKey,
       hasYouTubeApiKeys,
       hasYouTubeInvidiousInstances,
-      hasYtMusicSearchUrl:
-        typeof readEnvVar("YTMUSIC_SEARCH_URL") === "string" &&
-        (readEnvVar("YTMUSIC_SEARCH_URL")?.length ?? 0) > 0,
       hasAniListAccessToken:
         typeof readEnvVar("ANILIST_ACCESS_TOKEN") === "string" &&
         (readEnvVar("ANILIST_ACCESS_TOKEN")?.length ?? 0) > 0,

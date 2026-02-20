@@ -188,6 +188,11 @@ a {
   opacity: 0.9;
 }
 
+.ghost-btn.selected {
+  border-color: rgba(54, 214, 180, 0.8);
+  background: rgba(54, 214, 180, 0.14);
+}
+
 .wide {
   width: 100%;
   display: inline-flex;
@@ -833,6 +838,10 @@ select option {
   justify-items: stretch;
 }
 
+.stage-main.arena-layout.results-with-chat {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+}
+
 .arena-side {
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -890,6 +899,15 @@ select option {
   display: grid;
   gap: 14px;
   align-content: start;
+}
+
+.gameplay-center.results-compact {
+  width: min(820px, 100%);
+  justify-items: center;
+}
+
+.gameplay-center.results-compact > * {
+  width: 100%;
 }
 
 .round-strip {
@@ -1000,6 +1018,142 @@ select option {
   flex-wrap: wrap;
 }
 
+.lobby-player-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.lobby-player-list li {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lobby-player-list p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.podium-panel {
+  border: 1px solid rgba(255, 232, 111, 0.5);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 50% 4%, rgba(255, 232, 111, 0.2), transparent 48%),
+    linear-gradient(140deg, rgba(16, 24, 38, 0.95), rgba(18, 31, 48, 0.9));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+  width: fit-content;
+  max-width: min(780px, 100%);
+  margin: 0 auto;
+}
+
+.podium-title {
+  margin: 0;
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.04em;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+}
+
+.podium-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(170px, 210px));
+  align-items: end;
+  justify-content: center;
+  gap: 14px;
+}
+
+.podium-step {
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 14px;
+  padding: 14px 12px;
+  min-height: 160px;
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  align-content: end;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+  animation: podium-rise 500ms ease both;
+}
+
+.podium-step strong,
+.podium-step span,
+.podium-rank {
+  margin: 0;
+}
+
+.podium-rank {
+  font-size: 1.1rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.podium-step strong {
+  font-size: 1.04rem;
+}
+
+.podium-step span {
+  color: rgba(232, 240, 255, 0.82);
+  font-weight: 700;
+}
+
+.podium-step.gold {
+  min-height: 210px;
+  border-color: rgba(255, 232, 111, 0.85);
+  background: linear-gradient(180deg, rgba(255, 232, 111, 0.17), rgba(255, 255, 255, 0.06));
+  box-shadow: 0 10px 30px rgba(255, 199, 84, 0.25);
+}
+
+.podium-step.gold .podium-rank {
+  color: #ffe86f;
+}
+
+.podium-step.silver {
+  min-height: 178px;
+  border-color: rgba(198, 220, 255, 0.7);
+  background: linear-gradient(180deg, rgba(198, 220, 255, 0.13), rgba(255, 255, 255, 0.04));
+}
+
+.podium-step.silver .podium-rank {
+  color: #c6dcff;
+}
+
+.podium-step.bronze {
+  min-height: 168px;
+  border-color: rgba(255, 176, 118, 0.7);
+  background: linear-gradient(180deg, rgba(255, 176, 118, 0.12), rgba(255, 255, 255, 0.04));
+}
+
+.podium-step.bronze .podium-rank {
+  color: #ffb076;
+}
+
+.podium-step.empty {
+  opacity: 0.68;
+}
+
+@keyframes podium-rise {
+  from {
+    transform: translateY(14px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 .answer-box {
   width: min(720px, 100%);
   max-width: 720px;
@@ -1018,7 +1172,7 @@ select option {
 }
 
 .reveal-box.large {
-  width: min(860px, 100%);
+  width: 100%;
 }
 
 .blindtest-audio {
@@ -1040,6 +1194,14 @@ select option {
   border: 0;
 }
 
+.blindtest-video-shell {
+  width: 100%;
+  display: grid;
+  justify-items: center;
+  pointer-events: none;
+  user-select: none;
+}
+
 .blindtest-video-reveal {
   width: min(900px, calc(100% - 28px));
   aspect-ratio: 16 / 9;
@@ -1048,6 +1210,7 @@ select option {
   background: rgba(0, 0, 0, 0.45);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.35);
   justify-self: center;
+  pointer-events: none;
 }
 
 .autoplay-btn {
@@ -1068,6 +1231,10 @@ select option {
   .source-preset-grid,
   .playlist-card-grid,
   .stage-main.arena-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .stage-main.arena-layout.results-with-chat {
     grid-template-columns: 1fr;
   }
 
@@ -1106,7 +1273,8 @@ select option {
 
   .metrics-row,
   .mcq-grid,
-  .projection-choices {
+  .projection-choices,
+  .podium-grid {
     grid-template-columns: 1fr;
   }
 

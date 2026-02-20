@@ -60,6 +60,19 @@ function delayMs(baseMs: number, attempt: number) {
   return baseMs * 2 ** attempt + jitter;
 }
 
+function parseRetryAfterMs(raw: string | null) {
+  if (!raw) return null;
+  const asSeconds = Number.parseInt(raw, 10);
+  if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+    return asSeconds * 1000;
+  }
+  const asDate = Date.parse(raw);
+  if (Number.isFinite(asDate)) {
+    return Math.max(0, asDate - Date.now());
+  }
+  return null;
+}
+
 async function wait(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -102,6 +115,7 @@ export async function fetchJsonWithTimeout(
     typeof options.context.provider === "string" ? options.context.provider : null;
 
   for (let attempt = 0; attempt <= options.retries; attempt += 1) {
+    let waitOverrideMs: number | null = null;
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       controller.abort();
@@ -149,11 +163,18 @@ export async function fetchJsonWithTimeout(
         return null;
       }
 
+      const retryAfterMs = response.status === 429
+        ? parseRetryAfterMs(response.headers.get("retry-after"))
+        : null;
+      if (retryAfterMs !== null) {
+        waitOverrideMs = Math.max(100, retryAfterMs);
+      }
       logEvent("warn", "music_http_retry_status", {
         url: logUrl,
         status: response.status,
         attempt: attempt + 1,
         retries: options.retries + 1,
+        retryAfterMs,
         ...options.context,
       });
     } catch (error) {
@@ -189,7 +210,7 @@ export async function fetchJsonWithTimeout(
       clearTimeout(timeout);
     }
 
-    await wait(delayMs(options.retryDelayMs, attempt));
+    await wait(waitOverrideMs ?? delayMs(options.retryDelayMs, attempt));
   }
 
   return null;

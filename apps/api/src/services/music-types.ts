@@ -1,4 +1,4 @@
-export type MusicProvider = "spotify" | "deezer" | "apple-music" | "tidal" | "ytmusic" | "youtube";
+export type MusicProvider = "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
 
 export type MusicTrack = {
   provider: MusicProvider;

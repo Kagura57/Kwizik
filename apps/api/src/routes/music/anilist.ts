@@ -162,7 +162,7 @@ export async function fetchAniListUsersOpeningTracks(
   for (const title of dedupedTitles) {
     const query = `${title} opening`;
     const search = await unifiedMusicSearch(query, 4, {
-      providerOrder: ["ytmusic", "youtube", "spotify", "deezer", "apple-music", "tidal"],
+      providerOrder: ["youtube", "spotify", "deezer", "apple-music", "tidal"],
       targetFallbackCount: 4,
     });
 

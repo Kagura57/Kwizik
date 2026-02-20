@@ -34,7 +34,6 @@ describe("MusicAggregator", () => {
         ],
         "apple-music": async () => [],
         tidal: async () => [],
-        ytmusic: async () => [],
         youtube: async () => [],
       },
     });
@@ -54,7 +53,6 @@ describe("MusicAggregator", () => {
         deezer: async () => [track("deezer", "1", "Song X", "Artist X")],
         "apple-music": async () => [],
         tidal: async () => [],
-        ytmusic: async () => [],
         youtube: async () => [],
       },
     });
@@ -73,7 +71,6 @@ describe("MusicAggregator", () => {
         deezer: async () => [track("deezer", "2", "Song Loud", "Artist B", "https://preview.test/2.mp3")],
         "apple-music": async () => [],
         tidal: async () => [],
-        ytmusic: async () => [],
         youtube: async () => [],
       },
     });

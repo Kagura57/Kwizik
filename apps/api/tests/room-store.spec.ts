@@ -32,6 +32,25 @@ const YOUTUBE_ONLY_TRACKS: MusicTrack[] = [
   },
 ];
 
+const PROMOTIONAL_MIXED_TRACKS: MusicTrack[] = [
+  {
+    provider: "youtube",
+    id: "promo-1",
+    title: "Spotify This App Best Free Music Alternative",
+    artist: "Sunday Cal",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=promo-1",
+  },
+  {
+    provider: "youtube",
+    id: "clean-1",
+    title: "Midnight Signal",
+    artist: "Nova Tide",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=clean-1",
+  },
+];
+
 describe("RoomStore gameplay progression", () => {
   it("runs countdown -> playing -> reveal -> leaderboard -> results and applies streak scoring", async () => {
     let nowMs = 0;
@@ -56,7 +75,13 @@ describe("RoomStore gameplay progression", () => {
     expect(guest.status).toBe("ok");
     if (host.status !== "ok" || guest.status !== "ok") return;
 
-    await store.startGame(created.roomCode, "popular hits");
+    const sourceSet = store.setRoomSource(created.roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(created.roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(created.roomCode, host.value.playerId);
     expect(store.roomState(created.roomCode)?.state).toBe("countdown");
 
     nowMs = 10;
@@ -149,7 +174,11 @@ describe("RoomStore gameplay progression", () => {
     expect(player.status).toBe("ok");
     if (player.status !== "ok") return;
 
-    await store.startGame(roomCode, "popular hits");
+    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(roomCode, player.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    await store.startGame(roomCode, player.value.playerId);
 
     nowMs = 5;
     const playingRound1 = store.roomState(roomCode);
@@ -199,7 +228,11 @@ describe("RoomStore gameplay progression", () => {
     expect(player.status).toBe("ok");
     if (player.status !== "ok") return;
 
-    const started = await store.startGame(roomCode, "youtube focus");
+    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "youtube focus");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(roomCode, player.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    const started = await store.startGame(roomCode, player.value.playerId);
     expect(started?.ok).toBe(true);
     expect(started && "totalRounds" in started ? started.totalRounds : 0).toBe(1);
 
@@ -230,10 +263,158 @@ describe("RoomStore gameplay progression", () => {
     expect(host.status).toBe("ok");
     if (host.status !== "ok") return;
 
-    await store.startGame(roomCode, "spotify:popular");
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "spotify:popular");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(roomCode, host.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
     const lateJoin = store.joinRoom(roomCode, "LatePlayer");
     expect(lateJoin.status).toBe("ok");
     if (lateJoin.status !== "ok") return;
     expect(lateJoin.value.playerCount).toBe(2);
+  });
+
+  it("filters promotional tracks from pool before starting rounds", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => PROMOTIONAL_MIXED_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 50,
+        revealMs: 5,
+        leaderboardMs: 5,
+        maxRounds: 2,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const player = store.joinRoom(roomCode, "Host");
+    expect(player.status).toBe("ok");
+    if (player.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "deezer:playlist:3155776842");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(roomCode, player.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    const started = await store.startGame(roomCode, player.value.playerId);
+    expect(started?.ok).toBe(true);
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    const label = playing?.media?.trackId ?? "";
+    expect(label).toBe("clean-1");
+  });
+
+  it("requires host and 100% ready before start", async () => {
+    const store = new RoomStore({
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: { maxRounds: 2 },
+    });
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    const guest = store.joinRoom(created.roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const guestSource = store.setRoomSource(created.roomCode, guest.value.playerId, "popular hits");
+    expect(guestSource.status).toBe("forbidden");
+
+    const hostSource = store.setRoomSource(created.roomCode, host.value.playerId, "popular hits");
+    expect(hostSource.status).toBe("ok");
+
+    store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    const startedBeforeAllReady = await store.startGame(created.roomCode, host.value.playerId);
+    expect(startedBeforeAllReady).toMatchObject({ ok: false, error: "PLAYERS_NOT_READY" });
+
+    store.setPlayerReady(created.roomCode, guest.value.playerId, true);
+    const started = await store.startGame(created.roomCode, host.value.playerId);
+    expect(started?.ok).toBe(true);
+  });
+
+  it("supports replay to waiting lobby and preserves players", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+        maxRounds: 1,
+      },
+    });
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    const guest = store.joinRoom(created.roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    store.setRoomSource(created.roomCode, host.value.playerId, "popular hits");
+    store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    store.setPlayerReady(created.roomCode, guest.value.playerId, true);
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    nowMs = 5;
+    store.roomState(created.roomCode);
+    nowMs = 25;
+    store.roomState(created.roomCode);
+    nowMs = 30;
+    store.roomState(created.roomCode);
+    nowMs = 35;
+    store.roomState(created.roomCode);
+    expect(store.roomState(created.roomCode)?.state).toBe("results");
+
+    const replay = store.replayRoom(created.roomCode, host.value.playerId);
+    expect(replay.status).toBe("ok");
+    if (replay.status !== "ok") return;
+    expect(replay.state).toBe("waiting");
+
+    const lobby = store.roomState(created.roomCode);
+    expect(lobby?.state).toBe("waiting");
+    expect(lobby?.players).toHaveLength(2);
+    expect(lobby?.categoryQuery).toBe("");
+    expect(lobby?.readyCount).toBe(0);
+  });
+
+  it("starts with a usable initial pool (not capped to 2 tracks)", async () => {
+    const requestedSizes: number[] = [];
+    const makeTrack = (index: number): MusicTrack => ({
+      provider: "youtube",
+      id: `yt-${index}`,
+      title: `Track ${index}`,
+      artist: `Artist ${index}`,
+      previewUrl: null,
+      sourceUrl: `https://www.youtube.com/watch?v=yt-${index}`,
+    });
+    const store = new RoomStore({
+      getTrackPool: async (_query, size) => {
+        requestedSizes.push(size);
+        return Array.from({ length: size }, (_, index) => makeTrack(index + 1));
+      },
+      config: {
+        maxRounds: 10,
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(created.roomCode, host.value.playerId, "deezer:playlist:3155776842");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    const started = await store.startGame(created.roomCode, host.value.playerId);
+    expect(started).toMatchObject({ ok: true, totalRounds: 10, poolSize: 10 });
+    expect(requestedSizes[0]).toBeGreaterThanOrEqual(6);
   });
 });

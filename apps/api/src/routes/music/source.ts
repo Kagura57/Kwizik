@@ -8,6 +8,8 @@ import {
   searchSpotifyPlaylists,
 } from "./spotify";
 import { parseTrackSource, resolveTrackPoolFromSource } from "../../services/TrackSourceResolver";
+import { logEvent } from "../../lib/logger";
+import { readEnvVar } from "../../lib/env";
 
 function parseLimit(raw: string | undefined, fallback: number) {
   if (!raw) return fallback;
@@ -36,6 +38,48 @@ type UnifiedPlaylistOption = {
   sourceQuery: string;
 };
 
+function normalizeTrackCount(raw: unknown) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.max(0, Math.floor(raw));
+  if (typeof raw === "string") {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return null;
+}
+
+function toUnifiedPlaylistOption(
+  provider: "spotify" | "deezer",
+  raw: unknown,
+): UnifiedPlaylistOption | null {
+  if (!raw || typeof raw !== "object") return null;
+  const input = raw as Record<string, unknown>;
+  const id = typeof input.id === "string" ? input.id.trim() : "";
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  if (!id || !name) return null;
+  const description = typeof input.description === "string" ? input.description : "";
+  const imageUrl = typeof input.imageUrl === "string" && input.imageUrl.trim().length > 0
+    ? input.imageUrl
+    : null;
+  const externalUrl = typeof input.externalUrl === "string" && input.externalUrl.trim().length > 0
+    ? input.externalUrl
+    : provider === "spotify"
+      ? `https://open.spotify.com/playlist/${id}`
+      : `https://www.deezer.com/playlist/${id}`;
+  const owner = typeof input.owner === "string" && input.owner.trim().length > 0 ? input.owner : null;
+  const trackCount = normalizeTrackCount(input.trackCount);
+  return {
+    provider,
+    id,
+    name,
+    description,
+    imageUrl,
+    externalUrl,
+    owner,
+    trackCount,
+    sourceQuery: `${provider}:playlist:${id}`,
+  };
+}
+
 function playlistWeight(item: UnifiedPlaylistOption) {
   let score = item.trackCount ?? 0;
   const owner = (item.owner ?? "").toLowerCase();
@@ -46,6 +90,46 @@ function playlistWeight(item: UnifiedPlaylistOption) {
   if (name.includes("top") || name.includes("hits") || name.includes("viral")) score += 40;
   if (item.imageUrl) score += 15;
   return score;
+}
+
+const DEFAULT_PLAYLIST_SEARCH_PROVIDER_TIMEOUT_MS = 2_500;
+
+function readPlaylistSearchProviderTimeoutMs() {
+  const raw = readEnvVar("PLAYLIST_SEARCH_PROVIDER_TIMEOUT_MS");
+  if (!raw) return DEFAULT_PLAYLIST_SEARCH_PROVIDER_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_PLAYLIST_SEARCH_PROVIDER_TIMEOUT_MS;
+  return Math.max(200, Math.min(parsed, 10_000));
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutCode: string,
+): Promise<T> {
+  return await new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(timeoutCode));
+    }, timeoutMs);
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function readSettledErrorMessage(value: PromiseSettledResult<unknown>) {
+  if (value.status !== "rejected") return null;
+  if (value.reason instanceof Error) return value.reason.message;
+  if (typeof value.reason === "string" && value.reason.trim().length > 0) return value.reason;
+  return "UNKNOWN_ERROR";
 }
 
 export const musicSourceRoutes = new Elysia({ prefix: "/music" })
@@ -123,34 +207,62 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
       return { error: "MISSING_QUERY" };
     }
 
-    const [spotify, deezer] = await Promise.all([
-      searchSpotifyPlaylists(raw, limit),
-      searchDeezerPlaylists(raw, limit),
+    const providerTimeoutMs = readPlaylistSearchProviderTimeoutMs();
+    const [spotifyResult, deezerResult] = await Promise.allSettled([
+      withTimeout(
+        searchSpotifyPlaylists(raw, limit),
+        providerTimeoutMs,
+        "SPOTIFY_PLAYLIST_SEARCH_TIMEOUT",
+      ),
+      withTimeout(
+        searchDeezerPlaylists(raw, limit),
+        providerTimeoutMs,
+        "DEEZER_PLAYLIST_SEARCH_TIMEOUT",
+      ),
     ]);
+    const spotifyRaw = spotifyResult.status === "fulfilled" ? (spotifyResult.value as unknown) : null;
+    const deezerRaw = deezerResult.status === "fulfilled" ? (deezerResult.value as unknown) : null;
+    const spotify = Array.isArray(spotifyRaw) ? spotifyRaw : [];
+    const deezer = Array.isArray(deezerRaw) ? deezerRaw : [];
+    logEvent("info", "playlist_search_provider_payload", {
+      q: raw,
+      limit,
+      spotifyStatus: spotifyResult.status,
+      deezerStatus: deezerResult.status,
+      spotifyType: Array.isArray(spotifyRaw) ? "array" : typeof spotifyRaw,
+      deezerType: Array.isArray(deezerRaw) ? "array" : typeof deezerRaw,
+      spotifyCount: spotify.length,
+      deezerCount: deezer.length,
+      spotifyFirst: spotify[0]
+        ? {
+            id: spotify[0].id,
+            name: spotify[0].name,
+            trackCount: spotify[0].trackCount ?? null,
+          }
+        : null,
+      deezerFirst: deezer[0]
+        ? {
+            id: deezer[0].id,
+            name: deezer[0].name,
+            trackCount: deezer[0].trackCount ?? null,
+          }
+        : null,
+    });
+    if (spotifyResult.status === "rejected" || deezerResult.status === "rejected") {
+      logEvent("warn", "playlist_search_partial_failure", {
+        q: raw,
+        limit,
+        providerTimeoutMs,
+        spotifyFailed: spotifyResult.status === "rejected",
+        deezerFailed: deezerResult.status === "rejected",
+        spotifyError: readSettledErrorMessage(spotifyResult),
+        deezerError: readSettledErrorMessage(deezerResult),
+      });
+    }
 
     const merged: UnifiedPlaylistOption[] = [
-      ...spotify.map((item) => ({
-        provider: "spotify" as const,
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        imageUrl: item.imageUrl,
-        externalUrl: item.externalUrl,
-        owner: item.owner,
-        trackCount: item.trackCount,
-        sourceQuery: `spotify:playlist:${item.id}`,
-      })),
-      ...deezer.map((item) => ({
-        provider: "deezer" as const,
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        imageUrl: item.imageUrl,
-        externalUrl: item.externalUrl,
-        owner: item.owner,
-        trackCount: item.trackCount,
-        sourceQuery: `deezer:playlist:${item.id}`,
-      })),
+      ...spotify.map((item) => toUnifiedPlaylistOption("spotify", item)).filter((item) => item !== null),
+      ...deezer.map((item) => toUnifiedPlaylistOption("deezer", item)).filter((item) => item !== null),
     ];
 
     const deduped: UnifiedPlaylistOption[] = [];
@@ -162,6 +274,20 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
       deduped.push(playlist);
       if (deduped.length >= limit) break;
     }
+    logEvent("info", "playlist_search_response_payload", {
+      q: raw,
+      limit,
+      mergedCount: merged.length,
+      returnedCount: deduped.length,
+      firstReturned: deduped[0]
+        ? {
+            provider: deduped[0].provider,
+            id: deduped[0].id,
+            name: deduped[0].name,
+            trackCount: deduped[0].trackCount ?? null,
+          }
+        : null,
+    });
 
     return {
       ok: true as const,

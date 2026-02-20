@@ -1,11 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as envModule from "../src/lib/env";
 import { resetYouTubeSearchBackoffForTests, searchYouTube } from "../src/routes/music/youtube";
 
 const readEnvVarMock = vi.fn<(key: string) => string | undefined>();
-
-vi.mock("../src/lib/env", () => ({
-  readEnvVar: (key: string) => readEnvVarMock(key),
-}));
 
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -21,6 +18,7 @@ describe("youtube key rotation", () => {
 
   beforeEach(() => {
     readEnvVarMock.mockReset();
+    vi.spyOn(envModule, "readEnvVar").mockImplementation((key: string) => readEnvVarMock(key));
     resetYouTubeSearchBackoffForTests();
     globalThis.fetch = originalFetch;
   });
@@ -207,5 +205,38 @@ describe("youtube key rotation", () => {
       title: "Web Title webvideo002",
       artist: "Web Artist",
     });
+  });
+
+  it("does not invent synthetic youtube tracks when oembed lookup fails", async () => {
+    readEnvVarMock.mockImplementation((key) => {
+      if (key === "YOUTUBE_INVIDIOUS_INSTANCES") return "https://inv-empty.example";
+      return undefined;
+    });
+
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.hostname === "inv-empty.example" && url.pathname === "/api/v1/search") {
+        return Promise.resolve(jsonResponse([]));
+      }
+
+      if (url.hostname === "www.youtube.com" && url.pathname === "/results") {
+        return Promise.resolve(
+          new Response('<html><body>"videoId":"webvideo001"</body></html>', {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+        );
+      }
+
+      if (url.hostname === "www.youtube.com" && url.pathname === "/oembed") {
+        return Promise.resolve(jsonResponse({}, 404));
+      }
+
+      return Promise.resolve(jsonResponse({}, 404));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const tracks = await searchYouTube("no synthetic", 3);
+    expect(tracks).toEqual([]);
   });
 });

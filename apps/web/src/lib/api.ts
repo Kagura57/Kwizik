@@ -54,13 +54,23 @@ export type RoomState = {
   choices: string[] | null;
   serverNowMs: number;
   playerCount: number;
+  hostPlayerId: string | null;
+  players: Array<{
+    playerId: string;
+    displayName: string;
+    isReady: boolean;
+    isHost: boolean;
+  }>;
+  readyCount: number;
+  allReady: boolean;
+  canStart: boolean;
   poolSize: number;
   categoryQuery: string;
   totalRounds: number;
   deadlineMs: number | null;
   previewUrl: string | null;
   media: {
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "ytmusic" | "youtube";
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
     trackId: string;
     sourceUrl: string | null;
     embedUrl: string | null;
@@ -68,7 +78,7 @@ export type RoomState = {
   reveal: {
     round: number;
     trackId: string;
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "ytmusic" | "youtube";
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
     title: string;
     artist: string;
     acceptedAnswer: string;
@@ -187,14 +197,21 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
   for (const [baseIndex, base] of baseCandidates.entries()) {
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
+        const headers = new Headers(requestInit.headers ?? undefined);
+        const hasBody = typeof requestInit.body !== "undefined" && requestInit.body !== null;
+        const shouldAttachJsonContentType = hasBody && method !== "GET" && method !== "HEAD";
+        if (shouldAttachJsonContentType && !headers.has("content-type")) {
+          headers.set("content-type", "application/json");
+        }
+        // Keep GET requests as "simple requests" to avoid fragile CORS preflights in local dev.
+        if (method !== "GET" && method !== "HEAD") {
+          headers.set("x-request-id", requestId);
+        }
+
         const response = await fetch(`${base}${pathWithSlash}`, {
           credentials: "include",
           ...requestInit,
-          headers: {
-            "content-type": "application/json",
-            "x-request-id": requestId,
-            ...(requestInit.headers ?? {}),
-          },
+          headers,
         });
 
         const correlatedRequestId = response.headers.get("x-request-id") ?? requestId;
@@ -310,10 +327,13 @@ export async function createRoom(input?: { categoryQuery?: string; isPublic?: bo
 }
 
 export async function joinRoom(input: { roomCode: string; displayName: string }) {
-  return requestJson<{ ok: true; playerId: string; playerCount: number }>("/quiz/join", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+  return requestJson<{ ok: true; playerId: string; playerCount: number; hostPlayerId: string | null }>(
+    "/quiz/join",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function getPublicRooms() {
@@ -324,7 +344,7 @@ export async function getPublicRooms() {
   }>("/quiz/public");
 }
 
-export async function startRoom(input: { roomCode: string; categoryQuery?: string }) {
+export async function startRoom(input: { roomCode: string; playerId: string }) {
   return requestJson<{
     ok: true;
     state: string;
@@ -333,6 +353,47 @@ export async function startRoom(input: { roomCode: string; categoryQuery?: strin
     totalRounds: number;
     deadlineMs: number | null;
   }>("/quiz/start", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomSource(input: { roomCode: string; playerId: string; categoryQuery: string }) {
+  return requestJson<{ ok: true; categoryQuery: string }>("/quiz/source", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setPlayerReady(input: { roomCode: string; playerId: string; ready: boolean }) {
+  return requestJson<{ ok: true; isReady: boolean }>("/quiz/ready", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function kickPlayer(input: { roomCode: string; playerId: string; targetPlayerId: string }) {
+  return requestJson<{ ok: true; playerCount: number }>("/quiz/kick", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function leaveRoom(input: { roomCode: string; playerId: string }) {
+  return requestJson<{ ok: true; playerCount: number; hostPlayerId: string | null }>("/quiz/leave", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function replayRoom(input: { roomCode: string; playerId: string }) {
+  return requestJson<{
+    ok: true;
+    roomCode: string;
+    state: string;
+    playerCount: number;
+    categoryQuery: string;
+  }>("/quiz/replay", {
     method: "POST",
     body: JSON.stringify(input),
   });
