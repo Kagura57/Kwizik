@@ -4,6 +4,9 @@ import { logEvent } from "../lib/logger";
 import type { MusicTrack } from "./music-types";
 import { resolveTracksToPlayableYouTube } from "./TrackSourceResolver";
 import { musicAccountRepository, type MusicProvider } from "../repositories/MusicAccountRepository";
+import { resolvedTrackRepository } from "../repositories/ResolvedTrackRepository";
+import { userLikedTrackRepository, type LibraryProvider } from "../repositories/UserLikedTrackRepository";
+import { buildSyncedUserLibraryTrackPool } from "./MusicAggregator";
 
 type SpotifyTokenRefreshPayload = {
   access_token?: string;
@@ -14,10 +17,12 @@ type SpotifyTokenRefreshPayload = {
 
 type SpotifySavedTracksPayload = {
   items?: Array<{
+    added_at?: string;
     track?: {
       id?: string;
       name?: string;
       artists?: Array<{ name?: string }>;
+      duration_ms?: number;
       preview_url?: string | null;
       external_urls?: { spotify?: string };
     };
@@ -45,6 +50,8 @@ type DeezerTracksPayload = {
     id?: number;
     title?: string;
     artist?: { name?: string };
+    duration?: number;
+    time_add?: number;
     preview?: string | null;
   }>;
   total?: number;
@@ -76,6 +83,21 @@ export type UserLibraryPlaylist = {
   trackCount: number | null;
   sourceQuery: string;
 };
+
+type SyncedLibrarySourceTrack = {
+  provider: LibraryProvider;
+  sourceId: string;
+  title: string;
+  artist: string;
+  durationMs: number | null;
+  addedAtMs: number;
+};
+
+function parseDateMs(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
 
 function readSpotifyCredentials() {
   const clientId = process.env.SPOTIFY_CLIENT_ID?.trim() ?? "";
@@ -187,6 +209,9 @@ async function fetchSpotifyLikedTracksRaw(userId: string, limit: number) {
     url.searchParams.set("limit", String(pageLimit));
     url.searchParams.set("offset", String(offset));
     let payload: SpotifySavedTracksPayload | null = null;
+    let responseStatus: number | null = null;
+    let responseItemCount: number | null = null;
+    let firstItemJson: string | null = null;
     try {
       payload = (await fetchJsonWithTimeout(
         url,
@@ -202,6 +227,17 @@ async function fetchSpotifyLikedTracksRaw(userId: string, limit: number) {
             provider: "spotify",
             route: "user_saved_tracks",
           },
+          onSuccess: ({ status, data }) => {
+            responseStatus = status;
+            const items = Array.isArray((data as SpotifySavedTracksPayload | null)?.items)
+              ? ((data as SpotifySavedTracksPayload).items ?? [])
+              : [];
+            responseItemCount = items.length;
+            firstItemJson = items.length > 0 ? JSON.stringify(items[0], null, 2) : null;
+          },
+          onHttpError: ({ status }) => {
+            responseStatus = status;
+          },
         },
       )) as SpotifySavedTracksPayload | null;
     } catch (error) {
@@ -214,6 +250,14 @@ async function fetchSpotifyLikedTracksRaw(userId: string, limit: number) {
       });
       throw error;
     }
+    console.log("========== [spotify-liked-debug] /me/tracks raw_response ==========", {
+      userId,
+      offset,
+      pageLimit,
+      status: responseStatus,
+      itemCount: responseItemCount,
+      firstItem: firstItemJson,
+    });
 
     const payloadItems = Array.isArray(payload?.items) ? payload.items : [];
     const sampleItems = payloadItems.slice(0, 3).map((item) => ({
@@ -231,7 +275,7 @@ async function fetchSpotifyLikedTracksRaw(userId: string, limit: number) {
       hasNext: Boolean(payload?.next),
       sampleItems,
     });
-    const page = payload?.items ?? [];
+    const page = Array.isArray(payload?.items) ? payload.items : [];
     if (typeof payload?.total === "number" && Number.isFinite(payload.total)) {
       total = payload.total;
     }
@@ -327,6 +371,134 @@ async function fetchDeezerLikedTracksRaw(userId: string, limit: number) {
   };
 }
 
+async function fetchSpotifyLikedTracksForSync(userId: string) {
+  const link = await getValidSpotifyLink(userId);
+  if (!link?.accessToken) {
+    return { tracks: [] as SyncedLibrarySourceTrack[], total: null as number | null };
+  }
+
+  const tracks: SyncedLibrarySourceTrack[] = [];
+  let total: number | null = null;
+  let offset = 0;
+  const maxTracks = 10_000;
+
+  while (tracks.length < maxTracks) {
+    const pageLimit = Math.min(50, maxTracks - tracks.length);
+    const url = new URL("https://api.spotify.com/v1/me/tracks");
+    url.searchParams.set("limit", String(pageLimit));
+    url.searchParams.set("offset", String(offset));
+    const payload = (await fetchJsonWithTimeout(
+      url,
+      {
+        headers: {
+          authorization: `Bearer ${link.accessToken}`,
+        },
+      },
+      {
+        timeoutMs: 8_000,
+        retries: 1,
+        context: {
+          provider: "spotify",
+          route: "user_saved_tracks_sync",
+        },
+      },
+    )) as SpotifySavedTracksPayload | null;
+
+    if (typeof payload?.total === "number" && Number.isFinite(payload.total)) {
+      total = payload.total;
+    }
+    const page = Array.isArray(payload?.items) ? payload.items : [];
+    if (page.length <= 0) break;
+
+    for (const item of page) {
+      const id = item.track?.id?.trim() ?? "";
+      const title = item.track?.name?.trim() ?? "";
+      const artist = item.track?.artists?.[0]?.name?.trim() ?? "";
+      if (!id || !title || !artist) continue;
+      const durationMs =
+        typeof item.track?.duration_ms === "number" && Number.isFinite(item.track.duration_ms)
+          ? Math.max(0, Math.round(item.track.duration_ms))
+          : null;
+      tracks.push({
+        provider: "spotify",
+        sourceId: id,
+        title,
+        artist,
+        durationMs,
+        addedAtMs: parseDateMs(item.added_at) ?? Date.now(),
+      });
+      if (tracks.length >= maxTracks) break;
+    }
+
+    if (!payload?.next || page.length < pageLimit) break;
+    offset += pageLimit;
+  }
+
+  return { tracks, total };
+}
+
+async function fetchDeezerLikedTracksForSync(userId: string) {
+  const link = await musicAccountRepository.getLink(userId, "deezer");
+  if (!link?.accessToken) {
+    return { tracks: [] as SyncedLibrarySourceTrack[], total: null as number | null };
+  }
+  const tracks: SyncedLibrarySourceTrack[] = [];
+  let total: number | null = null;
+  let nextUrl: URL | null = new URL("https://api.deezer.com/user/me/tracks");
+  nextUrl.searchParams.set("access_token", link.accessToken);
+  nextUrl.searchParams.set("limit", "50");
+  const maxTracks = 10_000;
+
+  while (nextUrl && tracks.length < maxTracks) {
+    const payload = (await fetchJsonWithTimeout(
+      nextUrl,
+      {},
+      {
+        timeoutMs: 8_000,
+        retries: 1,
+        context: {
+          provider: "deezer",
+          route: "user_saved_tracks_sync",
+        },
+      },
+    )) as DeezerTracksPayload | null;
+    if (typeof payload?.total === "number" && Number.isFinite(payload.total)) {
+      total = payload.total;
+    }
+    for (const item of payload?.data ?? []) {
+      const id = typeof item.id === "number" ? String(item.id) : "";
+      const title = item.title?.trim() ?? "";
+      const artist = item.artist?.name?.trim() ?? "";
+      if (!id || !title || !artist) continue;
+      const durationMs =
+        typeof item.duration === "number" && Number.isFinite(item.duration)
+          ? Math.max(0, Math.round(item.duration * 1000))
+          : null;
+      const addedAtMs =
+        typeof item.time_add === "number" && Number.isFinite(item.time_add)
+          ? Math.max(0, Math.round(item.time_add * 1000))
+          : Date.now();
+      tracks.push({
+        provider: "deezer",
+        sourceId: id,
+        title,
+        artist,
+        durationMs,
+        addedAtMs,
+      });
+      if (tracks.length >= maxTracks) break;
+    }
+    if (!payload?.next || tracks.length >= maxTracks) break;
+    try {
+      nextUrl = new URL(payload.next);
+    } catch {
+      nextUrl = null;
+    }
+  }
+
+  return { tracks, total };
+}
+
 function dedupeTracks(tracks: MusicTrack[], size: number) {
   const seen = new Set<string>();
   const deduped: MusicTrack[] = [];
@@ -355,38 +527,89 @@ export async function fetchUserLikedTracksForProviders(input: {
   size: number;
 }) {
   const safeSize = Math.max(1, Math.min(input.size, 120));
-  const merged: MusicTrack[] = [];
-  let fetchedCount = 0;
-  for (const provider of input.providers) {
-    const result = await fetchUserLikedTracks(input.userId, provider, Math.max(20, safeSize * 2));
-    console.log("[spotify-liked-debug] provider_fetch_result", {
-      userId: input.userId,
-      provider,
-      fetchedTracks: result.tracks.length,
-      providerTotal: result.total,
-    });
-    fetchedCount += result.tracks.length;
-    merged.push(...result.tracks);
-  }
+  const providers = input.providers.filter(
+    (provider): provider is LibraryProvider => provider === "spotify" || provider === "deezer",
+  );
+  const merged = await buildSyncedUserLibraryTrackPool({
+    userId: input.userId,
+    providers,
+    size: Math.max(30, safeSize * 3),
+  });
+  const fetchedCount = merged.length;
   const deduped = dedupeTracks(merged, Math.max(safeSize * 2, safeSize));
   const playable = await resolveTracksToPlayableYouTube(deduped, safeSize, "liked songs");
-  console.log("[spotify-liked-debug] youtube_resolution_result", {
-    userId: input.userId,
-    providers: input.providers,
-    requestedSize: safeSize,
-    mergedCount: merged.length,
-    dedupedCount: deduped.length,
-    playableCount: playable.length,
-  });
-  logEvent("info", "user_liked_tracks_resolved", {
+  logEvent("info", "user_liked_tracks_resolved_from_synced_library", {
     userId,
-    providers: input.providers,
+    providers,
     requestedSize: safeSize,
-    fetchedCount,
+    syncedFetchedCount: fetchedCount,
     dedupedCount: deduped.length,
     playableCount: playable.length,
   });
   return playable;
+}
+
+export async function syncUserLikedTracksLibrary(input: {
+  userId: string;
+  provider: LibraryProvider;
+}) {
+  const provider = input.provider;
+  const userId = input.userId.trim();
+  if (!userId) {
+    throw new Error("INVALID_USER_ID");
+  }
+
+  const fetched =
+    provider === "spotify"
+      ? await fetchSpotifyLikedTracksForSync(userId)
+      : await fetchDeezerLikedTracksForSync(userId);
+  const uniqueBySource = new Map<string, SyncedLibrarySourceTrack>();
+  for (const track of fetched.tracks) {
+    const key = `${track.provider}:${track.sourceId}`;
+    if (!uniqueBySource.has(key)) {
+      uniqueBySource.set(key, track);
+    }
+  }
+  const normalized = [...uniqueBySource.values()];
+
+  await resolvedTrackRepository.upsertSourceMetadataMany(
+    normalized.map((track) => ({
+      provider: track.provider,
+      sourceId: track.sourceId,
+      title: track.title,
+      artist: track.artist,
+      durationMs: track.durationMs,
+    })),
+  );
+
+  const replaced = await userLikedTrackRepository.replaceForUserProvider({
+    userId,
+    provider,
+    tracks: normalized.map((track) => ({
+      sourceId: track.sourceId,
+      addedAtMs: track.addedAtMs,
+      title: track.title,
+      artist: track.artist,
+      durationMs: track.durationMs,
+    })),
+  });
+
+  logEvent("info", "user_liked_library_synced", {
+    userId,
+    provider,
+    fetchedCount: fetched.tracks.length,
+    uniqueCount: normalized.length,
+    savedCount: replaced.savedCount,
+    providerTotal: fetched.total,
+  });
+
+  return {
+    provider,
+    fetchedCount: fetched.tracks.length,
+    uniqueCount: normalized.length,
+    savedCount: replaced.savedCount,
+    providerTotal: fetched.total,
+  };
 }
 
 export async function fetchUserPlaylists(

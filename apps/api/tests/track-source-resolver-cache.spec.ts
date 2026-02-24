@@ -5,6 +5,7 @@ import * as spotifyModule from "../src/routes/music/spotify";
 import * as youtubeModule from "../src/routes/music/youtube";
 import * as aggregatorModule from "../src/services/MusicAggregator";
 import { resolveTrackPoolFromSource } from "../src/services/TrackSourceResolver";
+import { resolvedTrackRepository } from "../src/repositories/ResolvedTrackRepository";
 
 let fetchSpotifyPlaylistTracksMock: ReturnType<typeof vi.fn>;
 let fetchDeezerPlaylistTracksMock: ReturnType<typeof vi.fn>;
@@ -14,6 +15,7 @@ let buildTrackPoolMock: ReturnType<typeof vi.fn>;
 describe("track source resolver cache behavior", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    resolvedTrackRepository.clearMemory();
 
     fetchSpotifyPlaylistTracksMock = vi
       .spyOn(spotifyModule, "fetchSpotifyPlaylistTracks")
@@ -47,6 +49,48 @@ describe("track source resolver cache behavior", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    resolvedTrackRepository.clearMemory();
+  });
+
+  it("uses persistent resolved-track cache before calling youtube search", async () => {
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([
+      {
+        provider: "spotify",
+        id: "sp-db-cache-1",
+        title: "DB Cache Song",
+        artist: "DB Cache Artist",
+        previewUrl: null,
+        sourceUrl: "https://open.spotify.com/track/sp-db-cache-1",
+      },
+    ]);
+
+    const cacheGetSpy = vi
+      .spyOn(resolvedTrackRepository, "getBySource")
+      .mockResolvedValue({
+        provider: "spotify",
+        sourceId: "sp-db-cache-1",
+        title: "DB Cache Song",
+        artist: "DB Cache Artist",
+        youtubeVideoId: "yt-db-cache-1",
+        durationMs: 201_000,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+      });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "spotify:playlist:cache123",
+      size: 1,
+    });
+
+    expect(cacheGetSpy).toHaveBeenCalledWith("spotify", "sp-db-cache-1");
+    expect(searchYouTubeMock).not.toHaveBeenCalled();
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      provider: "youtube",
+      id: "yt-db-cache-1",
+      title: "DB Cache Song",
+      artist: "DB Cache Artist",
+    });
   });
 
   it("does not cache failed youtube resolutions as permanent null", async () => {
@@ -323,5 +367,49 @@ describe("track source resolver cache behavior", () => {
 
     expect(resolved).toHaveLength(10);
     expect(new Set(resolved.map((track) => track.id)).size).toBe(10);
+  });
+
+  it("limits direct track resolution concurrency to chunk size", async () => {
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([]);
+    fetchDeezerPlaylistTracksMock.mockResolvedValue(
+      Array.from({ length: 12 }, (_, index) => ({
+        provider: "deezer" as const,
+        id: `dz-chunk-${index + 1}`,
+        title: `Chunk Song ${index + 1}`,
+        artist: "Chunk Artist",
+        previewUrl: `https://cdn.example/chunk-${index + 1}.mp3`,
+        sourceUrl: `https://www.deezer.com/track/chunk-${index + 1}`,
+      })),
+    );
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight = Math.max(0, inFlight - 1);
+      const match = query.match(/chunk song (\d+)/i);
+      if (!match) return [];
+      const id = `yt-chunk-${match[1]}`;
+      return [
+        {
+          provider: "youtube",
+          id,
+          title: `Chunk Song ${match[1]} Official Audio`,
+          artist: "Chunk Artist",
+          previewUrl: null,
+          sourceUrl: `https://www.youtube.com/watch?v=${id}`,
+        },
+      ];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "deezer:playlist:3155776842",
+      size: 10,
+    });
+
+    expect(resolved).toHaveLength(10);
+    expect(maxInFlight).toBeLessThanOrEqual(5);
   });
 });

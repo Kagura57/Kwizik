@@ -94,6 +94,14 @@ const MCQ_NO_REPEAT_DISTRACTOR_TRACKS: MusicTrack[] = [
   },
 ];
 
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("RoomStore gameplay progression", () => {
   it("runs countdown -> playing -> reveal -> leaderboard -> results and applies streak scoring", async () => {
     let nowMs = 0;
@@ -620,6 +628,61 @@ describe("RoomStore gameplay progression", () => {
       ok: true,
       sourceMode: "players_liked",
     });
+  });
+
+  it("exposes resolving state and updates merged/playable counts after players_liked sync", async () => {
+    const likedTracks: MusicTrack[] = Array.from({ length: 12 }, (_, index) => ({
+      provider: "youtube",
+      id: `sync-${index + 1}`,
+      title: `Sync Track ${index + 1}`,
+      artist: `Sync Artist ${index + 1}`,
+      previewUrl: null,
+      sourceUrl: `https://www.youtube.com/watch?v=sync-${index + 1}`,
+    }));
+    const pendingLikedFetch = deferred<MusicTrack[]>();
+    const store = new RoomStore({
+      getPlayerLikedTracks: async () => await pendingLikedFetch.promise,
+      config: {
+        maxRounds: 10,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoomAsUser(
+      created.roomCode,
+      "Host",
+      "user-host",
+      { spotify: { status: "linked", estimatedTrackCount: 120 } },
+    );
+    if ("status" in host) return;
+
+    const modeSet = store.setRoomSourceMode(created.roomCode, host.playerId, "players_liked");
+    expect(modeSet.status).toBe("ok");
+    const contribution = store.setPlayerLibraryContribution(
+      created.roomCode,
+      host.playerId,
+      "spotify",
+      true,
+    );
+    expect(contribution.status).toBe("ok");
+
+    const syncingSnapshot = store.roomState(created.roomCode);
+    expect(syncingSnapshot?.isResolvingTracks).toBe(true);
+    expect(syncingSnapshot?.poolBuild.status).toBe("building");
+    expect(syncingSnapshot?.poolBuild.mergedTracksCount).toBe(0);
+    expect(syncingSnapshot?.poolBuild.playableTracksCount).toBe(0);
+
+    pendingLikedFetch.resolve(likedTracks);
+    let resolvedSnapshot = store.roomState(created.roomCode);
+    for (let attempt = 0; attempt < 30 && resolvedSnapshot?.isResolvingTracks; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      resolvedSnapshot = store.roomState(created.roomCode);
+    }
+
+    expect(resolvedSnapshot?.isResolvingTracks).toBe(false);
+    expect(resolvedSnapshot?.poolBuild.status).toBe("ready");
+    expect(resolvedSnapshot?.poolBuild.mergedTracksCount).toBe(12);
+    expect(resolvedSnapshot?.poolBuild.playableTracksCount).toBe(12);
   });
 
   it("blocks players_liked mode start when no linked contributor is opted-in", async () => {

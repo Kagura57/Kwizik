@@ -1110,6 +1110,38 @@ select option {
   font-size: clamp(1.1rem, 2vw, 1.35rem);
 }
 
+.resolving-tracks-banner {
+  border: 1px solid rgba(110, 229, 198, 0.45);
+  border-radius: 12px;
+  background: rgba(40, 181, 145, 0.12);
+  padding: 10px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.resolving-tracks-banner strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #d9fff1;
+}
+
+.resolving-tracks-spinner {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 2px solid rgba(217, 255, 241, 0.35);
+  border-top-color: rgba(217, 255, 241, 1);
+  border-radius: 999px;
+  animation: resolving-spin 0.8s linear infinite;
+}
+
+@keyframes resolving-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .waiting-actions {
   display: flex;
   gap: 10px;

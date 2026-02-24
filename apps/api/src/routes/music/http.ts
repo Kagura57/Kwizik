@@ -8,6 +8,12 @@ type FetchJsonOptions = {
   maxTotalRetryMs?: number | null;
   maxRetryAfterMs?: number | null;
   context?: Record<string, unknown>;
+  onSuccess?: (details: {
+    status: number;
+    data: unknown;
+    attempt: number;
+    retries: number;
+  }) => void;
   onHttpError?: (details: {
     status: number;
     retryAfterMs: number | null;
@@ -19,7 +25,8 @@ type FetchJsonOptions = {
 };
 
 type NormalizedFetchJsonOptions =
-  Required<Omit<FetchJsonOptions, "onHttpError">> & Pick<FetchJsonOptions, "onHttpError">;
+  Required<Omit<FetchJsonOptions, "onHttpError" | "onSuccess">> &
+  Pick<FetchJsonOptions, "onHttpError" | "onSuccess">;
 
 function normalizeOptions(timeoutOrOptions?: number | FetchJsonOptions): NormalizedFetchJsonOptions {
   if (typeof timeoutOrOptions === "number") {
@@ -30,6 +37,7 @@ function normalizeOptions(timeoutOrOptions?: number | FetchJsonOptions): Normali
       maxTotalRetryMs: null,
       maxRetryAfterMs: null,
       context: {},
+      onSuccess: undefined,
       onHttpError: undefined,
     };
   }
@@ -47,6 +55,7 @@ function normalizeOptions(timeoutOrOptions?: number | FetchJsonOptions): Normali
         ? timeoutOrOptions.maxRetryAfterMs
         : null,
     context: timeoutOrOptions?.context ?? {},
+    onSuccess: timeoutOrOptions?.onSuccess,
     onHttpError: timeoutOrOptions?.onHttpError,
   };
 }
@@ -153,6 +162,13 @@ export async function fetchJsonWithTimeout(
       });
 
       if (response.ok) {
+        const data = (await response.json()) as unknown;
+        options.onSuccess?.({
+          status: response.status,
+          data,
+          attempt: attempt + 1,
+          retries: options.retries + 1,
+        });
         if (provider) {
           recordProviderMetric({
             provider,
@@ -162,7 +178,7 @@ export async function fetchJsonWithTimeout(
             attempts: attempt + 1,
           });
         }
-        return (await response.json()) as unknown;
+        return data;
       }
 
       const retryAfterMsRaw = response.status === 429

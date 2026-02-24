@@ -103,6 +103,49 @@ create table if not exists provider_tracks (
   unique (provider, provider_track_id)
 );
 
+create table if not exists resolved_tracks (
+  id bigserial primary key,
+  provider text not null,
+  source_id text not null,
+  title text not null,
+  artist text not null,
+  youtube_video_id text,
+  duration_ms integer,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (provider, source_id)
+);
+
+create table if not exists user_liked_tracks (
+  id bigserial primary key,
+  user_id text not null references "user"(id) on delete cascade,
+  provider text not null check (provider in ('spotify', 'deezer')),
+  source_id text not null,
+  added_at timestamptz not null default now(),
+  unique (user_id, provider, source_id)
+);
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'resolved_tracks'
+      and column_name = 'source_track_id'
+  ) and not exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'resolved_tracks'
+      and column_name = 'source_id'
+  ) then
+    alter table resolved_tracks rename column source_track_id to source_id;
+  end if;
+end $$;
+
+alter table resolved_tracks alter column youtube_video_id drop not null;
+
 create table if not exists music_account_links (
   id bigserial primary key,
   user_id text not null references "user"(id) on delete cascade,
@@ -122,6 +165,12 @@ create index if not exists idx_match_participants_match_id on match_participants
 create index if not exists idx_rounds_match_id on rounds(match_id);
 create index if not exists idx_round_submissions_round_id on round_submissions(round_id);
 create index if not exists idx_music_account_links_user_id on music_account_links(user_id);
+create index if not exists idx_resolved_tracks_provider_source_id
+  on resolved_tracks(provider, source_id);
+create index if not exists idx_user_liked_tracks_user_provider_added_at
+  on user_liked_tracks(user_id, provider, added_at desc);
+create index if not exists idx_user_liked_tracks_provider_source_id
+  on user_liked_tracks(provider, source_id);
 create index if not exists idx_session_user_id on session("userId");
 create index if not exists idx_account_user_id on account("userId");
 create index if not exists idx_verification_identifier on verification(identifier);

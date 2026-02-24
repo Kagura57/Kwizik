@@ -7,6 +7,7 @@ import { providerMetricsSnapshot } from "./lib/provider-metrics";
 import { authRoutes } from "./routes/auth";
 import { accountRoutes } from "./routes/account";
 import { musicSearchRoute } from "./routes/music/search";
+import { musicLibraryRoutes } from "./routes/music/library";
 import { musicSourceRoutes } from "./routes/music/source";
 import { spotifyAuthDiagnostics } from "./routes/music/spotify-auth";
 import { quizRoutes } from "./routes/quiz";
@@ -107,6 +108,7 @@ export const app = new Elysia()
   .use(authRoutes)
   .use(accountRoutes)
   .use(musicSearchRoute)
+  .use(musicLibraryRoutes)
   .use(musicSourceRoutes)
   .use(quizRoutes)
   .use(realtimeRoutes)

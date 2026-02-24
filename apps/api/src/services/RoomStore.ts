@@ -8,7 +8,7 @@ import { RoomManager } from "./RoomManager";
 import { trackCache } from "./TrackCache";
 import type { MusicTrack } from "./music-types";
 import { SPOTIFY_RATE_LIMITED_ERROR, spotifyPlaylistRateLimitRetryAfterMs } from "../routes/music/spotify";
-import { fetchUserLikedTracksForProviders } from "./UserMusicLibrary";
+import { fetchUserLikedTracksForProviders as fetchSyncedUserLikedTracksForProviders } from "./UserMusicLibrary";
 
 type RoundMode = "mcq" | "text";
 type RoomSourceMode = "public_playlist" | "players_liked";
@@ -65,10 +65,13 @@ type RoomSession = {
   poolBuild: {
     status: PoolBuildStatus;
     contributorsCount: number;
+    mergedTracksCount: number;
     playableTracksCount: number;
     lastBuiltAtMs: number | null;
     errorCode: string | null;
   };
+  isResolvingTracks: boolean;
+  trackResolutionJobsInFlight: number;
   categoryQuery: string;
   totalRounds: number;
   roundModes: RoundMode[];
@@ -265,7 +268,7 @@ export class RoomStore {
     this.now = dependencies.now ?? (() => Date.now());
     this.getTrackPool = dependencies.getTrackPool ?? ((categoryQuery, size) =>
       trackCache.getOrBuild(categoryQuery, size));
-    this.getPlayerLikedTracks = dependencies.getPlayerLikedTracks ?? fetchUserLikedTracksForProviders;
+    this.getPlayerLikedTracks = dependencies.getPlayerLikedTracks ?? fetchSyncedUserLikedTracksForProviders;
     this.config = {
       ...DEFAULT_ROUND_CONFIG,
       ...(dependencies.config ?? {}),
@@ -313,6 +316,7 @@ export class RoomStore {
 
   private canStartWaitingSession(session: RoomSession) {
     if (session.manager.state() !== "waiting") return false;
+    if (session.isResolvingTracks) return false;
     const players = this.sortedPlayers(session);
     const readyCount = players.filter((player) => player.isReady).length;
     const allReady = players.length > 0 && readyCount === players.length;
@@ -575,6 +579,17 @@ export class RoomStore {
     };
   }
 
+  private async resolveTracksWithFlag<T>(session: RoomSession, task: () => Promise<T>) {
+    session.trackResolutionJobsInFlight += 1;
+    session.isResolvingTracks = true;
+    try {
+      return await task();
+    } finally {
+      session.trackResolutionJobsInFlight = Math.max(0, session.trackResolutionJobsInFlight - 1);
+      session.isResolvingTracks = session.trackResolutionJobsInFlight > 0;
+    }
+  }
+
   private startPlayersLikedPoolBuild(session: RoomSession) {
     if (session.sourceMode !== "players_liked") return;
     if (this.roomLikedPoolJobs.has(session.roomCode)) {
@@ -586,36 +601,42 @@ export class RoomStore {
     const desiredSize = Math.max(session.playersLikedRules.minTotalTracks, this.config.maxRounds);
     this.roomLikedPoolRebuildRequested.delete(roomCode);
     session.poolBuild.status = "building";
+    session.poolBuild.mergedTracksCount = 0;
+    session.poolBuild.playableTracksCount = 0;
     session.poolBuild.errorCode = null;
     const buildJob = (async () => {
-      try {
-        const built = await this.buildPlayersLikedTrackPool(session, desiredSize);
-        if (session.sourceMode !== "players_liked") {
-          return;
-        }
-        session.playersLikedPool = [...built.tracks, ...built.distractorTracks];
-        session.poolBuild.status = built.tracks.length > 0 ? "ready" : "failed";
-        session.poolBuild.contributorsCount = built.contributorsCount;
-        session.poolBuild.playableTracksCount = built.candidateCount;
-        session.poolBuild.lastBuiltAtMs = this.now();
-        session.poolBuild.errorCode = built.tracks.length > 0 ? null : "NO_TRACKS_FOUND";
-      } catch (error) {
-        session.playersLikedPool = [];
-        session.poolBuild.status = "failed";
-        session.poolBuild.contributorsCount = this.playersLikedContributors(session).length;
-        session.poolBuild.playableTracksCount = 0;
-        session.poolBuild.lastBuiltAtMs = this.now();
-        session.poolBuild.errorCode = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-      } finally {
-        this.stopPlayersLikedPoolJob(roomCode);
-        if (this.roomLikedPoolRebuildRequested.has(roomCode)) {
-          this.roomLikedPoolRebuildRequested.delete(roomCode);
-          const latest = this.rooms.get(roomCode);
-          if (latest && latest.sourceMode === "players_liked" && latest.manager.state() === "waiting") {
-            this.startPlayersLikedPoolBuild(latest);
+      await this.resolveTracksWithFlag(session, async () => {
+        try {
+          const built = await this.buildPlayersLikedTrackPool(session, desiredSize);
+          if (session.sourceMode !== "players_liked") {
+            return;
+          }
+          session.playersLikedPool = [...built.tracks, ...built.distractorTracks];
+          session.poolBuild.status = built.tracks.length > 0 ? "ready" : "failed";
+          session.poolBuild.contributorsCount = built.contributorsCount;
+          session.poolBuild.mergedTracksCount = built.playableTotal;
+          session.poolBuild.playableTracksCount = built.candidateCount;
+          session.poolBuild.lastBuiltAtMs = this.now();
+          session.poolBuild.errorCode = built.tracks.length > 0 ? null : "NO_TRACKS_FOUND";
+        } catch (error) {
+          session.playersLikedPool = [];
+          session.poolBuild.status = "failed";
+          session.poolBuild.contributorsCount = this.playersLikedContributors(session).length;
+          session.poolBuild.mergedTracksCount = 0;
+          session.poolBuild.playableTracksCount = 0;
+          session.poolBuild.lastBuiltAtMs = this.now();
+          session.poolBuild.errorCode = error instanceof Error ? error.message : "UNKNOWN_ERROR";
+        } finally {
+          this.stopPlayersLikedPoolJob(roomCode);
+          if (this.roomLikedPoolRebuildRequested.has(roomCode)) {
+            this.roomLikedPoolRebuildRequested.delete(roomCode);
+            const latest = this.rooms.get(roomCode);
+            if (latest && latest.sourceMode === "players_liked" && latest.manager.state() === "waiting") {
+              this.startPlayersLikedPoolBuild(latest);
+            }
           }
         }
-      }
+      });
     })();
 
     this.roomLikedPoolJobs.set(roomCode, buildJob);
@@ -820,10 +841,13 @@ export class RoomStore {
       poolBuild: {
         status: "idle",
         contributorsCount: 0,
+        mergedTracksCount: 0,
         playableTracksCount: 0,
         lastBuiltAtMs: null,
         errorCode: null,
       },
+      isResolvingTracks: false,
+      trackResolutionJobsInFlight: 0,
       categoryQuery: options.categoryQuery?.trim() ?? "",
       totalRounds: 0,
       roundModes: [],
@@ -948,10 +972,13 @@ export class RoomStore {
     session.poolBuild = {
       status: "idle",
       contributorsCount: 0,
+      mergedTracksCount: 0,
       playableTracksCount: 0,
       lastBuiltAtMs: null,
       errorCode: null,
     };
+    session.isResolvingTracks = false;
+    session.trackResolutionJobsInFlight = 0;
     session.categoryQuery = normalized;
     this.resetReadyStates(session);
     return { status: "ok" as const, categoryQuery: normalized };
@@ -973,10 +1000,13 @@ export class RoomStore {
       session.poolBuild = {
         status: "idle",
         contributorsCount: 0,
+        mergedTracksCount: 0,
         playableTracksCount: 0,
         lastBuiltAtMs: null,
         errorCode: null,
       };
+      session.isResolvingTracks = false;
+      session.trackResolutionJobsInFlight = 0;
       if (session.publicPlaylistSelection?.sourceQuery) {
         session.categoryQuery = session.publicPlaylistSelection.sourceQuery;
       } else if (session.categoryQuery === "players:liked") {
@@ -1026,10 +1056,13 @@ export class RoomStore {
     session.poolBuild = {
       status: "idle",
       contributorsCount: 0,
+      mergedTracksCount: 0,
       playableTracksCount: 0,
       lastBuiltAtMs: null,
       errorCode: null,
     };
+    session.isResolvingTracks = false;
+    session.trackResolutionJobsInFlight = 0;
     session.categoryQuery = sourceQuery;
     this.resetReadyStates(session);
     return {
@@ -1055,6 +1088,8 @@ export class RoomStore {
     player.library.includeInPool[provider] = includeInPool;
     if (session.sourceMode === "players_liked") {
       session.poolBuild.status = "building";
+      session.poolBuild.mergedTracksCount = 0;
+      session.poolBuild.playableTracksCount = 0;
       session.poolBuild.errorCode = null;
       this.startPlayersLikedPoolBuild(session);
     }
@@ -1092,6 +1127,8 @@ export class RoomStore {
 
     if (session.sourceMode === "players_liked") {
       session.poolBuild.status = "building";
+      session.poolBuild.mergedTracksCount = 0;
+      session.poolBuild.playableTracksCount = 0;
       session.poolBuild.errorCode = null;
       this.startPlayersLikedPoolBuild(session);
     }
@@ -1182,10 +1219,13 @@ export class RoomStore {
     session.poolBuild = {
       status: "idle",
       contributorsCount: 0,
+      mergedTracksCount: 0,
       playableTracksCount: 0,
       lastBuiltAtMs: null,
       errorCode: null,
     };
+    session.isResolvingTracks = false;
+    session.trackResolutionJobsInFlight = 0;
     session.categoryQuery = "";
     this.resetReadyStates(session);
 
@@ -1304,9 +1344,12 @@ export class RoomStore {
       cleanTotal: number;
     };
     try {
-      startPoolStats = session.sourceMode === "players_liked"
-        ? await this.buildPlayersLikedTrackPool(session, poolSize)
-        : await this.buildStartTrackPool(resolvedQuery, poolSize);
+      startPoolStats = await this.resolveTracksWithFlag(
+        session,
+        async () => session.sourceMode === "players_liked"
+          ? await this.buildPlayersLikedTrackPool(session, poolSize)
+          : await this.buildStartTrackPool(resolvedQuery, poolSize),
+      );
     } catch (error) {
       if (error instanceof Error && error.message === SPOTIFY_RATE_LIMITED_ERROR) {
         return {
@@ -1352,6 +1395,7 @@ export class RoomStore {
       session.playersLikedPool = [...startPoolStats.tracks, ...startPoolStats.distractorTracks];
       session.poolBuild.status = startPoolStats.tracks.length > 0 ? "ready" : "failed";
       session.poolBuild.contributorsCount = this.playersLikedContributors(session).length;
+      session.poolBuild.mergedTracksCount = startPoolStats.playableTotal;
       session.poolBuild.playableTracksCount = startPoolStats.candidateCount;
       session.poolBuild.lastBuiltAtMs = this.now();
       session.poolBuild.errorCode = startPoolStats.tracks.length > 0 ? null : "NO_TRACKS_FOUND";
@@ -1572,6 +1616,7 @@ export class RoomStore {
       readyCount,
       allReady,
       canStart,
+      isResolvingTracks: session.isResolvingTracks,
       poolSize: session.trackPool.length,
       categoryQuery: session.categoryQuery,
       sourceMode: session.sourceMode,
@@ -1595,6 +1640,7 @@ export class RoomStore {
       poolBuild: {
         status: session.poolBuild.status,
         contributorsCount: session.poolBuild.contributorsCount,
+        mergedTracksCount: session.poolBuild.mergedTracksCount,
         playableTracksCount: session.poolBuild.playableTracksCount,
         lastBuiltAtMs: session.poolBuild.lastBuiltAtMs,
         errorCode: session.poolBuild.errorCode,

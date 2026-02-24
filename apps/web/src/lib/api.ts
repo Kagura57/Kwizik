@@ -84,6 +84,7 @@ export type RoomState = {
   readyCount: number;
   allReady: boolean;
   canStart: boolean;
+  isResolvingTracks: boolean;
   poolSize: number;
   categoryQuery: string;
   sourceMode: "public_playlist" | "players_liked";
@@ -105,6 +106,7 @@ export type RoomState = {
   poolBuild: {
     status: "idle" | "building" | "ready" | "failed";
     contributorsCount: number;
+    mergedTracksCount: number;
     playableTracksCount: number;
     lastBuiltAtMs: number | null;
     errorCode: string | null;

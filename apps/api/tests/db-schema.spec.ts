@@ -5,6 +5,8 @@ describe("db schema contract", () => {
   it("declares blindtest domain tables", () => {
     expect(DOMAIN_TABLES).toContain("matches");
     expect(DOMAIN_TABLES).toContain("round_submissions");
+    expect(DOMAIN_TABLES).toContain("resolved_tracks");
+    expect(DOMAIN_TABLES).toContain("user_liked_tracks");
   });
 
   it("declares Better Auth core tables", () => {

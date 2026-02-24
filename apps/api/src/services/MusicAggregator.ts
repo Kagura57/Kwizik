@@ -5,6 +5,7 @@ import { searchTidal } from "../routes/music/tidal";
 import { searchYouTube } from "../routes/music/youtube";
 import { logEvent } from "../lib/logger";
 import type { MusicProvider, MusicTrack, ProviderSearchFn } from "./music-types";
+import { userLikedTrackRepository, type LibraryProvider } from "../repositories/UserLikedTrackRepository";
 
 export const PROVIDER_ORDER: MusicProvider[] = [
   "spotify",
@@ -146,4 +147,55 @@ export async function buildTrackPool(categoryQuery: string, size = 8) {
     targetFallbackCount: safeSize,
   });
   return aggregated.fallback;
+}
+
+function sourceUrlForProviderTrack(provider: LibraryProvider, sourceId: string) {
+  if (provider === "spotify") {
+    return `https://open.spotify.com/track/${sourceId}`;
+  }
+  return `https://www.deezer.com/track/${sourceId}`;
+}
+
+export async function buildSyncedUserLibraryTrackPool(input: {
+  userId: string;
+  providers: LibraryProvider[];
+  size: number;
+}) {
+  const safeSize = Math.max(1, Math.min(input.size, 400));
+  const rows = await userLikedTrackRepository.listForUsers({
+    userIds: [input.userId],
+    providers: input.providers,
+    limit: safeSize,
+  });
+
+  const tracks: MusicTrack[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const signature = `${row.title.toLowerCase()}::${row.artist.toLowerCase()}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    tracks.push({
+      provider: row.provider,
+      id: row.sourceId,
+      title: row.title,
+      artist: row.artist,
+      durationSec:
+        typeof row.durationMs === "number" && Number.isFinite(row.durationMs)
+          ? Math.max(0, Math.round(row.durationMs / 1000))
+          : null,
+      previewUrl: null,
+      sourceUrl: sourceUrlForProviderTrack(row.provider, row.sourceId),
+    });
+    if (tracks.length >= safeSize) break;
+  }
+
+  logEvent("info", "music_synced_library_pool_loaded", {
+    userId: input.userId,
+    providers: input.providers,
+    requestedSize: safeSize,
+    loadedCount: tracks.length,
+    rawCount: rows.length,
+  });
+
+  return tracks;
 }

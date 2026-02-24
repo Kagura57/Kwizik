@@ -9,6 +9,7 @@ import { searchYouTube } from "../routes/music/youtube";
 import { logEvent } from "../lib/logger";
 import type { MusicTrack } from "./music-types";
 import { buildTrackPool } from "./MusicAggregator";
+import { resolvedTrackRepository } from "../repositories/ResolvedTrackRepository";
 
 export type ParsedTrackSource =
   | {
@@ -245,7 +246,7 @@ const youtubeTrackCache = new Map<string, YouTubeTrackCacheEntry>();
 const YOUTUBE_TRACK_CACHE_TTL_MS = 24 * 60 * 60_000;
 const YOUTUBE_RESOLVE_BUDGET_MAX = 48;
 const YOUTUBE_RESOLVE_BUDGET_MIN = 1;
-const YOUTUBE_RESOLVE_CONCURRENCY = 4;
+const YOUTUBE_RESOLVE_BATCH_SIZE = 5;
 
 function signature(track: Pick<MusicTrack, "title" | "artist">) {
   return `${track.title.trim().toLowerCase()}::${track.artist.trim().toLowerCase()}`;
@@ -284,10 +285,21 @@ type YouTubePlaybackResolution = {
   failedQueries: number;
   emptyResultQueries: number;
   fromCache: boolean;
+  fromPersistentCache: boolean;
   alreadyYouTube: boolean;
   selectedQuery: string | null;
   lastError: string | null;
 };
+
+function durationMsToSec(durationMs: number | null | undefined) {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs)) return null;
+  return Math.max(0, Math.floor(durationMs / 1000));
+}
+
+function secToDurationMs(durationSec: number | null | undefined) {
+  if (typeof durationSec !== "number" || !Number.isFinite(durationSec)) return null;
+  return Math.max(0, Math.round(durationSec * 1000));
+}
 
 async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybackResolution> {
   if (isYouTubeLikeTrack(track)) {
@@ -302,6 +314,7 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
       failedQueries: 0,
       emptyResultQueries: 0,
       fromCache: false,
+      fromPersistentCache: false,
       alreadyYouTube: true,
       selectedQuery: null,
       lastError: null,
@@ -318,12 +331,52 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
         failedQueries: 0,
         emptyResultQueries: 0,
         fromCache: true,
+        fromPersistentCache: false,
         alreadyYouTube: false,
         selectedQuery: null,
         lastError: null,
       };
     }
     youtubeTrackCache.delete(key);
+  }
+
+  let persisted: Awaited<ReturnType<typeof resolvedTrackRepository.getBySource>> = null;
+  try {
+    persisted = await resolvedTrackRepository.getBySource(track.provider, track.id);
+  } catch (error) {
+    logEvent("warn", "resolved_track_cache_lookup_failed", {
+      provider: track.provider,
+      sourceTrackId: track.id,
+      title: track.title,
+      artist: track.artist,
+      error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+    });
+  }
+  if (persisted?.youtubeVideoId) {
+    const cachedResolved = {
+      provider: "youtube" as const,
+      id: persisted.youtubeVideoId,
+      title: track.title,
+      artist: track.artist,
+      durationSec: track.durationSec ?? durationMsToSec(persisted.durationMs),
+      previewUrl: null,
+      sourceUrl: `https://www.youtube.com/watch?v=${persisted.youtubeVideoId}`,
+    } satisfies MusicTrack;
+    youtubeTrackCache.set(key, {
+      track: cachedResolved,
+      expiresAt: Date.now() + YOUTUBE_TRACK_CACHE_TTL_MS,
+    });
+    return {
+      track: cachedResolved,
+      attemptedQueries: 0,
+      failedQueries: 0,
+      emptyResultQueries: 0,
+      fromCache: false,
+      fromPersistentCache: true,
+      alreadyYouTube: false,
+      selectedQuery: null,
+      lastError: null,
+    };
   }
 
   const queryVariants = buildYouTubeQueryVariants(track);
@@ -359,10 +412,30 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
       id: selected.id,
       title: track.title,
       artist: track.artist,
-      durationSec: track.durationSec ?? null,
+      durationSec: track.durationSec ?? selected.durationSec ?? null,
       previewUrl: null,
       sourceUrl: selected.sourceUrl ?? `https://www.youtube.com/watch?v=${selected.id}`,
     } satisfies MusicTrack;
+
+    try {
+      await resolvedTrackRepository.upsert({
+        provider: track.provider,
+        sourceId: track.id,
+        title: track.title,
+        artist: track.artist,
+        youtubeVideoId: selected.id,
+        durationMs: secToDurationMs(resolved.durationSec),
+      });
+    } catch (error) {
+      logEvent("warn", "resolved_track_cache_upsert_failed", {
+        provider: track.provider,
+        sourceTrackId: track.id,
+        title: track.title,
+        artist: track.artist,
+        youtubeVideoId: selected.id,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+      });
+    }
 
     youtubeTrackCache.set(key, {
       track: resolved,
@@ -374,6 +447,7 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
       failedQueries,
       emptyResultQueries,
       fromCache: false,
+      fromPersistentCache: false,
       alreadyYouTube: false,
       selectedQuery: searchQuery,
       lastError,
@@ -386,6 +460,7 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
     failedQueries,
     emptyResultQueries,
     fromCache: false,
+    fromPersistentCache: false,
     alreadyYouTube: false,
     selectedQuery: null,
     lastError,
@@ -406,11 +481,13 @@ async function prioritizeYouTubePlayback(
   let directResolveAttempts = 0;
   let directResolveNoMatch = 0;
   let directResolveFromCache = 0;
+  let directResolveFromPersistentCache = 0;
   let directResolveAlreadyYouTube = 0;
   let directResolveSearchQueryAttempts = 0;
   let directResolveSearchFailures = 0;
   let directResolveSearchEmptyResults = 0;
   const directResolveErrorSamples = new Set<string>();
+  let directResolveBatchCount = 0;
   let queryFillAttempts = 0;
   let queryFillFailures = 0;
   let queryFillCandidateCount = 0;
@@ -428,60 +505,71 @@ async function prioritizeYouTubePlayback(
       ? Math.min(scoped.length, Math.max(YOUTUBE_RESOLVE_BUDGET_MIN, Math.floor(input.maxResolveBudget)))
       : computedBudget;
   const candidates = scoped.slice(0, resolveBudget);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(YOUTUBE_RESOLVE_CONCURRENCY, candidates.length) }, async () => {
-      while (result.length < safeSize) {
-        const index = cursor;
-        cursor += 1;
-        const track = candidates[index];
-        if (!track) break;
-        const key = signature(track);
-        if (seen.has(key)) continue;
-        seen.add(key);
+  for (
+    let batchStart = 0;
+    batchStart < candidates.length && result.length < safeSize;
+    batchStart += YOUTUBE_RESOLVE_BATCH_SIZE
+  ) {
+    const batch = candidates.slice(batchStart, batchStart + YOUTUBE_RESOLVE_BATCH_SIZE);
+    const uniqueBatch: MusicTrack[] = [];
+    for (const track of batch) {
+      const key = signature(track);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueBatch.push(track);
+    }
+    if (uniqueBatch.length <= 0) continue;
+    directResolveBatchCount += 1;
 
+    const batchResults = await Promise.all(
+      uniqueBatch.map(async (track) => {
         directResolveAttempts += 1;
-        let resolution: YouTubePlaybackResolution | null = null;
         try {
-          resolution = await resolveYouTubePlayback(track);
+          const resolution = await resolveYouTubePlayback(track);
+          return { track, resolution };
         } catch (error) {
           logEvent("warn", "track_source_direct_resolve_failed", {
             title: track.title,
             artist: track.artist,
             error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
           });
-          continue;
+          return { track, resolution: null as YouTubePlaybackResolution | null };
         }
+      }),
+    );
 
-        if (!resolution) continue;
+    for (const item of batchResults) {
+      if (result.length >= safeSize) break;
+      const { track, resolution } = item;
+      if (!resolution) continue;
 
-        directResolveSearchQueryAttempts += resolution.attemptedQueries;
-        directResolveSearchFailures += resolution.failedQueries;
-        directResolveSearchEmptyResults += resolution.emptyResultQueries;
-        if (resolution.fromCache) directResolveFromCache += 1;
-        if (resolution.alreadyYouTube) directResolveAlreadyYouTube += 1;
-        if (resolution.lastError && directResolveErrorSamples.size < 5) {
-          directResolveErrorSamples.add(resolution.lastError);
-        }
-
-        if (resolution.track) {
-          youtubeResolved += 1;
-          result.push(resolution.track);
-        } else {
-          directResolveNoMatch += 1;
-          logEvent("debug", "track_source_youtube_track_skipped", {
-            title: track.title,
-            artist: track.artist,
-            reason: "NO_YOUTUBE_MATCH",
-            attemptedQueries: resolution.attemptedQueries,
-            failedQueries: resolution.failedQueries,
-            emptyResultQueries: resolution.emptyResultQueries,
-            lastError: resolution.lastError,
-          });
-        }
+      directResolveSearchQueryAttempts += resolution.attemptedQueries;
+      directResolveSearchFailures += resolution.failedQueries;
+      directResolveSearchEmptyResults += resolution.emptyResultQueries;
+      if (resolution.fromCache) directResolveFromCache += 1;
+      if (resolution.fromPersistentCache) directResolveFromPersistentCache += 1;
+      if (resolution.alreadyYouTube) directResolveAlreadyYouTube += 1;
+      if (resolution.lastError && directResolveErrorSamples.size < 5) {
+        directResolveErrorSamples.add(resolution.lastError);
       }
-    }),
-  );
+
+      if (resolution.track) {
+        youtubeResolved += 1;
+        result.push(resolution.track);
+      } else {
+        directResolveNoMatch += 1;
+        logEvent("debug", "track_source_youtube_track_skipped", {
+          title: track.title,
+          artist: track.artist,
+          reason: "NO_YOUTUBE_MATCH",
+          attemptedQueries: resolution.attemptedQueries,
+          failedQueries: resolution.failedQueries,
+          emptyResultQueries: resolution.emptyResultQueries,
+          lastError: resolution.lastError,
+        });
+      }
+    }
+  }
 
   if (input.allowQueryFill && result.length < safeSize && input.fillQuery.trim().length > 0) {
     const fillQueries = Array.from(
@@ -527,7 +615,10 @@ async function prioritizeYouTubePlayback(
     directResolveAttempts,
     directResolveNoMatch,
     directResolveFromCache,
+    directResolveFromPersistentCache,
     directResolveAlreadyYouTube,
+    directResolveBatchCount,
+    directResolveBatchSize: YOUTUBE_RESOLVE_BATCH_SIZE,
     directResolveSearchQueryAttempts,
     directResolveSearchFailures,
     directResolveSearchEmptyResults,
@@ -546,7 +637,10 @@ async function prioritizeYouTubePlayback(
       directResolveAttempts,
       directResolveNoMatch,
       directResolveFromCache,
+      directResolveFromPersistentCache,
       directResolveAlreadyYouTube,
+      directResolveBatchCount,
+      directResolveBatchSize: YOUTUBE_RESOLVE_BATCH_SIZE,
       directResolveSearchQueryAttempts,
       directResolveSearchFailures,
       directResolveSearchEmptyResults,

@@ -143,6 +143,7 @@ export function RoomPlayPage() {
   const state = snapshotQuery.data?.snapshot;
   const isHost = Boolean(session.playerId && state?.hostPlayerId === session.playerId);
   const isWaitingLobby = state?.state === "waiting";
+  const isResolvingTracks = Boolean(state?.isResolvingTracks);
   const currentPlayer = state?.players.find((player) => player.playerId === session.playerId) ?? null;
   const typedPlaylistQuery = playlistQuery.trim();
   const normalizedPlaylistQuery = debouncedPlaylistQuery.trim();
@@ -720,6 +721,17 @@ export function RoomPlayPage() {
           {state?.state === "waiting" && (
             <div className="waiting-box">
               <h2>Lobby: tout le monde doit être prêt avant le lancement.</h2>
+              {isResolvingTracks && (
+                <div className="resolving-tracks-banner" role="status" aria-live="polite">
+                  <span className="resolving-tracks-spinner" aria-hidden="true" />
+                  <div>
+                    <strong>Résolution des sources audio en cours...</strong>
+                    <p className="status">
+                      Tracks fusionnées: {state.poolBuild.mergedTracksCount} | Pistes jouables: {state.poolBuild.playableTracksCount}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {isHost ? (
                 <div className="field-block">
@@ -813,7 +825,7 @@ export function RoomPlayPage() {
                         Les joueurs connectés peuvent contribuer Spotify et/ou Deezer.
                       </p>
                       <p className="status">
-                        Contributeurs actifs: {state.poolBuild.contributorsCount} | Pistes prêtes: {state.poolBuild.playableTracksCount}
+                        Contributeurs actifs: {state.poolBuild.contributorsCount} | Tracks fusionnées: {state.poolBuild.mergedTracksCount} | Pistes prêtes: {state.poolBuild.playableTracksCount}
                       </p>
                     </div>
                   )}
@@ -883,7 +895,7 @@ export function RoomPlayPage() {
                 <button
                   className={`ghost-btn${currentPlayer?.isReady ? " selected" : ""}`}
                   type="button"
-                  disabled={!session.playerId || readyMutation.isPending}
+                  disabled={!session.playerId || readyMutation.isPending || isResolvingTracks}
                   onClick={() => readyMutation.mutate(!currentPlayer?.isReady)}
                 >
                   {currentPlayer?.isReady ? "Je ne suis plus prêt" : "Je suis prêt"}
@@ -892,7 +904,7 @@ export function RoomPlayPage() {
                   <button
                     className="solid-btn"
                     onClick={() => startMutation.mutate()}
-                    disabled={startMutation.isPending || !state.canStart}
+                    disabled={startMutation.isPending || !state.canStart || isResolvingTracks}
                   >
                     {startMutation.isPending ? "Lancement..." : "Lancer la partie"}
                   </button>
