@@ -1,9 +1,9 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "bun install"
+buildCommand = "if [ -d apps/api ]; then cd apps/api; fi && bun install"
 
 [deploy]
-startCommand = "bun run start"
+startCommand = "if [ -d apps/api ]; then cd apps/api; fi && bun run start"
 healthcheckPath = "/health"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

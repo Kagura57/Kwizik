@@ -33,6 +33,12 @@ Si Railway ne détecte pas automatiquement le fichier:
 - Service `api` -> Settings -> Config as Code -> path: `apps/api/railway.toml`
 - Service `web` -> Settings -> Config as Code -> path: `apps/web/railway.toml`
 
+Note:
+
+- Les commandes dans ces `railway.toml` gèrent les deux cas:
+  - service lancé depuis la racine du monorepo
+  - service lancé avec `Root Directory` déjà positionné sur `apps/api` ou `apps/web`
+
 ## 4. Config service API
 
 Dans le service `api`:
