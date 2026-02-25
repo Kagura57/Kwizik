@@ -27,11 +27,13 @@ Les fichiers de config Railway sont déjà prêts:
 
 - `apps/api/railway.toml`
 - `apps/web/railway.toml`
+- Ces fichiers utilisent `builder = "RAILPACK"` (Nixpacks déprécié).
 
 Si Railway ne détecte pas automatiquement le fichier:
 
 - Service `api` -> Settings -> Config as Code -> path: `apps/api/railway.toml`
 - Service `web` -> Settings -> Config as Code -> path: `apps/web/railway.toml`
+- Vérifie aussi dans l'UI que le builder affiché est bien `Railpack`.
 
 Note:
 
@@ -72,7 +74,7 @@ Important:
 Dans le service `web`:
 
 - Build/start command: pris depuis `apps/web/railway.toml`
-- `apps/web/railway.toml` force Node 22 pour le build (`NIXPACKS_NODE_VERSION` / `RAILPACK_NODE_VERSION`)
+- `apps/web/railway.toml` force Node 22 pour le build (`RAILPACK_NODE_VERSION`)
 
 Variables à définir:
 
