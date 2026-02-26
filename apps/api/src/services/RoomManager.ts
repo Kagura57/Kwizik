@@ -219,6 +219,14 @@ export class RoomManager {
     return { accepted: true as const };
   }
 
+  hasSubmittedAnswer(playerId: string) {
+    return this.answers.has(playerId);
+  }
+
+  answeredPlayerIds() {
+    return [...this.answers.keys()];
+  }
+
   resetToWaiting() {
     this.gameState = "waiting";
     this.currentRound = 0;

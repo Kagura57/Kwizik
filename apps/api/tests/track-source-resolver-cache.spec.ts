@@ -94,10 +94,12 @@ describe("track source resolver cache behavior", () => {
   });
 
   it("does not cache failed youtube resolutions as permanent null", async () => {
+    vi.spyOn(resolvedTrackRepository, "getBySource").mockResolvedValue(null);
+
     let youtubeCalls = 0;
     searchYouTubeMock.mockImplementation(async () => {
       youtubeCalls += 1;
-      if (youtubeCalls <= 3) return [];
+      if (youtubeCalls <= 8) return [];
       return [
         {
           provider: "youtube",

@@ -757,18 +757,18 @@ export async function searchYouTube(query: string, limit = 10): Promise<MusicTra
       }
 
       if (parsedTracks.length > 0) {
-        const firstTrack = [parsedTracks[0] as MusicTrack];
-        writeCachedQuery(normalizedQuery, safeLimit, firstTrack);
+        const selectedTracks = dedupeByVideoId(parsedTracks, safeLimit);
+        writeCachedQuery(normalizedQuery, safeLimit, selectedTracks);
         logEvent("info", "youtube_search_success", {
           query: normalizedQuery,
           limit: safeLimit,
           source: "youtube_data_api",
-          trackCount: firstTrack.length,
+          trackCount: selectedTracks.length,
           selectedKey: redactApiKey(apiKey),
           apiAttemptCount: apiAttemptDiagnostics.length,
           apiKeysConfigured: apiKeys.length,
         });
-        return firstTrack;
+        return selectedTracks;
       }
     }
   }

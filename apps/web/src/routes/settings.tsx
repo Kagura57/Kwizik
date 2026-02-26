@@ -13,9 +13,32 @@ import {
 import { useGameStore } from "../stores/gameStore";
 
 type LinkableProvider = "spotify" | "deezer";
+type ProviderLinkStatus = "linked" | "not_linked" | "expired";
 
 function providerLabel(provider: LinkableProvider) {
   return provider === "spotify" ? "Spotify" : "Deezer";
+}
+
+function providerStatusMeta(status: ProviderLinkStatus) {
+  if (status === "linked") {
+    return {
+      label: "Connecte",
+      tone: "connected",
+      description: "Compte pret pour tes playlists et titres likes.",
+    } as const;
+  }
+  if (status === "expired") {
+    return {
+      label: "Session expiree",
+      tone: "expired",
+      description: "Reconnecte ce compte pour continuer a l'utiliser.",
+    } as const;
+  }
+  return {
+    label: "Non connecte",
+    tone: "idle",
+    description: "Connecte ce compte pour enrichir tes parties.",
+  } as const;
 }
 
 export function SettingsPage() {
@@ -60,6 +83,26 @@ export function SettingsPage() {
       return status === "syncing" ? 2_000 : false;
     },
   });
+
+  const syncErrorMessage = (() => {
+    const code = librarySyncStatusQuery.data?.lastError ?? "";
+    if (code === "SPOTIFY_SYNC_SCOPE_MISSING_USER_LIBRARY_READ") {
+      return "Spotify n'a pas autorise l'acces aux titres likes. Reconnecte Spotify puis relance la sync.";
+    }
+    if (code === "SPOTIFY_SYNC_UNAUTHORIZED") {
+      return "Session Spotify invalide ou expiree. Reconnecte Spotify puis relance la sync.";
+    }
+    if (code === "SPOTIFY_SYNC_FORBIDDEN") {
+      return "Spotify a refuse la synchronisation pour ce compte. Reconnecte Spotify et reessaie.";
+    }
+    if (code === "SPOTIFY_SYNC_BAD_REQUEST") {
+      return "Requete Spotify invalide. Reconnecte Spotify puis reessaie.";
+    }
+    if (code.startsWith("SPOTIFY_SYNC_FETCH_FAILED_HTTP_")) {
+      return `Echec Spotify (${code.replace("SPOTIFY_SYNC_FETCH_FAILED_HTTP_", "HTTP ")}). Reessaie dans quelques secondes.`;
+    }
+    return `Erreur sync Spotify: ${code || "UNKNOWN_ERROR"}`;
+  })();
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -145,63 +188,60 @@ export function SettingsPage() {
               Connecté: <strong>{user.name}</strong> ({user.email})
             </p>
 
-            <button
-              className="ghost-btn"
-              type="button"
-              disabled={providerLinksQuery.isFetching}
-              onClick={() => providerLinksQuery.refetch()}
-            >
-              {providerLinksQuery.isFetching ? "Rafraîchissement..." : "Rafraîchir les statuts"}
-            </button>
-
             {(["spotify", "deezer"] as const).map((provider) => {
-              const status = providerLinksQuery.data?.providers?.[provider]?.status ?? "not_linked";
+              const status = (providerLinksQuery.data?.providers?.[provider]?.status ??
+                "not_linked") as ProviderLinkStatus;
+              const statusMeta = providerStatusMeta(status);
               const busy =
                 connectMutation.isPending ||
                 disconnectMutation.isPending ||
                 librarySyncMutation.isPending;
               return (
-                <div key={provider} className="waiting-actions">
-                  <p className="status">
-                    {providerLabel(provider)}: <strong>{status}</strong>
-                  </p>
-                  {status === "linked" ? (
-                    <button
-                      className="ghost-btn"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => disconnectMutation.mutate(provider)}
-                    >
-                      Déconnecter
-                    </button>
-                  ) : (
-                    <button
-                      className="solid-btn"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => connectMutation.mutate(provider)}
-                    >
-                      Connecter {providerLabel(provider)}
-                    </button>
-                  )}
+                <div key={provider} className="provider-link-card">
+                  <div className="provider-link-head">
+                    <div>
+                      <p className="kicker">{providerLabel(provider)}</p>
+                      <h3>{providerLabel(provider)} Music</h3>
+                    </div>
+                    <span className={`provider-badge ${statusMeta.tone}`}>{statusMeta.label}</span>
+                  </div>
+                  <p className="status">{statusMeta.description}</p>
+                  <div className="waiting-actions">
+                    {status === "linked" ? (
+                      <button
+                        className="ghost-btn danger-btn"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => disconnectMutation.mutate(provider)}
+                      >
+                        Deconnecter {providerLabel(provider)}
+                      </button>
+                    ) : (
+                      <button
+                        className="solid-btn"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => connectMutation.mutate(provider)}
+                      >
+                        Connecter {providerLabel(provider)}
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
 
             {spotifyLinked && (
-              <div className="waiting-actions">
-                <button
-                  className="solid-btn"
-                  type="button"
-                  disabled={librarySyncMutation.isPending}
-                  onClick={() => librarySyncMutation.mutate()}
-                >
-                  {librarySyncMutation.isPending
-                    ? "Synchronisation..."
-                    : "Synchroniser mes titres likés Spotify"}
-                </button>
+              <div className="provider-link-card">
+                <div className="provider-link-head">
+                  <div>
+                    <p className="kicker">Spotify</p>
+                    <h3>Bibliotheque likes</h3>
+                  </div>
+                  <span className="provider-badge connected">Action manuelle</span>
+                </div>
                 <p className="status">
-                  État sync: <strong>{librarySyncStatusQuery.data?.status ?? "idle"}</strong>
+                  Etat sync: <strong>{librarySyncStatusQuery.data?.status ?? "idle"}</strong>
                   {typeof librarySyncStatusQuery.data?.progress === "number"
                     ? ` (${librarySyncStatusQuery.data.progress}%)`
                     : ""}
@@ -209,12 +249,22 @@ export function SettingsPage() {
                     ? ` · ${librarySyncStatusQuery.data.totalTracks} titres`
                     : ""}
                 </p>
+                <div className="waiting-actions">
+                  <button
+                    className="solid-btn"
+                    type="button"
+                    disabled={librarySyncMutation.isPending}
+                    onClick={() => librarySyncMutation.mutate()}
+                  >
+                    {librarySyncMutation.isPending ? "Synchronisation..." : "Synchroniser mes likes"}
+                  </button>
+                </div>
               </div>
             )}
 
             <div className="waiting-actions">
               <button
-                className="ghost-btn"
+                className="ghost-btn danger-btn"
                 type="button"
                 disabled={signOutMutation.isPending || librarySyncMutation.isPending}
                 onClick={() => signOutMutation.mutate()}
@@ -243,10 +293,9 @@ export function SettingsPage() {
           {disconnectMutation.isError && "Impossible de déconnecter ce provider."}
           {signOutMutation.isError && "Déconnexion impossible pour le moment."}
           {librarySyncMutation.isError && "Impossible de lancer la synchronisation Spotify."}
-          {!librarySyncMutation.isError && librarySyncMutation.isSuccess && "Sync Spotify mise en file d'attente."}
           {!librarySyncMutation.isError &&
             librarySyncStatusQuery.data?.status === "error" &&
-            `Erreur sync Spotify: ${librarySyncStatusQuery.data.lastError ?? "UNKNOWN_ERROR"}`}
+            syncErrorMessage}
         </p>
       </article>
     </section>

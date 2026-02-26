@@ -1,12 +1,21 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { isJapanese, toRomaji } from "wanakana";
 import { createRoom, getPublicRooms, joinRoom } from "../lib/api";
 import { useGameStore } from "../stores/gameStore";
+
+function withRomajiLabel(value: string) {
+  if (!value || !isJapanese(value)) return value;
+  const romaji = toRomaji(value);
+  if (!romaji || romaji.toLowerCase() === value.toLowerCase()) return value;
+  return `${value} · ${romaji}`;
+}
 
 export function HomePage() {
   const navigate = useNavigate();
   const setSession = useGameStore((state) => state.setSession);
+  const session = useGameStore((state) => state.session);
   const account = useGameStore((state) => state.account);
   const [createDisplayName, setCreateDisplayName] = useState("Player One");
   const [joinDisplayName, setJoinDisplayName] = useState("Player One");
@@ -50,18 +59,18 @@ export function HomePage() {
   });
 
   const joinMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (input: { roomCode: string; displayName: string }) =>
       joinRoom({
-        roomCode: joinRoomCode.trim().toUpperCase(),
-        displayName: joinDisplayName.trim() || "Player One",
+        roomCode: input.roomCode.trim().toUpperCase(),
+        displayName: input.displayName.trim() || "Player One",
       }),
-    onSuccess: (result) => {
-      const normalizedCode = joinRoomCode.trim().toUpperCase();
+    onSuccess: (result, input) => {
+      const normalizedCode = input.roomCode.trim().toUpperCase();
       const knownRoom = (publicRoomsQuery.data?.rooms ?? []).find((room) => room.roomCode === normalizedCode);
       setSession({
         roomCode: normalizedCode,
         playerId: result.playerId,
-        displayName: joinDisplayName.trim() || "Player One",
+        displayName: input.displayName.trim() || "Player One",
         categoryQuery: knownRoom?.categoryQuery ?? "",
       });
 
@@ -87,11 +96,78 @@ export function HomePage() {
   function onJoin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!joinRoomCode.trim() || !joinDisplayName.trim()) return;
-    joinMutation.mutate();
+    joinMutation.mutate({
+      roomCode: joinRoomCode.trim(),
+      displayName: joinDisplayName.trim(),
+    });
+  }
+
+  function onJoinPublicRoom(roomCode: string) {
+    const normalizedCode = roomCode.trim().toUpperCase();
+    const cachedDisplayName = session.displayName.trim();
+    const hasCachedPseudo = cachedDisplayName.length > 0 && cachedDisplayName !== "Player One";
+    const suggestedFromInputs = joinDisplayName.trim() || createDisplayName.trim();
+
+    let displayName = account.userId
+      ? account.name?.trim() || cachedDisplayName || suggestedFromInputs || "Player One"
+      : hasCachedPseudo
+        ? cachedDisplayName
+        : "";
+
+    if (!displayName) {
+      const prompted = window.prompt("Choisis un pseudo pour rejoindre cette room", suggestedFromInputs || "Player One");
+      if (!prompted || prompted.trim().length <= 0) return;
+      displayName = prompted.trim();
+      setJoinDisplayName(displayName);
+      setCreateDisplayName((current) => (current === "Player One" ? displayName : current));
+    }
+
+    setJoinRoomCode(normalizedCode);
+    joinMutation.mutate({
+      roomCode: normalizedCode,
+      displayName,
+    });
   }
 
   return (
-    <section className="home-grid home-grid-balanced">
+    <>
+      <section className="home-grid home-grid-balanced home-top-grid">
+      <article className="panel-card">
+        <h2 className="panel-title">Rejoindre une room</h2>
+        <p className="panel-copy">Le premier joueur de la room devient host du lobby.</p>
+
+        <form className="panel-form" onSubmit={onJoin}>
+          <label>
+            <span>Code room</span>
+            <input
+              value={joinRoomCode}
+              onChange={(event) => setJoinRoomCode(event.currentTarget.value)}
+              maxLength={6}
+              placeholder="ABC123"
+            />
+          </label>
+
+          <label>
+            <span>Pseudo</span>
+            <input
+              value={joinDisplayName}
+              onChange={(event) => setJoinDisplayName(event.currentTarget.value)}
+              maxLength={24}
+              placeholder="Ton pseudo"
+            />
+          </label>
+
+          <button className="solid-btn" type="submit" disabled={joinMutation.isPending || createRoomMutation.isPending}>
+            {joinMutation.isPending ? "Connexion..." : "Entrer dans la room"}
+          </button>
+        </form>
+
+        <p className={joinMutation.isError ? "status error" : "status"}>
+          {joinErrorCode === "ROOM_NOT_JOINABLE" && "La room est terminée et n’accepte plus de nouveaux joueurs."}
+          {joinMutation.isError && joinErrorCode !== "ROOM_NOT_JOINABLE" && "Impossible de rejoindre cette room."}
+        </p>
+      </article>
+
       <article className="panel-card">
         <h2 className="panel-title">Créer une room</h2>
         <p className="panel-copy">Crée un lobby en un clic, choisis la visibilité, puis lance la partie.</p>
@@ -153,64 +229,40 @@ export function HomePage() {
           {createRoomMutation.isError && "Impossible de créer la room."}
         </p>
       </article>
-
-      <article className="panel-card">
-        <h2 className="panel-title">Rejoindre une room</h2>
-        <p className="panel-copy">Le premier joueur de la room devient host du lobby.</p>
-
-        <form className="panel-form" onSubmit={onJoin}>
-          <label>
-            <span>Code room</span>
-            <input
-              value={joinRoomCode}
-              onChange={(event) => setJoinRoomCode(event.currentTarget.value)}
-              maxLength={6}
-              placeholder="ABC123"
-            />
-          </label>
-
-          <label>
-            <span>Pseudo</span>
-            <input
-              value={joinDisplayName}
-              onChange={(event) => setJoinDisplayName(event.currentTarget.value)}
-              maxLength={24}
-              placeholder="Ton pseudo"
-            />
-          </label>
-
-          <button className="solid-btn" type="submit" disabled={joinMutation.isPending || createRoomMutation.isPending}>
-            {joinMutation.isPending ? "Connexion..." : "Entrer dans la room"}
-          </button>
-        </form>
-
-        <p className={joinMutation.isError ? "status error" : "status"}>
-          {joinErrorCode === "ROOM_NOT_JOINABLE" && "La room est terminée et n’accepte plus de nouveaux joueurs."}
-          {joinMutation.isError && joinErrorCode !== "ROOM_NOT_JOINABLE" && "Impossible de rejoindre cette room."}
-        </p>
-
-        <h3 className="panel-title">Rooms publiques</h3>
-        <ul className="public-room-list">
-          {(publicRoomsQuery.data?.rooms ?? []).map((room) => (
-            <li key={room.roomCode}>
-              <div>
-                <strong>{room.roomCode}</strong>
-                <p>
-                  {room.state} - {room.playerCount} joueurs
-                </p>
-              </div>
-              <button
-                className="ghost-btn"
-                type="button"
-                disabled={!room.canJoin}
-                onClick={() => setJoinRoomCode(room.roomCode)}
-              >
-                {room.canJoin ? "Utiliser" : "Locked"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </article>
-    </section>
+      </section>
+      <section className="single-panel">
+        {(publicRoomsQuery.data?.rooms ?? []).length > 0 && (
+          <article className="panel-card room-list-card">
+            <h3 className="panel-title">Rooms publiques</h3>
+            <ul className="public-room-list">
+              {(publicRoomsQuery.data?.rooms ?? []).map((room) => (
+                <li key={room.roomCode}>
+                  <div>
+                    <strong>{room.roomCode}</strong>
+                    <p>
+                      {room.state} · {room.playerCount} joueurs
+                    </p>
+                    <p>
+                      Mode: {room.sourceMode === "players_liked" ? "Liked Songs joueurs" : "Playlist publique"}
+                      {room.sourceMode === "public_playlist" && room.playlistName
+                        ? ` · ${withRomajiLabel(room.playlistName)}`
+                        : ""}
+                    </p>
+                  </div>
+                  <button
+                    className="solid-btn"
+                    type="button"
+                    disabled={!room.canJoin || joinMutation.isPending}
+                    onClick={() => onJoinPublicRoom(room.roomCode)}
+                  >
+                    {room.canJoin ? "Rejoindre" : "Fermée"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </article>
+        )}
+      </section>
+    </>
   );
 }

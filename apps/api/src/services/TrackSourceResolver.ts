@@ -207,6 +207,10 @@ function buildYouTubeQueryVariants(track: Pick<MusicTrack, "title" | "artist">) 
   return Array.from(
     new Set(
       [
+        `${artist} ${title} official video`,
+        `${artist} ${sanitizedTitle} official video`,
+        `${artist} ${title} official mv`,
+        `${artist} ${title} mv`,
         `${artist} - ${title}`,
         `${artist} - ${sanitizedTitle}`,
         `${artist} ${title}`,
@@ -277,6 +281,52 @@ async function searchPlayableYouTube(query: string, limit: number): Promise<Musi
   const safeLimit = Math.max(1, Math.min(limit, 50));
   const youtube = await searchYouTube(query, safeLimit);
   return dedupeTracks(youtube, safeLimit);
+}
+
+const YOUTUBE_PRIORITY_PATTERNS = [
+  /\bofficial(\s+(music|mv|video))?\b/i,
+  /\bmusic\s+video\b/i,
+  /\bmv\b/i,
+];
+
+const YOUTUBE_DEPRIORITY_PATTERNS = [
+  /\blyrics?\b/i,
+  /\breaction\b/i,
+  /\blive\b/i,
+  /\bcover\b/i,
+  /\bkaraoke\b/i,
+  /\bnightcore\b/i,
+  /\bslowed\b/i,
+  /\bsped\s*up\b/i,
+];
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function scoreYouTubeCandidate(
+  candidate: Pick<MusicTrack, "title" | "artist">,
+  source: Pick<MusicTrack, "title" | "artist">,
+) {
+  const candidateText = normalizeSearchText(`${candidate.title} ${candidate.artist}`);
+  const sourceArtist = normalizeSearchText(source.artist);
+  const sourceTitle = normalizeSearchText(sanitizeTrackSearchValue(source.title));
+
+  let score = 0;
+  if (sourceArtist.length > 0 && candidateText.includes(sourceArtist)) score += 40;
+  if (sourceTitle.length > 0 && candidateText.includes(sourceTitle)) score += 50;
+
+  for (const pattern of YOUTUBE_PRIORITY_PATTERNS) {
+    if (pattern.test(candidateText)) score += 70;
+  }
+  for (const pattern of YOUTUBE_DEPRIORITY_PATTERNS) {
+    if (pattern.test(candidateText)) score -= 120;
+  }
+
+  return score;
 }
 
 type YouTubePlaybackResolution = {
@@ -401,7 +451,8 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
       continue;
     }
 
-    const selected = candidates[0] ?? null;
+    const selected = [...candidates]
+      .sort((left, right) => scoreYouTubeCandidate(right, track) - scoreYouTubeCandidate(left, track))[0] ?? null;
     if (!selected) {
       emptyResultQueries += 1;
       continue;
@@ -574,7 +625,7 @@ async function prioritizeYouTubePlayback(
   if (input.allowQueryFill && result.length < safeSize && input.fillQuery.trim().length > 0) {
     const fillQueries = Array.from(
       new Set(
-        [input.fillQuery, `${input.fillQuery} official audio`]
+        [input.fillQuery, `${input.fillQuery} official video`, `${input.fillQuery} official mv`]
           .map((query) => query.trim())
           .filter((query) => query.length > 0),
       ),

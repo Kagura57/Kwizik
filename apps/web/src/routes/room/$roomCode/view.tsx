@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
+import { isJapanese, toRomaji } from "wanakana";
 import { fetchLiveRoomState } from "../../../lib/realtime";
 
 const ROUND_MS = 12_000;
@@ -16,12 +17,8 @@ function phaseProgress(phase: string | undefined, remainingMs: number | null) {
   if (remainingMs === null) return 0;
   if (phase === "countdown") return clamp01((COUNTDOWN_MS - remainingMs) / COUNTDOWN_MS);
   if (phase === "playing") return clamp01((ROUND_MS - remainingMs) / ROUND_MS);
-  if (phase === "reveal") {
-    return clamp01((REVEAL_MS - remainingMs) / REVEAL_MS);
-  }
-  if (phase === "leaderboard") {
-    return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
-  }
+  if (phase === "reveal") return clamp01((REVEAL_MS - remainingMs) / REVEAL_MS);
+  if (phase === "leaderboard") return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
   return 0;
 }
 
@@ -38,11 +35,22 @@ function revealArtworkUrl(reveal: { provider: "spotify" | "deezer" | "apple-musi
   return null;
 }
 
+function withRomajiLabel(value: string, providedRomaji?: string | null) {
+  if (providedRomaji && providedRomaji.trim().length > 0) {
+    return `${value} · ${providedRomaji.trim()}`;
+  }
+  if (!value || !isJapanese(value)) return value;
+  const romaji = toRomaji(value);
+  if (!romaji || romaji.toLowerCase() === value.toLowerCase()) return value;
+  return `${value} · ${romaji}`;
+}
+
 export function RoomViewPage() {
   const { roomCode } = useParams({ from: "/room/$roomCode/view" });
   const [clockNow, setClockNow] = useState(() => Date.now());
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
+  const [progress, setProgress] = useState(0);
   const [audioError, setAudioError] = useState(false);
-  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [iframeEpoch, setIframeEpoch] = useState(0);
   const [stableYoutubePlayback, setStableYoutubePlayback] = useState<{
     key: string;
@@ -50,11 +58,15 @@ export function RoomViewPage() {
   } | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
+  const progressStateRef = useRef<{ key: string; value: number }>({ key: "", value: 0 });
+  const postRoundProgressRef = useRef<{ key: string; startedAtMs: number } | null>(null);
+  const audioRetryTimeoutRef = useRef<number | null>(null);
+  const userInteractionUnlockedRef = useRef(false);
 
   useEffect(() => {
-    const id = window.setInterval(() => setClockNow(Date.now()), 250);
+    const id = window.setInterval(() => setClockNow(Date.now() + serverClockOffsetMs), 80);
     return () => window.clearInterval(id);
-  }, []);
+  }, [serverClockOffsetMs]);
 
   const snapshotQuery = useQuery({
     queryKey: ["realtime-room-view", roomCode],
@@ -71,14 +83,59 @@ export function RoomViewPage() {
   });
 
   const state = snapshotQuery.data?.snapshot;
+  useEffect(() => {
+    if (typeof snapshotQuery.data?.serverNowMs !== "number") return;
+    setServerClockOffsetMs(snapshotQuery.data.serverNowMs - Date.now());
+  }, [snapshotQuery.data?.serverNowMs]);
+
   const remainingMs = useMemo(() => {
     if (!state?.deadlineMs) return null;
     return state.deadlineMs - clockNow;
   }, [clockNow, state?.deadlineMs]);
-  const progress =
-    state?.state === "reveal" || state?.state === "leaderboard"
-      ? 1
-      : phaseProgress(state?.state, remainingMs);
+  const roundMediaKey = `${state?.round ?? 0}:${state?.media?.trackId ?? state?.reveal?.trackId ?? "none"}`;
+  const progressKey = `${state?.state ?? "none"}:${state?.round ?? 0}:${state?.deadlineMs ?? 0}:${state?.media?.trackId ?? state?.reveal?.trackId ?? "none"}`;
+
+  useEffect(() => {
+    if (!state) {
+      progressStateRef.current = { key: "", value: 0 };
+      postRoundProgressRef.current = null;
+      setProgress(0);
+      return;
+    }
+
+    if (state.state === "reveal" || state.state === "leaderboard") {
+      const postKey = `post-round:${roundMediaKey}`;
+      if (!postRoundProgressRef.current || postRoundProgressRef.current.key !== postKey) {
+        postRoundProgressRef.current = { key: postKey, startedAtMs: clockNow };
+      }
+      const startedAtMs = postRoundProgressRef.current.startedAtMs;
+      const elapsedMs = Math.max(0, clockNow - startedAtMs);
+      const rawProgress = clamp01(elapsedMs / (REVEAL_MS + LEADERBOARD_MS));
+      const previous = progressStateRef.current;
+      const nextProgress =
+        previous.key === postKey ? Math.max(previous.value, rawProgress) : rawProgress;
+
+      progressStateRef.current = {
+        key: postKey,
+        value: nextProgress,
+      };
+      setProgress(nextProgress);
+      return;
+    }
+
+    postRoundProgressRef.current = null;
+    const rawProgress = phaseProgress(state.state, remainingMs);
+    const previous = progressStateRef.current;
+    const nextProgress =
+      previous.key === progressKey ? Math.max(previous.value, rawProgress) : rawProgress;
+
+    progressStateRef.current = {
+      key: progressKey,
+      value: nextProgress,
+    };
+    setProgress(nextProgress);
+  }, [progressKey, remainingMs, state]);
+
   const youtubePlayback = useMemo(() => {
     if (!state?.media?.embedUrl || !state.media.trackId) return null;
     if (state.media.provider !== "youtube") return null;
@@ -119,6 +176,11 @@ export function RoomViewPage() {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    if (audioRetryTimeoutRef.current !== null) {
+      window.clearTimeout(audioRetryTimeoutRef.current);
+      audioRetryTimeoutRef.current = null;
+    }
+
     if (activeYoutubeEmbed) {
       audio.pause();
       audio.removeAttribute("src");
@@ -142,47 +204,47 @@ export function RoomViewPage() {
 
     const playPromise = audio.play();
     if (playPromise) {
-      playPromise
-        .then(() => setAutoplayBlocked(false))
-        .catch(() => setAutoplayBlocked(true));
+      playPromise.catch(() => {
+        if (audioRetryTimeoutRef.current !== null) return;
+        audioRetryTimeoutRef.current = window.setTimeout(() => {
+          audioRetryTimeoutRef.current = null;
+          const nextAudio = audioRef.current;
+          if (!nextAudio || !nextAudio.src) return;
+          nextAudio.play().catch(() => undefined);
+        }, 320);
+      });
     }
   }, [activeYoutubeEmbed, state?.previewUrl, state?.state]);
 
   useEffect(() => {
-    if (!activeYoutubeEmbed) return;
-    setAutoplayBlocked(true);
-  }, [activeYoutubeEmbed]);
+    function unlockAudioPlayback() {
+      const shouldKickIframe = Boolean(activeYoutubeEmbed) && !userInteractionUnlockedRef.current;
+      userInteractionUnlockedRef.current = true;
 
-  const activateAudio = useCallback(async () => {
-    if (activeYoutubeEmbed) {
-      setAutoplayBlocked(false);
-      setIframeEpoch((value) => value + 1);
-      return;
+      const audio = audioRef.current;
+      if (audio && audio.src) {
+        audio.play().catch(() => undefined);
+      }
+      if (shouldKickIframe) {
+        setIframeEpoch((value) => value + 1);
+      }
     }
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      await audio.play();
-      setAutoplayBlocked(false);
-    } catch {
-      setAutoplayBlocked(true);
-    }
+
+    window.addEventListener("pointerdown", unlockAudioPlayback, { passive: true });
+    window.addEventListener("keydown", unlockAudioPlayback);
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudioPlayback);
+      window.removeEventListener("keydown", unlockAudioPlayback);
+    };
   }, [activeYoutubeEmbed]);
 
   useEffect(() => {
-    if (!autoplayBlocked) return;
-
-    function unlockFromInteraction() {
-      void activateAudio();
-    }
-
-    window.addEventListener("pointerdown", unlockFromInteraction, { once: true });
-    window.addEventListener("keydown", unlockFromInteraction, { once: true });
     return () => {
-      window.removeEventListener("pointerdown", unlockFromInteraction);
-      window.removeEventListener("keydown", unlockFromInteraction);
+      if (audioRetryTimeoutRef.current !== null) {
+        window.clearTimeout(audioRetryTimeoutRef.current);
+      }
     };
-  }, [activateAudio, autoplayBlocked]);
+  }, []);
 
   return (
     <section className="projection-stage">
@@ -205,7 +267,7 @@ export function RoomViewPage() {
             ))}
           </div>
           <div className="sound-timeline">
-            <span style={{ width: `${Math.round(progress * 100)}%` }} />
+            <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
           </div>
         </div>
 
@@ -233,13 +295,17 @@ export function RoomViewPage() {
                   <div className="reveal-cover-fallback" aria-hidden="true" />
                 )}
               </div>
-              <div className="reveal-content">
-                <p className="kicker">Reveal</p>
-                <h3 className="reveal-title">{state.reveal.title}</h3>
-                <p className="reveal-artist">{state.reveal.artist}</p>
+                <div className="reveal-content">
+                  <p className="kicker">Reveal</p>
+                  <h3 className="reveal-title">
+                    {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
+                  </h3>
+                  <p className="reveal-artist">
+                    {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
+                  </p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
         {!isResults && activeYoutubeEmbed && (
           <div className="blindtest-video-shell">
@@ -259,10 +325,28 @@ export function RoomViewPage() {
 
         <ol className="leaderboard-list compact">
           {(state?.leaderboard ?? []).map((entry) => (
-            <li key={entry.playerId}>
+            <li key={entry.playerId} className={entry.hasAnsweredCurrentRound ? "answered" : ""}>
               <span>#{entry.rank}</span>
-              <strong>{entry.displayName}</strong>
-              <em>{entry.score} pts</em>
+              <strong className="leaderboard-name">
+                {entry.displayName}
+                {entry.hasAnsweredCurrentRound && (
+                  <i className="answer-check" aria-label="Reponse validee">
+                    ✓
+                  </i>
+                )}
+              </strong>
+              <div className="leaderboard-score-block">
+                <em>{entry.score} pts</em>
+                <small className="leaderboard-meta">
+                  <span className="round-gain">+{entry.lastRoundScore}</span>
+                  <span className={`streak-chip${entry.streak > 0 ? " hot" : ""}`}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M12 2c.5 3-2 4.8-2 7.2 0 1.5 1 2.7 2 3.4 1.1-.7 2-2 2-3.6 0-1.8-1-3.1-2-4.6 2 .8 4.8 3.4 4.8 7.1A4.8 4.8 0 0 1 12 20a4.8 4.8 0 0 1-4.8-4.9C7.2 10.6 10.1 7.8 12 2Z" />
+                    </svg>
+                    {entry.streak}
+                  </span>
+                </small>
+              </div>
             </li>
           ))}
         </ol>

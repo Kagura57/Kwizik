@@ -27,7 +27,8 @@ type DeezerPlaylistPayload = {
     };
     nb_tracks?: number | null;
   }>;
-};
+  total?: number;
+  };
 
 export type DeezerPlaylistSummary = {
   provider: "deezer";
@@ -218,14 +219,19 @@ function toDeezerPlaylistSummary(
 export async function searchDeezerPlaylists(
   query: string,
   limit = 20,
+  offset = 0,
 ): Promise<DeezerPlaylistSummary[]> {
   const safeLimit = Math.max(1, Math.min(limit, 50));
+  const safeOffset = Math.max(0, Math.floor(offset));
   const trimmed = query.trim();
   if (trimmed.length === 0) return [];
 
   const url = new URL("https://api.deezer.com/search/playlist");
   url.searchParams.set("q", trimmed);
   url.searchParams.set("limit", String(safeLimit));
+  if (safeOffset > 0) {
+    url.searchParams.set("index", String(safeOffset));
+  }
 
   const payload = (await fetchJsonWithTimeout(url, {}, {
     context: {
@@ -238,6 +244,7 @@ export async function searchDeezerPlaylists(
   logEvent("info", "deezer_playlist_search_raw_payload", {
     query: trimmed,
     requestedLimit: safeLimit,
+    requestedOffset: safeOffset,
     dataType: Array.isArray(rawItems) ? "array" : typeof rawItems,
     itemCount: Array.isArray(rawItems) ? rawItems.length : 0,
     firstItemKeys: Array.isArray(rawItems) && rawItems[0] ? Object.keys(rawItems[0]).slice(0, 8) : [],
@@ -258,6 +265,7 @@ export async function searchDeezerPlaylists(
   logEvent("info", "deezer_playlist_search_mapped_payload", {
     query: trimmed,
     requestedLimit: safeLimit,
+    requestedOffset: safeOffset,
     mappedCount: playlists.length,
     firstMapped: playlists[0]
       ? {

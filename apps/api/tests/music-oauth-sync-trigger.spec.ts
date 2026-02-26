@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe("music oauth spotify sync trigger", () => {
-  it("queues spotify sync when spotify oauth callback succeeds", async () => {
+  it("does not queue spotify sync automatically when oauth callback succeeds", async () => {
     process.env.SPOTIFY_CLIENT_ID = "spotify-client-id";
     process.env.SPOTIFY_CLIENT_SECRET = "spotify-client-secret";
     process.env.BETTER_AUTH_URL = "http://127.0.0.1:3001";
@@ -45,6 +45,6 @@ describe("music oauth spotify sync trigger", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(queueSpy).toHaveBeenCalledWith("oauth-user-1");
+    expect(queueSpy).not.toHaveBeenCalled();
   });
 });

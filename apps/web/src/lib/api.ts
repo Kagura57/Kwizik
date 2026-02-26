@@ -62,6 +62,7 @@ export type RoomState = {
     playerId: string;
     displayName: string;
     isReady: boolean;
+    hasAnsweredCurrentRound: boolean;
     isHost: boolean;
     canContributeLibrary: boolean;
     libraryContribution: {
@@ -125,7 +126,9 @@ export type RoomState = {
     trackId: string;
     provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
     title: string;
+    titleRomaji: string | null;
     artist: string;
+    artistRomaji: string | null;
     acceptedAnswer: string;
     mode: "mcq" | "text";
     previewUrl: string | null;
@@ -137,8 +140,18 @@ export type RoomState = {
     playerId: string;
     displayName: string;
     score: number;
+    lastRoundScore: number;
+    streak: number;
     maxStreak: number;
+    hasAnsweredCurrentRound: boolean;
   }> | null;
+  chatMessages: Array<{
+    id: string;
+    playerId: string;
+    displayName: string;
+    text: string;
+    sentAtMs: number;
+  }>;
 };
 
 export type RoomResults = {
@@ -174,6 +187,8 @@ export type PublicRoomSummary = {
   categoryQuery: string;
   createdAtMs: number;
   canJoin: boolean;
+  sourceMode: "public_playlist" | "players_liked";
+  playlistName: string | null;
   deadlineMs: number | null;
   serverNowMs: number;
 };
@@ -196,6 +211,15 @@ type RequestOptions = RequestInit & {
 
 function shouldRetry(status: number) {
   return status === 408 || status === 429 || status >= 500;
+}
+
+function isTerminalNotFound(details: string) {
+  return (
+    details === "ROOM_NOT_FOUND" ||
+    details === "PLAYER_NOT_FOUND" ||
+    details === "TARGET_NOT_FOUND" ||
+    details === "SESSION_NOT_FOUND"
+  );
 }
 
 function readRetryCount(method: string, retry?: number) {
@@ -280,7 +304,10 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
           // Ignore payload parsing failures for non-json error responses.
         }
 
-        const shouldTryNextBase = response.status === 404 && baseIndex < baseCandidates.length - 1;
+        const shouldTryNextBase =
+          response.status === 404 &&
+          baseIndex < baseCandidates.length - 1 &&
+          !isTerminalNotFound(details);
         if (shouldTryNextBase) {
           logClientEvent("warn", "api_base_fallback_not_found", {
             requestId: correlatedRequestId,
@@ -519,6 +546,26 @@ export async function submitRoomAnswer(input: {
   });
 }
 
+export async function sendRoomChatMessage(input: {
+  roomCode: string;
+  playerId: string;
+  text: string;
+}) {
+  return requestJson<{
+    ok: true;
+    message: {
+      id: string;
+      playerId: string;
+      displayName: string;
+      text: string;
+      sentAtMs: number;
+    };
+  }>("/quiz/chat/send", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function getRoomState(roomCode: string) {
   return requestJson<RoomState>(`/room/${encodeURIComponent(roomCode)}/state`);
 }
@@ -722,15 +769,21 @@ export async function getMyPlaylists(input: { provider: "spotify" | "deezer"; li
   }>(`/account/music/${input.provider}/playlists${query.length > 0 ? `?${query}` : ""}`);
 }
 
-export async function searchPlaylistsAcrossProviders(input: { q: string; limit?: number }) {
+export async function searchPlaylistsAcrossProviders(input: { q: string; limit?: number; offset?: number }) {
   const params = new URLSearchParams();
   params.set("q", input.q.trim());
   if (typeof input.limit === "number") {
     params.set("limit", String(input.limit));
   }
+  if (typeof input.offset === "number") {
+    params.set("offset", String(input.offset));
+  }
   return requestJson<{
     ok: true;
     q: string;
+    offset: number;
+    hasMore: boolean;
+    nextOffset: number | null;
     playlists: UnifiedPlaylistOption[];
   }>(`/music/playlists/search?${params.toString()}`);
 }

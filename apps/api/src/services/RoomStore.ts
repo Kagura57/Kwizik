@@ -7,6 +7,7 @@ import type { ClosedRound, GameState } from "./RoomManager";
 import { RoomManager } from "./RoomManager";
 import { trackCache } from "./TrackCache";
 import type { MusicTrack } from "./music-types";
+import { getRomanizedJapaneseCached, scheduleRomanizeJapanese } from "./JapaneseRomanizer";
 import { SPOTIFY_RATE_LIMITED_ERROR, spotifyPlaylistRateLimitRetryAfterMs } from "../routes/music/spotify";
 import { fetchUserLikedTracksForProviders as fetchSyncedUserLikedTracksForProviders } from "./UserMusicLibrary";
 
@@ -31,11 +32,20 @@ type Player = {
   joinedAtMs: number;
   isReady: boolean;
   score: number;
+  lastRoundScore: number;
   streak: number;
   maxStreak: number;
   totalResponseMs: number;
   correctAnswers: number;
   library: PlayerLibraryState;
+};
+
+type RoomChatMessage = {
+  id: string;
+  playerId: string;
+  displayName: string;
+  text: string;
+  sentAtMs: number;
 };
 
 type RoomSession = {
@@ -80,7 +90,9 @@ type RoomSession = {
     round: number;
     trackId: string;
     title: string;
+    titleRomaji: string | null;
     artist: string;
+    artistRomaji: string | null;
     provider: MusicTrack["provider"];
     mode: RoundMode;
     acceptedAnswer: string;
@@ -89,6 +101,7 @@ type RoomSession = {
     embedUrl: string | null;
     choices: string[] | null;
   } | null;
+  chatMessages: RoomChatMessage[];
 };
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -318,10 +331,7 @@ export class RoomStore {
   private canStartWaitingSession(session: RoomSession) {
     if (session.manager.state() !== "waiting") return false;
     if (session.isResolvingTracks) return false;
-    const players = this.sortedPlayers(session);
-    const readyCount = players.filter((player) => player.isReady).length;
-    const allReady = players.length > 0 && readyCount === players.length;
-    if (!allReady) return false;
+    if (session.players.size <= 0) return false;
 
     if (session.sourceMode === "public_playlist") {
       return this.sourceQueryForSession(session).length > 0;
@@ -359,6 +369,8 @@ export class RoomStore {
         userId: player.userId,
         displayName: player.displayName,
         score: player.score,
+        lastRoundScore: player.lastRoundScore,
+        streak: player.streak,
         maxStreak: player.maxStreak,
         averageResponseMs: Number.isFinite(averageResponseMs(player))
           ? Math.round(averageResponseMs(player))
@@ -769,6 +781,7 @@ export class RoomStore {
       });
 
       player.score += scoring.earned;
+      player.lastRoundScore = scoring.earned;
       player.streak = scoring.nextStreak;
       player.maxStreak = Math.max(player.maxStreak, player.streak);
 
@@ -778,12 +791,19 @@ export class RoomStore {
       }
     }
 
+    if (track) {
+      scheduleRomanizeJapanese(track.title);
+      scheduleRomanizeJapanese(track.artist);
+    }
+
     session.latestReveal = track
       ? {
           round: round.round,
           trackId: track.id,
           title: track.title,
+          titleRomaji: getRomanizedJapaneseCached(track.title),
           artist: track.artist,
+          artistRomaji: getRomanizedJapaneseCached(track.artist),
           provider: track.provider,
           mode: roundMode,
           acceptedAnswer: asChoiceLabel(track),
@@ -834,6 +854,7 @@ export class RoomStore {
       roundModes: [],
       roundChoices: new Map(),
       latestReveal: null,
+      chatMessages: [],
     };
     if (session.categoryQuery.toLowerCase().startsWith("deezer:playlist:")) {
       session.publicPlaylistSelection = {
@@ -867,6 +888,7 @@ export class RoomStore {
       joinedAtMs: this.now(),
       isReady: false,
       score: 0,
+      lastRoundScore: 0,
       streak: 0,
       maxStreak: 0,
       totalResponseMs: 0,
@@ -1204,6 +1226,7 @@ export class RoomStore {
     session.roundModes = [];
     session.roundChoices.clear();
     session.latestReveal = null;
+    session.chatMessages = [];
     session.sourceMode = "public_playlist";
     session.publicPlaylistSelection = null;
     session.playersLikedPool = [];
@@ -1222,6 +1245,7 @@ export class RoomStore {
 
     for (const player of session.players.values()) {
       player.score = 0;
+      player.lastRoundScore = 0;
       player.streak = 0;
       player.maxStreak = 0;
       player.totalResponseMs = 0;
@@ -1268,14 +1292,6 @@ export class RoomStore {
         error: "NO_PLAYERS" as const,
       };
     }
-    const allReady = [...session.players.values()].every((player) => player.isReady);
-    if (!allReady) {
-      return {
-        ok: false as const,
-        error: "PLAYERS_NOT_READY" as const,
-      };
-    }
-
     const poolSize = Math.max(1, this.config.maxRounds);
     if (session.sourceMode === "public_playlist") {
       const sourceQuery = this.sourceQueryForSession(session);
@@ -1437,6 +1453,7 @@ export class RoomStore {
 
     for (const player of session.players.values()) {
       player.score = 0;
+      player.lastRoundScore = 0;
       player.streak = 0;
       player.maxStreak = 0;
       player.totalResponseMs = 0;
@@ -1524,6 +1541,30 @@ export class RoomStore {
     return { status: "ok" as const, accepted: result.accepted };
   }
 
+  postChatMessage(roomCode: string, playerId: string, text: string) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    const player = session.players.get(playerId);
+    if (!player) return { status: "player_not_found" as const };
+
+    const normalized = text.trim();
+    if (normalized.length <= 0) return { status: "invalid_payload" as const };
+
+    const entry: RoomChatMessage = {
+      id: `${this.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      playerId: player.id,
+      displayName: player.displayName,
+      text: normalized.slice(0, 400),
+      sentAtMs: this.now(),
+    };
+    session.chatMessages.push(entry);
+    if (session.chatMessages.length > 120) {
+      session.chatMessages = session.chatMessages.slice(-120);
+    }
+
+    return { status: "ok" as const, message: entry };
+  }
+
   playerUserId(roomCode: string, playerId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return null;
@@ -1567,6 +1608,7 @@ export class RoomStore {
       playerId: player.id,
       displayName: player.displayName,
       isReady: player.isReady,
+      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasSubmittedAnswer(player.id) : false,
       isHost: player.id === hostPlayerId,
       canContributeLibrary: Boolean(player.userId),
       libraryContribution: {
@@ -1589,7 +1631,25 @@ export class RoomStore {
     const readyCount = players.filter((player) => player.isReady).length;
     const allReady = players.length > 0 && readyCount === players.length;
     const canStart = this.canStartWaitingSession(session);
-    const leaderboard = this.ranking(session).slice(0, 10);
+    const leaderboard = this.ranking(session)
+      .slice(0, 10)
+      .map((entry) => ({
+        ...entry,
+        hasAnsweredCurrentRound: state === "playing" ? session.manager.hasSubmittedAnswer(entry.playerId) : false,
+      }));
+    if (session.latestReveal) {
+      scheduleRomanizeJapanese(session.latestReveal.title);
+      scheduleRomanizeJapanese(session.latestReveal.artist);
+      const titleRomaji = getRomanizedJapaneseCached(session.latestReveal.title);
+      const artistRomaji = getRomanizedJapaneseCached(session.latestReveal.artist);
+      if (titleRomaji !== session.latestReveal.titleRomaji) {
+        session.latestReveal.titleRomaji = titleRomaji;
+      }
+      if (artistRomaji !== session.latestReveal.artistRomaji) {
+        session.latestReveal.artistRomaji = artistRomaji;
+      }
+    }
+
     const revealMedia =
       state === "reveal" || state === "leaderboard" || state === "results"
         ? session.latestReveal
@@ -1662,6 +1722,7 @@ export class RoomStore {
       media,
       reveal: revealMedia,
       leaderboard,
+      chatMessages: session.chatMessages.slice(-80),
     };
   }
 
@@ -1718,6 +1779,8 @@ export class RoomStore {
       categoryQuery: string;
       createdAtMs: number;
       canJoin: boolean;
+      sourceMode: RoomSourceMode;
+      playlistName: string | null;
       deadlineMs: number | null;
       serverNowMs: number;
     }> = [];
@@ -1738,6 +1801,8 @@ export class RoomStore {
         categoryQuery: session.categoryQuery,
         createdAtMs: session.createdAtMs,
         canJoin: true,
+        sourceMode: session.sourceMode,
+        playlistName: session.publicPlaylistSelection?.name ?? null,
         deadlineMs: session.manager.deadlineMs(),
         serverNowMs: nowMs,
       });

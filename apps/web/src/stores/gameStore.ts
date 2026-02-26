@@ -30,7 +30,10 @@ export type LiveRoundState = {
     playerId: string;
     displayName: string;
     score: number;
+    lastRoundScore: number;
+    streak: number;
     maxStreak: number;
+    hasAnsweredCurrentRound: boolean;
   }> | null;
 };
 

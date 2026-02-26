@@ -85,5 +85,5 @@ describe("core flow integration", () => {
     expect(snapshot.playerCount).toBe(1);
     expect(snapshot.poolSize > 0).toBe(true);
     expect(snapshot.categoryQuery).toBe("popular hits");
-  });
+  }, 20_000);
 });

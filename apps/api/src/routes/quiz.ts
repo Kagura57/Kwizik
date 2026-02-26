@@ -491,6 +491,35 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
 
     return { accepted: result.accepted };
   })
+  .post("/chat/send", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const text = readStringField(body, "text");
+
+    if (!roomCode || !playerId || !text) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.postChatMessage(roomCode, playerId, text);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "invalid_payload") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    return {
+      ok: true as const,
+      message: result.message,
+    };
+  })
   .get("/results/:roomCode", async ({ params, set }) => {
     const results = roomStore.roomResults(params.roomCode);
     if (!results) {

@@ -1,16 +1,14 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
+import { isJapanese, toRomaji } from "wanakana";
 import {
-  disconnectMusicProvider,
-  getMusicProviderConnectUrl,
   HttpStatusError,
   kickPlayer,
   leaveRoom as leaveRoomApi,
-  refreshPlayerLibraryLinks,
   replayRoom,
   searchPlaylistsAcrossProviders,
-  setPlayerLibraryContribution,
+  sendRoomChatMessage,
   setPlayerReady,
   setRoomPublicPlaylist,
   setRoomSourceMode,
@@ -77,6 +75,16 @@ function formatTrackCountLabel(value: number | null | undefined) {
   return "Nombre de titres indisponible";
 }
 
+function withRomajiLabel(value: string, providedRomaji?: string | null) {
+  if (providedRomaji && providedRomaji.trim().length > 0) {
+    return `${value} · ${providedRomaji.trim()}`;
+  }
+  if (!value || !isJapanese(value)) return value;
+  const romaji = toRomaji(value);
+  if (!romaji || romaji.toLowerCase() === value.toLowerCase()) return value;
+  return `${value} · ${romaji}`;
+}
+
 function revealArtworkUrl(reveal: { provider: UnifiedPlaylistOption["provider"] | "youtube" | "apple-music" | "tidal"; trackId: string }) {
   if (reveal.provider === "youtube") {
     return `https://i.ytimg.com/vi/${reveal.trackId}/hqdefault.jpg`;
@@ -104,8 +112,9 @@ export function RoomPlayPage() {
   const setLiveRound = useGameStore((state) => state.setLiveRound);
   const [answer, setAnswer] = useState("");
   const [clockNow, setClockNow] = useState(() => Date.now());
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
+  const [progress, setProgress] = useState(0);
   const [audioError, setAudioError] = useState(false);
-  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [iframeEpoch, setIframeEpoch] = useState(0);
   const [stableYoutubePlayback, setStableYoutubePlayback] = useState<{
     key: string;
@@ -116,15 +125,28 @@ export function RoomPlayPage() {
   const [sourceMode, setSourceMode] = useState<SourceMode>("public_playlist");
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
   const [debouncedPlaylistQuery, setDebouncedPlaylistQuery] = useState("top hits");
+  const [playlistOffset, setPlaylistOffset] = useState(0);
+  const [playlistOptions, setPlaylistOptions] = useState<UnifiedPlaylistOption[]>([]);
+  const [hasMorePlaylists, setHasMorePlaylists] = useState(false);
+  const [chatInput, setChatInput] = useState("");
   const [spotifyRateLimitUntilMs, setSpotifyRateLimitUntilMs] = useState<number | null>(null);
   const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
+  const autoStartRoundRef = useRef<number>(0);
+  const leaveSentRef = useRef(false);
+  const progressStateRef = useRef<{ key: string; value: number }>({ key: "", value: 0 });
+  const postRoundProgressRef = useRef<{ key: string; startedAtMs: number } | null>(null);
+  const audioRetryTimeoutRef = useRef<number | null>(null);
+  const userInteractionUnlockedRef = useRef(false);
+  const roomMissingRedirectedRef = useRef(false);
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const id = window.setInterval(() => setClockNow(Date.now()), 250);
+    const id = window.setInterval(() => setClockNow(Date.now() + serverClockOffsetMs), 80);
     return () => window.clearInterval(id);
-  }, []);
+  }, [serverClockOffsetMs]);
 
   const snapshotQuery = useQuery({
     queryKey: ["realtime-room", roomCode],
@@ -141,12 +163,32 @@ export function RoomPlayPage() {
   });
 
   const state = snapshotQuery.data?.snapshot;
+  useEffect(() => {
+    if (typeof snapshotQuery.data?.serverNowMs !== "number") return;
+    setServerClockOffsetMs(snapshotQuery.data.serverNowMs - Date.now());
+  }, [snapshotQuery.data?.serverNowMs]);
+
+  useEffect(() => {
+    if (roomMissingRedirectedRef.current) return;
+    const error = snapshotQuery.error;
+    if (!(error instanceof HttpStatusError)) return;
+    if (error.status !== 404 || error.message !== "ROOM_NOT_FOUND") return;
+    roomMissingRedirectedRef.current = true;
+    clearSession();
+    navigate({ to: "/" });
+  }, [clearSession, navigate, snapshotQuery.error]);
+
   const isHost = Boolean(session.playerId && state?.hostPlayerId === session.playerId);
   const isWaitingLobby = state?.state === "waiting";
   const isResolvingTracks = Boolean(state?.isResolvingTracks);
   const currentPlayer = state?.players.find((player) => player.playerId === session.playerId) ?? null;
   const typedPlaylistQuery = playlistQuery.trim();
   const normalizedPlaylistQuery = debouncedPlaylistQuery.trim();
+  const chatMessages = useMemo(() => {
+    const messages = [...(state?.chatMessages ?? [])];
+    messages.sort((left, right) => left.sentAtMs - right.sentAtMs);
+    return messages;
+  }, [state?.chatMessages]);
 
   useEffect(() => {
     if (!state?.sourceMode) return;
@@ -160,15 +202,22 @@ export function RoomPlayPage() {
     return () => window.clearTimeout(timeoutId);
   }, [playlistQuery]);
 
+  useEffect(() => {
+    setPlaylistOffset(0);
+  }, [normalizedPlaylistQuery, sourceMode, roomCode]);
+
   const playlistSearchQuery = useQuery({
-    queryKey: ["lobby-playlist-search", normalizedPlaylistQuery],
+    queryKey: ["lobby-playlist-search", normalizedPlaylistQuery, playlistOffset],
     queryFn: async () => {
       const payload = (await searchPlaylistsAcrossProviders({
         q: normalizedPlaylistQuery,
         limit: 24,
+        offset: playlistOffset,
       })) as {
         ok: boolean;
         q: string;
+        hasMore: boolean;
+        nextOffset: number | null;
         playlists: unknown;
       };
       const rawPlaylists = Array.isArray(payload.playlists) ? payload.playlists : [];
@@ -176,12 +225,31 @@ export function RoomPlayPage() {
       return {
         ok: payload.ok,
         q: payload.q,
+        hasMore: payload.hasMore,
+        nextOffset: payload.nextOffset,
         playlists,
       };
     },
     enabled: isWaitingLobby && isHost && sourceMode === "public_playlist" && normalizedPlaylistQuery.length >= 2,
     staleTime: 2 * 60_000,
   });
+
+  useEffect(() => {
+    if (!playlistSearchQuery.data) return;
+    setHasMorePlaylists(Boolean(playlistSearchQuery.data.hasMore));
+    setPlaylistOptions((previous) => {
+      if (playlistOffset <= 0) return playlistSearchQuery.data?.playlists ?? [];
+      const merged = [...previous];
+      const seen = new Set(merged.map((item) => `${item.provider}:${item.id}`));
+      for (const playlist of playlistSearchQuery.data.playlists ?? []) {
+        const key = `${playlist.provider}:${playlist.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(playlist);
+      }
+      return merged;
+    });
+  }, [playlistOffset, playlistSearchQuery.data]);
   useEffect(() => {
     if (!state) {
       setLiveRound(null);
@@ -235,6 +303,26 @@ export function RoomPlayPage() {
     },
   });
 
+  useEffect(() => {
+    if (!state || !isHost || state.state !== "waiting") {
+      autoStartRoundRef.current = 0;
+      return;
+    }
+    if (!state.allReady || !state.canStart || startMutation.isPending || isResolvingTracks) {
+      return;
+    }
+    const signature = state.readyCount * 1000 + state.players.length;
+    if (autoStartRoundRef.current === signature) return;
+    autoStartRoundRef.current = signature;
+    startMutation.mutate();
+  }, [
+    isHost,
+    isResolvingTracks,
+    startMutation,
+    startMutation.isPending,
+    state,
+  ]);
+
   const sourceModeMutation = useMutation({
     mutationFn: (mode: SourceMode) => {
       if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
@@ -261,43 +349,6 @@ export function RoomPlayPage() {
     },
     onSuccess: () => snapshotQuery.refetch(),
   });
-
-  const contributionMutation = useMutation({
-    mutationFn: (input: { provider: "spotify" | "deezer"; includeInPool: boolean }) => {
-      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
-      return setPlayerLibraryContribution({
-        roomCode,
-        playerId: session.playerId,
-        provider: input.provider,
-        includeInPool: input.includeInPool,
-      });
-    },
-    onSuccess: () => snapshotQuery.refetch(),
-  });
-
-  const refreshLinksMutation = useMutation({
-    mutationFn: () => {
-      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
-      return refreshPlayerLibraryLinks({
-        roomCode,
-        playerId: session.playerId,
-      });
-    },
-    onSuccess: () => snapshotQuery.refetch(),
-  });
-
-  useEffect(() => {
-    function onOAuthMessage(event: MessageEvent) {
-      if (!event.data || typeof event.data !== "object") return;
-      const payload = event.data as { source?: string; ok?: boolean };
-      if (payload.source !== "kwizik-music-oauth") return;
-      if (payload.ok === true && session.playerId) {
-        refreshLinksMutation.mutate();
-      }
-    }
-    window.addEventListener("message", onOAuthMessage);
-    return () => window.removeEventListener("message", onOAuthMessage);
-  }, [refreshLinksMutation, session.playerId]);
 
   const readyMutation = useMutation({
     mutationFn: (ready: boolean) => {
@@ -355,14 +406,33 @@ export function RoomPlayPage() {
     onSuccess: () => snapshotQuery.refetch(),
   });
 
+  const chatMutation = useMutation({
+    mutationFn: async (text: string) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return sendRoomChatMessage({
+        roomCode,
+        playerId: session.playerId,
+        text,
+      });
+    },
+    onSuccess: () => {
+      setChatInput("");
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      if (!(error instanceof HttpStatusError)) return;
+      if (error.status !== 404 || error.message !== "ROOM_NOT_FOUND") return;
+      if (roomMissingRedirectedRef.current) return;
+      roomMissingRedirectedRef.current = true;
+      clearSession();
+      navigate({ to: "/" });
+    },
+  });
+
   const startErrorCode = startMutation.error instanceof Error ? startMutation.error.message : null;
   const sourceModeErrorCode = sourceModeMutation.error instanceof Error ? sourceModeMutation.error.message : null;
   const publicPlaylistErrorCode =
     publicPlaylistMutation.error instanceof Error ? publicPlaylistMutation.error.message : null;
-  const contributionErrorCode =
-    contributionMutation.error instanceof Error ? contributionMutation.error.message : null;
-  const refreshLinksErrorCode =
-    refreshLinksMutation.error instanceof Error ? refreshLinksMutation.error.message : null;
   const readyErrorCode = readyMutation.error instanceof Error ? readyMutation.error.message : null;
   const kickErrorCode = kickMutation.error instanceof Error ? kickMutation.error.message : null;
   const replayErrorCode = replayMutation.error instanceof Error ? replayMutation.error.message : null;
@@ -377,10 +447,50 @@ export function RoomPlayPage() {
     if (!state?.deadlineMs) return null;
     return state.deadlineMs - clockNow;
   }, [clockNow, state?.deadlineMs]);
-  const progress =
-    state?.state === "reveal" || state?.state === "leaderboard"
-      ? 1
-      : phaseProgress(state?.state, remainingMs);
+  const roundMediaKey = `${state?.round ?? 0}:${state?.media?.trackId ?? state?.reveal?.trackId ?? "none"}`;
+  const progressKey = `${state?.state ?? "none"}:${state?.round ?? 0}:${state?.deadlineMs ?? 0}:${state?.media?.trackId ?? state?.reveal?.trackId ?? "none"}`;
+
+  useEffect(() => {
+    if (!state) {
+      progressStateRef.current = { key: "", value: 0 };
+      postRoundProgressRef.current = null;
+      setProgress(0);
+      return;
+    }
+
+    if (state.state === "reveal" || state.state === "leaderboard") {
+      const postKey = `post-round:${roundMediaKey}`;
+      if (!postRoundProgressRef.current || postRoundProgressRef.current.key !== postKey) {
+        postRoundProgressRef.current = { key: postKey, startedAtMs: clockNow };
+      }
+      const startedAtMs = postRoundProgressRef.current.startedAtMs;
+      const elapsedMs = Math.max(0, clockNow - startedAtMs);
+      const rawProgress = clamp01(elapsedMs / (REVEAL_MS + LEADERBOARD_MS));
+      const previous = progressStateRef.current;
+      const nextProgress =
+        previous.key === postKey ? Math.max(previous.value, rawProgress) : rawProgress;
+
+      progressStateRef.current = {
+        key: postKey,
+        value: nextProgress,
+      };
+      setProgress(nextProgress);
+      return;
+    }
+
+    postRoundProgressRef.current = null;
+    const rawProgress = phaseProgress(state.state, remainingMs);
+    const previous = progressStateRef.current;
+    const nextProgress =
+      previous.key === progressKey ? Math.max(previous.value, rawProgress) : rawProgress;
+
+    progressStateRef.current = {
+      key: progressKey,
+      value: nextProgress,
+    };
+    setProgress(nextProgress);
+  }, [progressKey, remainingMs, state]);
+
   const youtubePlayback = useMemo(() => {
     if (!state?.media?.embedUrl || !state.media.trackId) return null;
     if (state.media.provider !== "youtube") return null;
@@ -480,6 +590,11 @@ export function RoomPlayPage() {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
+    if (audioRetryTimeoutRef.current !== null) {
+      window.clearTimeout(audioRetryTimeoutRef.current);
+      audioRetryTimeoutRef.current = null;
+    }
+
     if (activeYoutubeEmbed) {
       audio.pause();
       audio.removeAttribute("src");
@@ -503,16 +618,48 @@ export function RoomPlayPage() {
 
     const playPromise = audio.play();
     if (playPromise) {
-      playPromise
-        .then(() => setAutoplayBlocked(false))
-        .catch(() => setAutoplayBlocked(true));
+      playPromise.catch(() => {
+        if (audioRetryTimeoutRef.current !== null) return;
+        audioRetryTimeoutRef.current = window.setTimeout(() => {
+          audioRetryTimeoutRef.current = null;
+          const nextAudio = audioRef.current;
+          if (!nextAudio || !nextAudio.src) return;
+          nextAudio.play().catch(() => undefined);
+        }, 320);
+      });
     }
   }, [activeYoutubeEmbed, state?.previewUrl, state?.state]);
 
   useEffect(() => {
-    if (!activeYoutubeEmbed) return;
-    setAutoplayBlocked(true);
+    function unlockAudioPlayback() {
+      const shouldKickIframe = Boolean(activeYoutubeEmbed) && !userInteractionUnlockedRef.current;
+      userInteractionUnlockedRef.current = true;
+
+      const audio = audioRef.current;
+      if (audio && audio.src) {
+        audio.play().catch(() => undefined);
+      }
+      if (shouldKickIframe) {
+        setIframeEpoch((value) => value + 1);
+      }
+    }
+
+    window.addEventListener("pointerdown", unlockAudioPlayback, { passive: true });
+    window.addEventListener("keydown", unlockAudioPlayback);
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudioPlayback);
+      window.removeEventListener("keydown", unlockAudioPlayback);
+    };
   }, [activeYoutubeEmbed]);
+
+  useEffect(() => {
+    return () => {
+      if (audioRetryTimeoutRef.current !== null) {
+        window.clearTimeout(audioRetryTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!state) return;
@@ -531,36 +678,10 @@ export function RoomPlayPage() {
     }
   }, [state, submittedMcq, submittedText]);
 
-  const activateAudio = useCallback(async () => {
-    if (activeYoutubeEmbed) {
-      setAutoplayBlocked(false);
-      setIframeEpoch((value) => value + 1);
-      return;
-    }
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      await audio.play();
-      setAutoplayBlocked(false);
-    } catch {
-      setAutoplayBlocked(true);
-    }
-  }, [activeYoutubeEmbed]);
-
   useEffect(() => {
-    if (!autoplayBlocked) return;
-
-    function unlockFromInteraction() {
-      void activateAudio();
-    }
-
-    window.addEventListener("pointerdown", unlockFromInteraction, { once: true });
-    window.addEventListener("keydown", unlockFromInteraction, { once: true });
-    return () => {
-      window.removeEventListener("pointerdown", unlockFromInteraction);
-      window.removeEventListener("keydown", unlockFromInteraction);
-    };
-  }, [activateAudio, autoplayBlocked]);
+    if (!state || state.round <= 0) return;
+    setAnswer("");
+  }, [state?.round]);
 
   function onSubmitText(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -580,47 +701,94 @@ export function RoomPlayPage() {
     answerMutation.mutate(choice);
   }
 
-  async function onConnectProvider(provider: "spotify" | "deezer") {
-    try {
-      const payload = await getMusicProviderConnectUrl({
-        provider,
-        returnTo: `/room/${roomCode}/play`,
-      });
-      if (typeof window !== "undefined") {
-        window.open(payload.authorizeUrl, "kwizik-music-oauth", "width=640,height=760");
-      }
-    } catch {
-      // Keep lobby interactive even when provider OAuth is temporarily unavailable.
-    }
+  function onSubmitChat(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session.playerId) return;
+    const value = chatInput.trim();
+    if (value.length <= 0) return;
+    chatMutation.mutate(value);
   }
 
-  async function onDisconnectProvider(provider: "spotify" | "deezer") {
-    try {
-      await disconnectMusicProvider({ provider });
-      refreshLinksMutation.mutate();
-    } catch {
-      // Ignore transient disconnect failures in lobby controls.
-    }
-  }
+  useEffect(() => {
+    if (!chatLogRef.current || !chatEndRef.current) return;
+    chatEndRef.current.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [chatMessages.length]);
 
   function onSelectSourceMode(mode: SourceMode) {
     setSourceMode(mode);
     sourceModeMutation.mutate(mode);
   }
 
+  function dispatchLeaveSignal() {
+    if (leaveSentRef.current || !session.playerId) return;
+    leaveSentRef.current = true;
+
+    const payload = JSON.stringify({
+      roomCode,
+      playerId: session.playerId,
+    });
+
+    const envBase = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
+    const baseUrl = envBase.length > 0
+      ? envBase.replace(/\/+$/, "")
+      : `${window.location.origin}/api`;
+    const target = `${baseUrl}/quiz/leave`;
+
+    try {
+      const blob = new Blob([payload], { type: "application/json" });
+      const sent = navigator.sendBeacon(target, blob);
+      if (sent) return;
+    } catch {
+      // Fall through to fetch keepalive fallback.
+    }
+
+    fetch(target, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+      keepalive: true,
+      credentials: "include",
+    }).catch(() => undefined);
+  }
+
+  useEffect(() => {
+    if (!session.playerId) return;
+    leaveSentRef.current = false;
+    const shouldDispatchOnCleanup = !import.meta.env.DEV;
+
+    function onPageHide() {
+      dispatchLeaveSignal();
+    }
+    function onBeforeUnload() {
+      dispatchLeaveSignal();
+    }
+
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      if (shouldDispatchOnCleanup) {
+        dispatchLeaveSignal();
+      }
+    };
+  }, [roomCode, session.playerId]);
+
   async function leaveRoom() {
+    if (session.playerId) {
+      leaveSentRef.current = true;
+    }
     if (session.playerId) {
       try {
         await leaveRoomApi({ roomCode, playerId: session.playerId });
       } catch {
-        // keep local leave behavior even on transient API errors
+        dispatchLeaveSignal();
       }
     }
     clearSession();
     navigate({ to: "/" });
   }
 
-  const playlistOptions = playlistSearchQuery.data?.playlists ?? [];
   const topThree = (state?.leaderboard ?? []).slice(0, 3);
   const podiumByRank = new Map(topThree.map((entry) => [entry.rank, entry]));
   const podiumSlots = [
@@ -638,10 +806,28 @@ export function RoomPlayPage() {
             {state?.leaderboard && state.leaderboard.length > 0 ? (
               <ol className="leaderboard-list compact">
                 {state.leaderboard.map((entry) => (
-                  <li key={entry.playerId}>
+                  <li key={entry.playerId} className={entry.hasAnsweredCurrentRound ? "answered" : ""}>
                     <span>#{entry.rank}</span>
-                    <strong>{entry.displayName}</strong>
-                    <em>{entry.score} pts</em>
+                    <strong className="leaderboard-name">
+                      {entry.displayName}
+                      {entry.hasAnsweredCurrentRound && (
+                        <i className="answer-check" aria-label="Reponse validee">
+                          ✓
+                        </i>
+                      )}
+                    </strong>
+                    <div className="leaderboard-score-block">
+                      <em>{entry.score} pts</em>
+                      <small className="leaderboard-meta">
+                        <span className="round-gain">+{entry.lastRoundScore}</span>
+                        <span className={`streak-chip${entry.streak > 0 ? " hot" : ""}`}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path d="M12 2c.5 3-2 4.8-2 7.2 0 1.5 1 2.7 2 3.4 1.1-.7 2-2 2-3.6 0-1.8-1-3.1-2-4.6 2 .8 4.8 3.4 4.8 7.1A4.8 4.8 0 0 1 12 20a4.8 4.8 0 0 1-4.8-4.9C7.2 10.6 10.1 7.8 12 2Z" />
+                          </svg>
+                          {entry.streak}
+                        </span>
+                      </small>
+                    </div>
                   </li>
                 ))}
               </ol>
@@ -672,7 +858,7 @@ export function RoomPlayPage() {
                   ))}
                 </div>
                 <div className="sound-timeline">
-                  <span style={{ width: `${Math.round(progress * 100)}%` }} />
+                  <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
                 </div>
               </div>
             </>
@@ -680,7 +866,7 @@ export function RoomPlayPage() {
 
           {state?.state === "waiting" && (
             <div className="waiting-box">
-              <h2>Tout le monde doit être prêt avant le lancement.</h2>
+              <h2>Le host peut lancer la partie quand il le souhaite.</h2>
               {isResolvingTracks && (
                 <div className="resolving-tracks-banner" role="status" aria-live="polite">
                   <span className="resolving-tracks-spinner" aria-hidden="true" />
@@ -693,7 +879,7 @@ export function RoomPlayPage() {
 
               {isHost ? (
                 <div className="field-block">
-                  <span className="field-label">Mode de jeu (host)</span>
+                  <span className="field-label">Mode source (host)</span>
                   <div className="source-preset-grid">
                     <button
                       type="button"
@@ -767,13 +953,25 @@ export function RoomPlayPage() {
                               <div className="playlist-card-placeholder" aria-hidden="true" />
                             )}
                             <div>
-                              <strong>{playlistDisplayName(playlist.name)}</strong>
+                              <strong>{withRomajiLabel(playlistDisplayName(playlist.name))}</strong>
                               <p>{playlistSecondaryLabel(playlist)}</p>
                               <small>{formatTrackCountLabel(playlist.trackCount)}</small>
                             </div>
                           </button>
                         ))}
                       </div>
+                      {typedPlaylistQuery.length >= 2 &&
+                        !playlistSearchQuery.isPending &&
+                        hasMorePlaylists && (
+                          <button
+                            className="ghost-btn"
+                            type="button"
+                            onClick={() => setPlaylistOffset((current) => current + 24)}
+                            disabled={playlistSearchQuery.isFetching}
+                          >
+                            {playlistSearchQuery.isFetching ? "Chargement..." : "Load more"}
+                          </button>
+                        )}
                     </>
                   )}
 
@@ -786,51 +984,18 @@ export function RoomPlayPage() {
                   )}
                 </div>
               ) : (
-                <p className="status">Seul le host peut changer le mode source.</p>
+                <p className="status">Seul le host peut modifier la configuration source.</p>
               )}
 
-              <div className="field-block">
-                <span className="field-label">Ta contribution bibliothèque</span>
-                {!currentPlayer?.canContributeLibrary && (
-                  <p className="status">Tu es en mode invité. Connecte-toi pour contribuer tes liked songs.</p>
-                )}
-                {currentPlayer?.canContributeLibrary && (
-                  <div className="panel-form">
-                    <button
-                      className="ghost-btn"
-                      type="button"
-                      disabled={refreshLinksMutation.isPending}
-                      onClick={() => refreshLinksMutation.mutate()}
-                    >
-                      {refreshLinksMutation.isPending ? "Rafraîchissement..." : "Rafraîchir mes liens"}
-                    </button>
-                    {(["spotify", "deezer"] as const).map((provider) => {
-                      const linked = currentPlayer.libraryContribution.linkedProviders[provider];
-                      return (
-                        <div key={provider} className="waiting-actions">
-                          <p className="status">
-                            {provider === "spotify" ? "Spotify" : "Deezer"}: {linked === "linked" ? "connecté" : linked}
-                          </p>
-                          {linked === "linked" ? (
-                            <>
-                              <button
-                                className="ghost-btn"
-                                type="button"
-                                onClick={() => onDisconnectProvider(provider)}
-                              >
-                                Déconnecter
-                              </button>
-                            </>
-                          ) : (
-                            <button className="ghost-btn" type="button" onClick={() => onConnectProvider(provider)}>
-                              Connecter {provider === "spotify" ? "Spotify" : "Deezer"}
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+              <div className="room-meta-list">
+                <p>
+                  <span>Mode source</span>
+                  <strong>{state.sourceMode === "players_liked" ? "Liked Songs joueurs" : "Playlist publique"}</strong>
+                </p>
+                <p>
+                  <span>Playlist</span>
+                  <strong>{withRomajiLabel(state.sourceConfig.publicPlaylist?.name ?? "Aucune playlist selectionnee")}</strong>
+                </p>
               </div>
 
               <div className="waiting-actions">
@@ -851,13 +1016,11 @@ export function RoomPlayPage() {
                     {startMutation.isPending ? "Lancement..." : "Lancer la partie"}
                   </button>
                 )}
-                <Link className="ghost-btn" to="/room/$roomCode/view" params={{ roomCode }}>
-                  Ouvrir projection
-                </Link>
               </div>
 
               <p className="status">
                 Joueurs prêts: {state.readyCount}/{state.players.length}
+                {state.allReady ? " · Lancement auto quand le host est disponible." : ""}
               </p>
               <ul className="lobby-player-list">
                 {state.players.map((player) => (
@@ -933,8 +1096,12 @@ export function RoomPlayPage() {
                 </div>
                 <div className="reveal-content">
                   <p className="kicker">Reveal</p>
-                  <h3 className="reveal-title">{state.reveal.title}</h3>
-                  <p className="reveal-artist">{state.reveal.artist}</p>
+                  <h3 className="reveal-title">
+                    {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
+                  </h3>
+                  <p className="reveal-artist">
+                    {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
+                  </p>
                 </div>
               </div>
             )}
@@ -993,8 +1160,7 @@ export function RoomPlayPage() {
               startMutation.isError ||
               sourceModeMutation.isError ||
               publicPlaylistMutation.isError ||
-              contributionMutation.isError ||
-              refreshLinksMutation.isError ||
+              chatMutation.isError ||
               readyMutation.isError ||
               kickMutation.isError ||
               replayMutation.isError ||
@@ -1012,19 +1178,15 @@ export function RoomPlayPage() {
               "Le mode Liked Songs nécessite au moins un joueur avec un compte musical connecté."}
             {startErrorCode === "PLAYERS_LIBRARY_SYNCING" &&
               "Les musiques des joueurs sont en cours de préparation. Réessaie dans quelques secondes."}
-            {startErrorCode === "PLAYERS_NOT_READY" && "Tous les joueurs doivent être prêts."}
             {startErrorCode === "HOST_ONLY" && "Seul le host peut lancer la partie."}
             {sourceModeErrorCode === "HOST_ONLY" && "Seul le host peut changer le mode source."}
             {publicPlaylistErrorCode === "HOST_ONLY" && "Seul le host peut choisir la playlist publique."}
-            {contributionErrorCode === "INVALID_STATE" && "L’opt-in bibliothèque est disponible uniquement dans le lobby."}
-            {contributionErrorCode === "UNAUTHORIZED" && "Connecte ton compte Kwizik pour contribuer ta bibliothèque."}
-            {contributionErrorCode === "FORBIDDEN" && "Connecte ton compte Kwizik pour contribuer ta bibliothèque."}
-            {refreshLinksErrorCode === "UNAUTHORIZED" && "Connecte ton compte Kwizik pour lier Spotify/Deezer."}
             {readyErrorCode === "INVALID_STATE" && "Le statut prêt se gère uniquement dans le lobby."}
             {kickErrorCode === "HOST_ONLY" && "Seul le host peut éjecter un joueur."}
             {replayErrorCode === "HOST_ONLY" && "Seul le host peut relancer une partie."}
             {skipErrorCode === "HOST_ONLY" && "Seul le host peut passer automatiquement la manche."}
             {skipErrorCode === "INVALID_STATE" && "La manche ne peut pas être passée dans cet état."}
+            {chatMutation.isError && "Impossible d'envoyer le message."}
             {!session.playerId && "Tu dois rejoindre la room pour répondre."}
             {snapshotQuery.isError && "Synchronisation impossible."}
             {answerMutation.isError && "Réponse refusée."}
@@ -1035,7 +1197,36 @@ export function RoomPlayPage() {
         {!isResults && (
           <aside className="arena-side meta-side">
             <h2 className="side-title">Chat</h2>
-            <p className="panel-copy">Le chat joueur arrive ici (roadmap).</p>
+            <div ref={chatLogRef} className="room-chat-log">
+              {chatMessages.map((message) => (
+                <p key={message.id} className="room-chat-message">
+                  <strong>{message.displayName}</strong>
+                  <span>{message.text}</span>
+                </p>
+              ))}
+              {chatMessages.length <= 0 && (
+                <p className="room-chat-empty">Aucun message pour l'instant.</p>
+              )}
+              <div ref={chatEndRef} className="room-chat-end" />
+            </div>
+            <form className="panel-form" onSubmit={onSubmitChat}>
+              <label>
+                <span>Message</span>
+                <input
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.currentTarget.value)}
+                  maxLength={400}
+                  placeholder="Ecris a la room..."
+                />
+              </label>
+              <button
+                className="solid-btn"
+                type="submit"
+                disabled={chatMutation.isPending || !session.playerId}
+              >
+                {chatMutation.isPending ? "Envoi..." : "Envoyer"}
+              </button>
+            </form>
             <button className="ghost-btn" type="button" onClick={leaveRoom}>
               Quitter la room
             </button>

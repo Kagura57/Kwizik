@@ -391,7 +391,7 @@ async function fetchSpotifyLikedTracksForSync(
   userId: string,
   onProgress?: (update: LibrarySyncProgressUpdate) => void | Promise<void>,
 ) {
-  const link = await getValidSpotifyLink(userId);
+  let link = await getValidSpotifyLink(userId);
   if (!link?.accessToken) {
     return { tracks: [] as SyncedLibrarySourceTrack[], total: null as number | null };
   }
@@ -400,6 +400,7 @@ async function fetchSpotifyLikedTracksForSync(
   let total: number | null = null;
   let offset = 0;
   const maxTracks = 10_000;
+  let refreshRetried = false;
 
   while (tracks.length < maxTracks) {
     const pageLimit = Math.min(50, maxTracks - tracks.length);
@@ -408,6 +409,7 @@ async function fetchSpotifyLikedTracksForSync(
     url.searchParams.set("offset", String(offset));
     let lastStatus: number | null = null;
     let lastRetryAfterMs: number | null = null;
+    let lastErrorDetail: string | null = null;
     const payload = (await fetchJsonWithTimeout(
       url,
       {
@@ -425,15 +427,40 @@ async function fetchSpotifyLikedTracksForSync(
         onSuccess: ({ status }) => {
           lastStatus = status;
         },
-        onHttpError: ({ status, retryAfterMs }) => {
+        onHttpError: ({ status, retryAfterMs, errorDetail }) => {
           lastStatus = status;
           lastRetryAfterMs = retryAfterMs;
+          lastErrorDetail = errorDetail;
         },
       },
     )) as SpotifySavedTracksPayload | null;
     if (!payload) {
       if (lastStatus === 429) {
         throw new SpotifySyncRateLimitError(lastRetryAfterMs ?? 30_000);
+      }
+      if (lastStatus === 401 && !refreshRetried) {
+        refreshRetried = true;
+        const refreshed = await refreshSpotifyAccessToken(userId);
+        if (refreshed?.accessToken) {
+          link = refreshed;
+          continue;
+        }
+      }
+      if (lastStatus === 401) {
+        throw new Error("SPOTIFY_SYNC_UNAUTHORIZED");
+      }
+      if (lastStatus === 403) {
+        const detail = (lastErrorDetail ?? "").toLowerCase();
+        if (detail.includes("scope")) {
+          throw new Error("SPOTIFY_SYNC_SCOPE_MISSING_USER_LIBRARY_READ");
+        }
+        throw new Error("SPOTIFY_SYNC_FORBIDDEN");
+      }
+      if (lastStatus === 400) {
+        throw new Error("SPOTIFY_SYNC_BAD_REQUEST");
+      }
+      if (typeof lastStatus === "number") {
+        throw new Error(`SPOTIFY_SYNC_FETCH_FAILED_HTTP_${lastStatus}`);
       }
       throw new Error("SPOTIFY_SYNC_FETCH_FAILED");
     }

@@ -457,7 +457,7 @@ describe("RoomStore gameplay progression", () => {
     expect(["clean-1", "clean-2"]).toContain(label);
   });
 
-  it("requires host and 100% ready before start", async () => {
+  it("requires host but allows force start before all players are ready", async () => {
     const store = new RoomStore({
       getTrackPool: async () => FIXTURE_TRACKS,
       config: { maxRounds: 2 },
@@ -477,11 +477,7 @@ describe("RoomStore gameplay progression", () => {
 
     store.setPlayerReady(created.roomCode, host.value.playerId, true);
     const startedBeforeAllReady = await store.startGame(created.roomCode, host.value.playerId);
-    expect(startedBeforeAllReady).toMatchObject({ ok: false, error: "PLAYERS_NOT_READY" });
-
-    store.setPlayerReady(created.roomCode, guest.value.playerId, true);
-    const started = await store.startGame(created.roomCode, host.value.playerId);
-    expect(started?.ok).toBe(true);
+    expect(startedBeforeAllReady?.ok).toBe(true);
   });
 
   it("supports replay to waiting lobby and preserves players", async () => {

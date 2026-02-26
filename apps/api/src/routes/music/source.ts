@@ -12,6 +12,13 @@ function parseLimit(raw: string | undefined, fallback: number) {
   return Math.max(1, parsed);
 }
 
+function parseOffset(raw: string | undefined, fallback = 0) {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, parsed);
+}
+
 function parseUsers(raw: string | undefined) {
   if (!raw) return [];
   return raw
@@ -170,6 +177,7 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
   })
   .get("/playlists/search", async ({ query, set }) => {
     const limit = parseLimit(typeof query.limit === "string" ? query.limit : undefined, 24);
+    const offset = parseOffset(typeof query.offset === "string" ? query.offset : undefined, 0);
     const raw = typeof query.q === "string" ? query.q.trim() : "";
     if (raw.length < 2) {
       set.status = 400;
@@ -179,7 +187,7 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
     const providerTimeoutMs = readPlaylistSearchProviderTimeoutMs();
     const deezerResult = await Promise.allSettled([
       withTimeout(
-        searchDeezerPlaylists(raw, limit),
+        searchDeezerPlaylists(raw, limit, offset),
         providerTimeoutMs,
         "DEEZER_PLAYLIST_SEARCH_TIMEOUT",
       ),
@@ -188,6 +196,7 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
     const deezer = Array.isArray(deezerRaw) ? deezerRaw : [];
     logEvent("info", "playlist_search_provider_payload", {
       q: raw,
+      offset,
       limit,
       deezerStatus: deezerResult.status,
       deezerType: Array.isArray(deezerRaw) ? "array" : typeof deezerRaw,
@@ -203,6 +212,7 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
     if (deezerResult.status === "rejected") {
       logEvent("warn", "playlist_search_partial_failure", {
         q: raw,
+        offset,
         limit,
         providerTimeoutMs,
         deezerFailed: deezerResult.status === "rejected",
@@ -225,6 +235,7 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
     }
     logEvent("info", "playlist_search_response_payload", {
       q: raw,
+      offset,
       limit,
       mergedCount: merged.length,
       returnedCount: deduped.length,
@@ -241,6 +252,9 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
     return {
       ok: true as const,
       q: raw,
+      offset,
+      hasMore: deduped.length >= limit,
+      nextOffset: deduped.length >= limit ? offset + deduped.length : null,
       playlists: deduped,
     };
   })

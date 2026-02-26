@@ -13,6 +13,9 @@
     "bullmq": "5.70.1",
     "elysia": "^1.3.0",
     "ioredis": "5.9.3",
+    "kuromoji": "0.1.2",
+    "kuroshiro": "1.2.0",
+    "kuroshiro-analyzer-kuromoji": "1.1.0",
     "pg": "8.18.0"
   }
 }

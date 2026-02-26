@@ -164,14 +164,17 @@ export function AuthPage() {
                 />
               </label>
 
-              <label className="inline-checkbox">
-                <input
-                  checked={rememberMe}
-                  onChange={(event) => setRememberMe(event.currentTarget.checked)}
-                  type="checkbox"
-                />
-                <span>Rester connecté</span>
-              </label>
+              {mode === "signin" && (
+                <label className="remember-toggle">
+                  <input
+                    checked={rememberMe}
+                    onChange={(event) => setRememberMe(event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                  <span className="remember-toggle-ui" aria-hidden="true" />
+                  <span>Rester connecté</span>
+                </label>
+              )}
 
               <button className="solid-btn" type="submit" disabled={authMutation.isPending}>
                 {authMutation.isPending
