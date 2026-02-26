@@ -1,6 +1,7 @@
 name: deploy-api
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main"]
     paths:
@@ -8,17 +9,47 @@ on:
       - "packages/**"
       - "package.json"
       - "bun.lock"
-      - "railway.toml"
+      - "apps/api/railway.toml"
+      - ".github/workflows/deploy-api.yml"
+
+concurrency:
+  group: deploy-api-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ vars.RAILWAY_PROJECT_ID }}
+      RAILWAY_ENVIRONMENT: ${{ vars.RAILWAY_ENVIRONMENT }}
+      RAILWAY_SERVICE_NAME: ${{ vars.RAILWAY_API_SERVICE_NAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npm install -g @railway/cli
-      - run: railway up --service api --ci
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      - name: Deploy API service
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::Missing GitHub secret RAILWAY_TOKEN"
+            exit 1
+          fi
+          if [ -z "$RAILWAY_PROJECT_ID" ]; then
+            echo "::error::Missing GitHub variable RAILWAY_PROJECT_ID"
+            exit 1
+          fi
+
+          target_service="${RAILWAY_SERVICE_NAME:-api}"
+          target_env="${RAILWAY_ENVIRONMENT:-production}"
+          railway up \
+            --service "$target_service" \
+            --project "$RAILWAY_PROJECT_ID" \
+            --environment "$target_env" \
+            --ci \
+            -m "deploy api ${GITHUB_SHA}"

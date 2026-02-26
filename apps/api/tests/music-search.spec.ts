@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
+import * as aggregatorModule from "../src/services/MusicAggregator";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("music search route", () => {
   it("returns 400 when query is missing", async () => {
@@ -8,6 +13,31 @@ describe("music search route", () => {
   });
 
   it("returns unified provider payload", async () => {
+    vi.spyOn(aggregatorModule, "unifiedMusicSearch").mockResolvedValue({
+      query: "anime",
+      limit: 5,
+      fallback: [
+        {
+          provider: "youtube",
+          id: "yt-1",
+          title: "Mock Song",
+          artist: "Mock Artist",
+          durationSec: 120,
+          previewUrl: null,
+          sourceUrl: "https://www.youtube.com/watch?v=yt-1",
+          embedUrl: null,
+        },
+      ],
+      results: {
+        spotify: [],
+        deezer: [],
+        "apple-music": [],
+        tidal: [],
+        youtube: [],
+      },
+      providerErrors: {},
+    });
+
     const response = await app.handle(new Request("http://localhost/music/search?q=anime&limit=5"));
     expect(response.status).toBe(200);
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/index";
 import * as deezerModule from "../src/routes/music/deezer";
+import * as trackSourceResolver from "../src/services/TrackSourceResolver";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -13,6 +14,19 @@ describe("music source routes", () => {
   });
 
   it("resolves source metadata for free search", async () => {
+    vi.spyOn(trackSourceResolver, "resolveTrackPoolFromSource").mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => ({
+        provider: "youtube",
+        id: `yt-mock-${index}`,
+        title: `Mock Track ${index}`,
+        artist: "Mock Artist",
+        durationSec: 120,
+        previewUrl: null,
+        sourceUrl: `https://www.youtube.com/watch?v=yt-mock-${index}`,
+        embedUrl: null,
+      })),
+    );
+
     const response = await app.handle(
       new Request("http://localhost/music/source/resolve?source=popular%20hits&size=6"),
     );
