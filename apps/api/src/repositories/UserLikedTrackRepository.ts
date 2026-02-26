@@ -12,6 +12,8 @@ export type SyncedLibraryTrack = {
   addedAtMs: number;
 };
 
+type ListOrder = "recent" | "random";
+
 function memoryKey(userId: string, provider: LibraryProvider) {
   return `${userId}:${provider}`;
 }
@@ -23,6 +25,17 @@ type MemoryUserLikedTrack = {
   artist: string;
   durationMs: number | null;
 };
+
+function randomShuffle<T>(values: T[]) {
+  const copied = [...values];
+  for (let index = copied.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const current = copied[index];
+    copied[index] = copied[swapIndex] as T;
+    copied[swapIndex] = current as T;
+  }
+  return copied;
+}
 
 export class UserLikedTrackRepository {
   private readonly memoryUserTracks = new Map<string, MemoryUserLikedTrack[]>();
@@ -113,10 +126,14 @@ export class UserLikedTrackRepository {
     userIds: string[];
     providers: LibraryProvider[];
     limit: number;
+    orderBy?: ListOrder;
+    randomSeed?: string;
   }): Promise<SyncedLibraryTrack[]> {
     const userIds = input.userIds.map((value) => value.trim()).filter((value) => value.length > 0);
     const providers = input.providers;
     const limit = Math.max(1, Math.min(input.limit, 10_000));
+    const orderBy: ListOrder = input.orderBy === "random" ? "random" : "recent";
+    const randomSeed = (input.randomSeed?.trim() || `${Date.now()}:${Math.random()}`).slice(0, 120);
     if (userIds.length <= 0 || providers.length <= 0) return [];
 
     if (!this.dbEnabled) {
@@ -137,9 +154,22 @@ export class UserLikedTrackRepository {
           }
         }
       }
+      if (orderBy === "random") {
+        return randomShuffle(rows).slice(0, limit);
+      }
       rows.sort((left, right) => right.addedAtMs - left.addedAtMs);
       return rows.slice(0, limit);
     }
+
+    const orderClause =
+      orderBy === "random"
+        ? "md5(concat($4::text, ':', ult.provider, ':', ult.source_id)) asc"
+        : "ult.added_at desc";
+
+    const queryValues =
+      orderBy === "random"
+        ? [userIds, providers, limit, randomSeed]
+        : [userIds, providers, limit];
 
     const result = await pool.query<{
       user_id: string;
@@ -158,10 +188,10 @@ export class UserLikedTrackRepository {
          and rt.source_id = ult.source_id
         where ult.user_id = any($1::text[])
           and ult.provider = any($2::text[])
-        order by ult.added_at desc
+        order by ${orderClause}
         limit $3
       `,
-      [userIds, providers, limit],
+      queryValues,
     );
 
     const tracks: SyncedLibraryTrack[] = [];
