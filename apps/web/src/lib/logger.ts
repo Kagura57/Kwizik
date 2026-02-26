@@ -9,7 +9,7 @@ export function logClientEvent(
     ts: new Date().toISOString(),
     level,
     event,
-    service: "tunaris-web",
+    service: "kwizik-web",
     ...data,
   };
 

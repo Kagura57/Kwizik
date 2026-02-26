@@ -3,7 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 const CIPHER_PREFIX = "enc:v1:";
 const IV_BYTES = 12;
 const AUTH_TAG_BYTES = 16;
-const FALLBACK_SECRET = "tunaris-dev-secret-change-this-in-production-1234";
+const FALLBACK_SECRET = "kwizik-dev-secret-change-this-in-production-1234";
 
 function deriveKey() {
   const explicitCipherSecret = process.env.MUSIC_TOKEN_ENCRYPTION_KEY?.trim() ?? "";

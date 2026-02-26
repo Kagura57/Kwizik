@@ -121,7 +121,7 @@ export const accountRoutes = new Elysia({ prefix: "/account" })
     const redirect = target.length > 0 ? target : "/";
     set.headers["content-type"] = "text/html; charset=utf-8";
     return `<!doctype html><html><body><script>const message=${JSON.stringify(
-      { source: "tunaris-music-oauth", provider, ok: success },
+      { source: "kwizik-music-oauth", provider, ok: success },
     )};if(window.opener){window.opener.postMessage(message,"*");window.close();}else{window.location.replace(${JSON.stringify(redirect)});}</script></body></html>`;
   })
   .post("/music/:provider/disconnect", async ({ headers, params, set }) => {

@@ -1,5 +1,5 @@
 {
-  "name": "@tunaris/api",
+  "name": "@kwizik/api",
   "type": "module",
   "scripts": {
     "dev": "bun --env-file=../../.env --hot src/index.ts",

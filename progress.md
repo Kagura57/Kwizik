@@ -1,4 +1,4 @@
-Original prompt: Reprendre le handoff et transformer Tunaris en vraie app web blindtest moderne (inspiration Kahoot), avec backend plus pro, Better Auth, et sans distinction host/joueur.
+Original prompt: Reprendre le handoff et transformer Kwizik en vraie app web blindtest moderne (inspiration Kahoot), avec backend plus pro, Better Auth, et sans distinction host/joueur.
 
 ## 2026-02-19 - Progression
 

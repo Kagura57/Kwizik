@@ -1,7 +1,7 @@
 # Music Quiz Multiplayer MVP Design
 
 - Date: 2026-02-18
-- Project: Tunaris (mobile-first multiplayer music quiz)
+- Project: Kwizik (mobile-first multiplayer music quiz)
 - Status: Approved
 
 ## 1. Goals And Scope

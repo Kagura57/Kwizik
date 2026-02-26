@@ -178,7 +178,7 @@ function looksLikePromotionalTrack(track: Pick<MusicTrack, "title" | "artist">) 
 
 function embedUrlForTrack(track: Pick<MusicTrack, "provider" | "id">) {
   if (track.provider === "spotify") {
-    return `https://open.spotify.com/embed/track/${track.id}?utm_source=tunaris`;
+    return `https://open.spotify.com/embed/track/${track.id}?utm_source=kwizik`;
   }
   if (track.provider === "youtube") {
     return `https://www.youtube.com/embed/${track.id}?autoplay=1&controls=0&disablekb=1&iv_load_policy=3&modestbranding=1&playsinline=1&rel=0&fs=0&enablejsapi=1`;

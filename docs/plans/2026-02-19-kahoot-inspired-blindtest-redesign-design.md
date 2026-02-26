@@ -1,13 +1,13 @@
 # Kahoot-Inspired Blindtest Rebuild Design
 
 - Date: 2026-02-19
-- Project: Tunaris
+- Project: Kwizik
 - Status: Approved
 
 ## 1. Product Direction
 
 ### Objective
-Rebuild Tunaris from prototype-level UX/backend into a production-grade web blindtest experience that feels competitive, fast, and desirable to play, inspired by Kahoot/Quizizz live game patterns.
+Rebuild Kwizik from prototype-level UX/backend into a production-grade web blindtest experience that feels competitive, fast, and desirable to play, inspired by Kahoot/Quizizz live game patterns.
 
 ### Core Product Decisions (Validated)
 - Live host-led session flow.

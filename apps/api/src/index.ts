@@ -55,7 +55,7 @@ function buildHealthDetailsPayload() {
 
   return {
     ok: true as const,
-    service: "tunaris-api",
+    service: "kwizik-api",
     now: new Date().toISOString(),
     uptimeSec: Math.round(process.uptime()),
     rooms: roomStore.diagnostics(),
@@ -135,5 +135,5 @@ if (import.meta.main) {
     port: apiPort,
   });
   startSpotifySyncWorker();
-  console.log(`Tunaris API running on http://0.0.0.0:${apiPort}`);
+  console.log(`Kwizik API running on http://0.0.0.0:${apiPort}`);
 }

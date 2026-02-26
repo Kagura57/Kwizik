@@ -1,4 +1,4 @@
-# First Deploy Railway (Tunaris)
+# First Deploy Railway (Kwizik)
 
 Ce guide déploie `web + api + postgres + redis` sur Railway.
 
@@ -12,7 +12,7 @@ Ce guide déploie `web + api + postgres + redis` sur Railway.
 ## 2. Créer le projet Railway
 
 - Crée un projet Railway.
-- Connecte le repo GitHub `tunaris`.
+- Connecte le repo GitHub du projet (actuel: `kwizik`, renommable en `kwizik`).
 
 ## 3. Créer les services
 
@@ -122,7 +122,8 @@ Workflows attendus:
 
 Secrets GitHub requis:
 
-- `RAILWAY_TOKEN`
+- `RAILWAY_API_TOKEN` (recommandé si token créé dans l'écran API Tokens, scope Account/Workspace)
+- `RAILWAY_TOKEN` (optionnel, pour project token)
 
 Variables GitHub (Repository Variables) requises:
 
@@ -134,6 +135,9 @@ Variables GitHub (Repository Variables) requises:
 Note:
 
 - Les workflows deploy utilisent la Railway CLI (`railway up ...`), pas l'action `railwayapp/railway-github-action`.
+- Railway CLI attend:
+  - `RAILWAY_API_TOKEN` pour account/workspace token
+  - `RAILWAY_TOKEN` pour project token
 - Si tu vois `Unable to resolve action railwayapp/railway-github-action, repository not found`, c'est qu'un ancien workflow est encore actif dans la branche exécutée.
 
 ## 10. Diagnostic rapide `403 Invalid origin` en production

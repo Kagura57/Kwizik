@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Remove YTMusic integration from Tunaris so YouTube search/playback uses only official YouTube API plus existing non-YTMusic fallbacks.
+**Goal:** Remove YTMusic integration from Kwizik so YouTube search/playback uses only official YouTube API plus existing non-YTMusic fallbacks.
 
 **Architecture:** Delete the dedicated YTMusic route and remove `ytmusic` from provider unions and resolver/aggregator flows. Keep gameplay YouTube-only behavior and no-filler policy unchanged. Update tests and UI messages to remove YTMusic references.
 

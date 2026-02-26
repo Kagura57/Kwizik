@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { pool } from "../db/client";
 import { queueSpotifySyncForAccountLink } from "../services/jobs/spotify-sync-trigger";
 
-const FALLBACK_SECRET = "tunaris-dev-secret-change-this-in-production-1234";
+const FALLBACK_SECRET = "kwizik-dev-secret-change-this-in-production-1234";
 
 function normalizeOrigin(value: string) {
   return value.trim().replace(/\/+$/, "");

@@ -290,7 +290,7 @@ export function RoomPlayPage() {
     function onOAuthMessage(event: MessageEvent) {
       if (!event.data || typeof event.data !== "object") return;
       const payload = event.data as { source?: string; ok?: boolean };
-      if (payload.source !== "tunaris-music-oauth") return;
+      if (payload.source !== "kwizik-music-oauth") return;
       if (payload.ok === true && session.playerId) {
         refreshLinksMutation.mutate();
       }
@@ -435,7 +435,7 @@ export function RoomPlayPage() {
     if (!iframe || !activeYoutubeEmbed) return;
     const iframeWindow = iframe.contentWindow;
     if (!iframeWindow) return;
-    const iframeId = `tunaris-youtube-${stableYoutubePlayback?.key ?? "unknown"}`;
+    const iframeId = `kwizik-youtube-${stableYoutubePlayback?.key ?? "unknown"}`;
     iframe.id = iframeId;
 
     const subscribe = () => {
@@ -587,7 +587,7 @@ export function RoomPlayPage() {
         returnTo: `/room/${roomCode}/play`,
       });
       if (typeof window !== "undefined") {
-        window.open(payload.authorizeUrl, "tunaris-music-oauth", "width=640,height=760");
+        window.open(payload.authorizeUrl, "kwizik-music-oauth", "width=640,height=760");
       }
     } catch {
       // Keep lobby interactive even when provider OAuth is temporarily unavailable.
@@ -1017,9 +1017,9 @@ export function RoomPlayPage() {
             {sourceModeErrorCode === "HOST_ONLY" && "Seul le host peut changer le mode source."}
             {publicPlaylistErrorCode === "HOST_ONLY" && "Seul le host peut choisir la playlist publique."}
             {contributionErrorCode === "INVALID_STATE" && "L’opt-in bibliothèque est disponible uniquement dans le lobby."}
-            {contributionErrorCode === "UNAUTHORIZED" && "Connecte ton compte Tunaris pour contribuer ta bibliothèque."}
-            {contributionErrorCode === "FORBIDDEN" && "Connecte ton compte Tunaris pour contribuer ta bibliothèque."}
-            {refreshLinksErrorCode === "UNAUTHORIZED" && "Connecte ton compte Tunaris pour lier Spotify/Deezer."}
+            {contributionErrorCode === "UNAUTHORIZED" && "Connecte ton compte Kwizik pour contribuer ta bibliothèque."}
+            {contributionErrorCode === "FORBIDDEN" && "Connecte ton compte Kwizik pour contribuer ta bibliothèque."}
+            {refreshLinksErrorCode === "UNAUTHORIZED" && "Connecte ton compte Kwizik pour lier Spotify/Deezer."}
             {readyErrorCode === "INVALID_STATE" && "Le statut prêt se gère uniquement dans le lobby."}
             {kickErrorCode === "HOST_ONLY" && "Seul le host peut éjecter un joueur."}
             {replayErrorCode === "HOST_ONLY" && "Seul le host peut relancer une partie."}

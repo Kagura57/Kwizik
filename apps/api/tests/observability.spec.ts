@@ -28,7 +28,7 @@ describe("observability routes", () => {
     };
 
     expect(payload.ok).toBe(true);
-    expect(payload.service).toBe("tunaris-api");
+    expect(payload.service).toBe("kwizik-api");
     expect(typeof payload.rooms.roomCount).toBe("number");
     expect(typeof payload.trackCache.entryCount).toBe("number");
     expect(typeof payload.providers).toBe("object");

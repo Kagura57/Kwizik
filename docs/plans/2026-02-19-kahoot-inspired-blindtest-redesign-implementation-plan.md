@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Rebuild Tunaris into a modern live blindtest web app with host-led flow, unified player role (host can play), Better Auth integration, and production-grade persistence.
+**Goal:** Rebuild Kwizik into a modern live blindtest web app with host-led flow, unified player role (host can play), Better Auth integration, and production-grade persistence.
 
 **Architecture:** Keep Elysia as authoritative round engine and move prototype persistence to Postgres repositories. Use Better Auth for optional accounts while allowing guests. Drive gameplay through room-scoped WebSocket events plus snapshot resync.
 

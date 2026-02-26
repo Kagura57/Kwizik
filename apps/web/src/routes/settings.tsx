@@ -64,7 +64,7 @@ export function SettingsPage() {
   useEffect(() => {
     function onMessage(event: MessageEvent) {
       const payload = event.data as { source?: string; ok?: boolean } | null;
-      if (!payload || payload.source !== "tunaris-music-oauth") return;
+      if (!payload || payload.source !== "kwizik-music-oauth") return;
       if (payload.ok === true) {
         void providerLinksQuery.refetch();
       }
@@ -80,7 +80,7 @@ export function SettingsPage() {
         provider,
         returnTo: window.location.href,
       });
-      const popup = window.open(payload.authorizeUrl, "tunaris-music-oauth", "width=640,height=760");
+      const popup = window.open(payload.authorizeUrl, "kwizik-music-oauth", "width=640,height=760");
       if (!popup) {
         window.location.assign(payload.authorizeUrl);
       }

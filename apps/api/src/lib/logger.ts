@@ -29,7 +29,7 @@ export function logEvent(level: LogLevel, event: string, data: Record<string, un
     ts: new Date().toISOString(),
     level,
     event,
-    service: "tunaris-api",
+    service: "kwizik-api",
     ...data,
   };
 

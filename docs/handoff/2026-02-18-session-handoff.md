@@ -38,8 +38,8 @@
 ## How To Resume On Another PC
 
 ```bash
-git clone git@github.com:Kagura57/tunaris.git
-cd tunaris
+git clone git@github.com:Kagura57/kwizik.git
+cd kwizik
 git checkout feat/sprint1-batch1
 ```
 

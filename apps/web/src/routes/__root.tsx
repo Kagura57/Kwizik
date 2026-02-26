@@ -58,7 +58,7 @@ export function RootLayout() {
       <main className="game-shell">
         <header className="room-topbar">
           <Link className="brand" to="/">
-            Tunaris
+            <img className="brand-lockup" src="/logo.svg" alt="Kwizik" />
           </Link>
           <Link className="ghost-btn" to="/">
             Accueil
@@ -73,7 +73,7 @@ export function RootLayout() {
     <main className="app-shell">
       <header className="topbar">
         <Link className="brand" to="/">
-          Tunaris
+          <img className="brand-lockup" src="/logo.svg" alt="Kwizik" />
         </Link>
         <p className="brand-subtitle">Live Blindtest Arena</p>
         <p className="topbar-meta">Crée une room, rejoins en un code, et lance la partie en direct.</p>

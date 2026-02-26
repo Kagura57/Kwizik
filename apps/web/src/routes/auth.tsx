@@ -91,7 +91,7 @@ export function AuthPage() {
   return (
     <section className="single-panel">
       <article className="panel-card">
-        <h2 className="panel-title">Compte Tunaris</h2>
+        <h2 className="panel-title">Compte Kwizik</h2>
         <p className="panel-copy">
           Connecte-toi pour lier Spotify/Deezer, contribuer tes Liked Songs et gérer ton profil.
         </p>

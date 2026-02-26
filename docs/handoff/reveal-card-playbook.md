@@ -1,4 +1,4 @@
-# Reveal Card Playbook (Tunaris)
+# Reveal Card Playbook (Kwizik)
 
 ## Objectif
 Conserver un Reveal "waouh" (titre + artiste + artwork) avec un rendu premium, sans duplication visuelle, et sans redémarrage parasite du lecteur.

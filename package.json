@@ -1,5 +1,5 @@
 {
-  "name": "tunaris",
+  "name": "kwizik",
   "private": true,
   "workspaces": [
     "apps/*",
