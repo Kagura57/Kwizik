@@ -6,6 +6,7 @@ import { logEvent } from "./lib/logger";
 import { providerMetricsSnapshot } from "./lib/provider-metrics";
 import { authRoutes } from "./routes/auth";
 import { accountRoutes } from "./routes/account";
+import { animeAutocompleteRoutes } from "./routes/anime/autocomplete";
 import { musicSearchRoute } from "./routes/music/search";
 import { musicLibraryRoutes } from "./routes/music/library";
 import { musicSourceRoutes } from "./routes/music/source";
@@ -118,6 +119,7 @@ export const app = new Elysia()
   )
   .use(authRoutes)
   .use(accountRoutes)
+  .use(animeAutocompleteRoutes)
   .use(musicSearchRoute)
   .use(musicLibraryRoutes)
   .use(musicSourceRoutes)
