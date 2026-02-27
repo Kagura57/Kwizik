@@ -764,7 +764,7 @@ export async function getAniListLinkStatus() {
   return requestJson<{
     ok: true;
     provider: "anilist";
-    status: "linked" | "not_linked" | "expired";
+    status: "linked" | "not_linked";
     link: {
       anilistUserId: string | null;
       anilistUsername: string | null;
@@ -774,17 +774,23 @@ export async function getAniListLinkStatus() {
   }>("/account/anilist/link");
 }
 
-export async function getAniListConnectUrl(input: { returnTo?: string }) {
-  const params = new URLSearchParams();
-  if (input.returnTo && input.returnTo.trim().length > 0) {
-    params.set("returnTo", input.returnTo.trim());
-  }
-  const query = params.toString();
+export async function updateAniListUsername(input: { username: string }) {
   return requestJson<{
     ok: true;
     provider: "anilist";
-    authorizeUrl: string;
-  }>(`/account/anilist/connect/start${query.length > 0 ? `?${query}` : ""}`);
+    status: "linked" | "not_linked";
+    link: {
+      anilistUserId: string | null;
+      anilistUsername: string | null;
+      expiresAtMs: number | null;
+      updatedAtMs: number;
+    } | null;
+  }>("/account/anilist/username", {
+    method: "POST",
+    body: JSON.stringify({
+      username: input.username,
+    }),
+  });
 }
 
 export async function queueAniListLibrarySync() {

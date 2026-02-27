@@ -9,6 +9,7 @@ import {
   buildAniListConnectUrl,
   getAniListLinkForUser,
   handleAniListOAuthCallback,
+  setAniListUsernameForUser,
 } from "../services/AniListOAuthService";
 import { queueAniListSyncForUser } from "../services/jobs/anilist-sync-trigger";
 import { buildMusicConnectUrl, handleMusicOAuthCallback } from "../services/MusicOAuthService";
@@ -33,6 +34,13 @@ function parseLimit(raw: string | undefined, fallback: number) {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(parsed, 200));
+}
+
+function readStringField(body: unknown, key: string) {
+  if (!body || typeof body !== "object") return "";
+  const value = (body as Record<string, unknown>)[key];
+  if (typeof value !== "string") return "";
+  return value.trim();
 }
 
 export const accountRoutes = new Elysia({ prefix: "/account" })
@@ -74,18 +82,53 @@ export const accountRoutes = new Elysia({ prefix: "/account" })
     if (!authContext) {
       return { ok: false, error: "UNAUTHORIZED" };
     }
+    const useLegacyOAuth = query.legacy === "1";
+    if (!useLegacyOAuth) {
+      set.status = 410;
+      return { ok: false as const, error: "USE_USERNAME_FLOW" as const };
+    }
     const connect = buildAniListConnectUrl({
       userId: authContext.user.id,
       returnTo: typeof query.returnTo === "string" ? query.returnTo : null,
     });
     if (!connect) {
       set.status = 503;
-      return { ok: false, error: "PROVIDER_NOT_CONFIGURED" };
+      return { ok: false as const, error: "PROVIDER_NOT_CONFIGURED" as const };
     }
     return {
       ok: true as const,
       provider: "anilist" as const,
       authorizeUrl: connect.url,
+    };
+  })
+  .post("/anilist/username", async ({ headers, body, set }) => {
+    const authContext = await requireSession(headers as unknown, set);
+    if (!authContext) {
+      return { ok: false, error: "UNAUTHORIZED" };
+    }
+    const requestedUsername = readStringField(body, "username");
+    if (requestedUsername.length > 0 && !/^[A-Za-z0-9_-]{1,50}$/.test(requestedUsername.replace(/^@+/, ""))) {
+      set.status = 400;
+      return { ok: false as const, error: "INVALID_ANILIST_USERNAME" as const };
+    }
+
+    const link = await setAniListUsernameForUser({
+      userId: authContext.user.id,
+      username: requestedUsername.length > 0 ? requestedUsername : null,
+    });
+
+    return {
+      ok: true as const,
+      provider: "anilist" as const,
+      status: link?.anilistUsername ? ("linked" as const) : ("not_linked" as const),
+      link: link
+        ? {
+            anilistUserId: link.anilistUserId,
+            anilistUsername: link.anilistUsername,
+            expiresAtMs: link.expiresAtMs,
+            updatedAtMs: link.updatedAtMs,
+          }
+        : null,
     };
   })
   .get("/anilist/link", async ({ headers, set }) => {
@@ -95,12 +138,7 @@ export const accountRoutes = new Elysia({ prefix: "/account" })
     }
 
     const link = await getAniListLinkForUser(authContext.user.id);
-    const nowMs = Date.now();
-    const status = !link
-      ? "not_linked"
-      : typeof link.expiresAtMs === "number" && link.expiresAtMs > 0 && link.expiresAtMs <= nowMs
-        ? "expired"
-        : "linked";
+    const status = link?.anilistUsername ? "linked" : "not_linked";
 
     return {
       ok: true as const,
@@ -139,6 +177,11 @@ export const accountRoutes = new Elysia({ prefix: "/account" })
     const authContext = await requireSession(headers as unknown, set);
     if (!authContext) {
       return { ok: false, error: "UNAUTHORIZED" };
+    }
+    const link = await getAniListLinkForUser(authContext.user.id);
+    if (!link?.anilistUsername) {
+      set.status = 409;
+      return { ok: false as const, error: "ANILIST_USERNAME_NOT_SET" as const };
     }
     const queued = await queueAniListSyncForUser(authContext.user.id);
     if (!queued.queued) {

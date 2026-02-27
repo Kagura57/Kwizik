@@ -1,38 +1,31 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  getAniListConnectUrl,
   getAniListLibrarySyncStatus,
   getAniListLinkStatus,
   getAuthSession,
   HttpStatusError,
   queueAniListLibrarySync,
   signOutAccount,
+  updateAniListUsername,
 } from "../lib/api";
 import { useGameStore } from "../stores/gameStore";
 
-type AniListLinkStatus = "linked" | "not_linked" | "expired";
+type AniListLinkStatus = "linked" | "not_linked";
 
 function anilistStatusMeta(status: AniListLinkStatus) {
   if (status === "linked") {
     return {
-      label: "Connecte",
+      label: "Pret",
       tone: "connected",
-      description: "Compte AniList pret pour generer les manches anime.",
-    } as const;
-  }
-  if (status === "expired") {
-    return {
-      label: "Session expiree",
-      tone: "expired",
-      description: "Reconnecte AniList pour relancer les synchronisations.",
+      description: "Pseudo AniList configure pour les manches anime.",
     } as const;
   }
   return {
-    label: "Non connecte",
+    label: "Non configure",
     tone: "idle",
-    description: "Connecte AniList pour importer ta liste Watching/Completed.",
+    description: "Renseigne ton pseudo AniList puis clique Mettre a jour.",
   } as const;
 }
 
@@ -47,8 +40,14 @@ function syncStatusLabel(status: "queued" | "running" | "success" | "error" | "i
 function syncErrorMessage(code: string | null | undefined) {
   const normalized = typeof code === "string" ? code.trim() : "";
   if (!normalized) return "Erreur de synchronisation AniList.";
-  if (normalized === "ANILIST_NOT_LINKED") {
-    return "Aucun compte AniList lie. Connecte ton compte puis relance la synchronisation.";
+  if (normalized === "ANILIST_USERNAME_NOT_SET") {
+    return "Renseigne ton pseudo AniList avant de synchroniser.";
+  }
+  if (normalized === "ANILIST_USER_NOT_FOUND") {
+    return "Pseudo AniList introuvable. Verifie le nom puis relance.";
+  }
+  if (normalized === "ANILIST_COLLECTION_GRAPHQL_ERROR") {
+    return "AniList a retourne une erreur GraphQL. Reessaie dans quelques secondes.";
   }
   if (normalized.startsWith("ANILIST_COLLECTION_HTTP_")) {
     return `AniList a retourne ${normalized.replace("ANILIST_COLLECTION_HTTP_", "HTTP ")}. Reessaie dans quelques secondes.`;
@@ -59,11 +58,34 @@ function syncErrorMessage(code: string | null | undefined) {
   return `Erreur sync AniList: ${normalized}`;
 }
 
+function updateMutationErrorMessage(error: unknown) {
+  if (!(error instanceof HttpStatusError)) {
+    return "Impossible de mettre a jour la liste AniList.";
+  }
+  if (error.message === "INVALID_ANILIST_USERNAME") {
+    return "Pseudo AniList invalide (lettres, chiffres, _ ou - uniquement).";
+  }
+  if (error.message === "ANILIST_USERNAME_NOT_SET") {
+    return "Renseigne ton pseudo AniList avant la mise a jour.";
+  }
+  if (error.message === "QUEUE_UNAVAILABLE" || error.message === "ENQUEUE_FAILED") {
+    return "Pseudo enregistre, mais la file de sync est indisponible.";
+  }
+  return "Impossible de mettre a jour la liste AniList.";
+}
+
+function formatSyncTimestamp(ts: number | null | undefined) {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return "jamais";
+  return new Date(ts).toLocaleString("fr-FR");
+}
+
 export function SettingsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const setAccount = useGameStore((state) => state.setAccount);
   const clearAccount = useGameStore((state) => state.clearAccount);
+  const [anilistUsernameInput, setAniListUsernameInput] = useState("");
+  const [usernameDirty, setUsernameDirty] = useState(false);
 
   const sessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -90,12 +112,10 @@ export function SettingsPage() {
     enabled: Boolean(sessionQuery.data?.user),
   });
 
-  const linked = anilistLinkQuery.data?.status === "linked";
-
   const anilistSyncStatusQuery = useQuery({
     queryKey: ["anilist-sync-status"],
     queryFn: getAniListLibrarySyncStatus,
-    enabled: Boolean(sessionQuery.data?.user) && linked,
+    enabled: Boolean(sessionQuery.data?.user),
     refetchInterval: (query) => {
       const runStatus = query.state.data?.run?.status;
       return runStatus === "queued" || runStatus === "running" ? 2_000 : false;
@@ -103,35 +123,27 @@ export function SettingsPage() {
   });
 
   useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      const payload = event.data as { source?: string; ok?: boolean } | null;
-      if (!payload || payload.source !== "kwizik-anilist-oauth") return;
-      if (payload.ok === true) {
-        void anilistLinkQuery.refetch();
-        void anilistSyncStatusQuery.refetch();
-      }
-    }
+    if (usernameDirty) return;
+    const username = anilistLinkQuery.data?.link?.anilistUsername ?? "";
+    setAniListUsernameInput(username);
+  }, [anilistLinkQuery.data?.link?.anilistUsername, usernameDirty]);
 
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [anilistLinkQuery, anilistSyncStatusQuery]);
-
-  const connectMutation = useMutation({
+  const updateAndSyncMutation = useMutation({
     mutationFn: async () => {
-      const payload = await getAniListConnectUrl({
-        returnTo: window.location.href,
-      });
-      const popup = window.open(payload.authorizeUrl, "kwizik-anilist-oauth", "width=640,height=760");
-      if (!popup) {
-        window.location.assign(payload.authorizeUrl);
+      const username = anilistUsernameInput.trim();
+      await updateAniListUsername({ username });
+      if (!username) {
+        return { queued: false as const };
       }
-      return payload;
+      const queued = await queueAniListLibrarySync();
+      return {
+        queued: true as const,
+        runId: queued.runId,
+      };
     },
-  });
-
-  const syncMutation = useMutation({
-    mutationFn: queueAniListLibrarySync,
-    onSuccess: async () => {
+    onSettled: async () => {
+      setUsernameDirty(false);
+      await anilistLinkQuery.refetch();
       await anilistSyncStatusQuery.refetch();
     },
   });
@@ -152,23 +164,19 @@ export function SettingsPage() {
   const linkStatusMeta = anilistStatusMeta(linkStatus);
   const activeRun = anilistSyncStatusQuery.data?.run ?? null;
   const runStatus = activeRun?.status ?? "idle";
-  const connectErrorMessage =
-    connectMutation.error instanceof HttpStatusError &&
-    connectMutation.error.message === "PROVIDER_NOT_CONFIGURED"
-      ? "AniList OAuth n'est pas configure cote serveur (ANILIST_CLIENT_ID / ANILIST_REDIRECT_URI)."
-      : "Impossible de lancer la connexion AniList.";
+  const lastCompletedAtMs = activeRun?.finishedAtMs ?? null;
 
   return (
     <section className="single-panel">
       <article className="panel-card">
         <h2 className="panel-title">Profil & connexions</h2>
         <p className="panel-copy">
-          Lie ton compte AniList puis synchronise ta bibliotheque quand tu veux pour alimenter les rooms.
+          Renseigne ton pseudo AniList puis clique Mettre a jour quand tu veux rafraichir ta liste.
         </p>
 
         {!sessionQuery.isPending && !user && (
           <div className="panel-form">
-            <p className="status">Tu dois etre connecte pour gerer ta connexion AniList.</p>
+            <p className="status">Tu dois etre connecte pour gerer ton pseudo AniList.</p>
             <div className="waiting-actions">
               <Link className="solid-btn" to="/auth">
                 Se connecter
@@ -192,64 +200,59 @@ export function SettingsPage() {
               <div className="provider-link-head">
                 <div>
                   <p className="kicker">AniList</p>
-                  <h3>Compte AniList</h3>
+                  <h3>Pseudo AniList</h3>
                 </div>
                 <span className={`provider-badge ${linkStatusMeta.tone}`}>{linkStatusMeta.label}</span>
               </div>
               <p className="status">{linkStatusMeta.description}</p>
-              {anilistLinkQuery.data?.link?.anilistUsername && (
-                <p className="status">
-                  Compte lie: <strong>{anilistLinkQuery.data.link.anilistUsername}</strong>
-                </p>
-              )}
+              <label>
+                <span>Pseudo AniList</span>
+                <input
+                  value={anilistUsernameInput}
+                  onChange={(event) => {
+                    setUsernameDirty(true);
+                    setAniListUsernameInput(event.currentTarget.value);
+                  }}
+                  placeholder="Ton pseudo AniList"
+                  maxLength={50}
+                />
+              </label>
               <div className="waiting-actions">
                 <button
                   className="solid-btn"
                   type="button"
-                  disabled={connectMutation.isPending || syncMutation.isPending}
-                  onClick={() => connectMutation.mutate()}
+                  disabled={updateAndSyncMutation.isPending || signOutMutation.isPending}
+                  onClick={() => updateAndSyncMutation.mutate()}
                 >
-                  {connectMutation.isPending
-                    ? "Connexion..."
-                    : linkStatus === "linked"
-                      ? "Reconnecter AniList"
-                      : "Connecter AniList"}
+                  {updateAndSyncMutation.isPending ? "Mise a jour..." : "Mettre a jour"}
                 </button>
               </div>
+              <p className="status">
+                Derniere sync: <strong>{formatSyncTimestamp(lastCompletedAtMs)}</strong>
+              </p>
             </div>
 
-            {linked && (
-              <div className="provider-link-card">
-                <div className="provider-link-head">
-                  <div>
-                    <p className="kicker">AniList</p>
-                    <h3>Synchronisation bibliotheque</h3>
-                  </div>
-                  <span className="provider-badge connected">Action manuelle</span>
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">AniList</p>
+                  <h3>Etat synchronisation</h3>
                 </div>
-                <p className="status">
-                  Etat sync: <strong>{syncStatusLabel(runStatus)}</strong>
-                  {typeof activeRun?.progress === "number" ? ` (${activeRun.progress}%)` : ""}
-                  {activeRun?.finishedAtMs ? " · derniere execution terminee" : ""}
-                </p>
-                <div className="waiting-actions">
-                  <button
-                    className="solid-btn"
-                    type="button"
-                    disabled={syncMutation.isPending}
-                    onClick={() => syncMutation.mutate()}
-                  >
-                    {syncMutation.isPending ? "Synchronisation..." : "Synchroniser ma liste AniList"}
-                  </button>
-                </div>
+                <span className={`provider-badge ${runStatus === "error" ? "expired" : "connected"}`}>
+                  {syncStatusLabel(runStatus)}
+                </span>
               </div>
-            )}
+              <p className="status">
+                Progression: <strong>{typeof activeRun?.progress === "number" ? `${activeRun.progress}%` : "0%"}</strong>
+              </p>
+              <p className="status">Derniere execution: {formatSyncTimestamp(activeRun?.createdAtMs ?? null)}</p>
+            </div>
 
             <div className="waiting-actions">
               <button
                 className="ghost-btn danger-btn"
                 type="button"
-                disabled={signOutMutation.isPending || syncMutation.isPending}
+                disabled={signOutMutation.isPending || updateAndSyncMutation.isPending}
                 onClick={() => signOutMutation.mutate()}
               >
                 {signOutMutation.isPending ? "Deconnexion..." : "Se deconnecter"}
@@ -263,18 +266,16 @@ export function SettingsPage() {
 
         <p
           className={
-            connectMutation.isError ||
+            updateAndSyncMutation.isError ||
             signOutMutation.isError ||
-            syncMutation.isError ||
             activeRun?.status === "error"
               ? "status error"
               : "status"
           }
         >
-          {connectMutation.isError && connectErrorMessage}
+          {updateAndSyncMutation.isError && updateMutationErrorMessage(updateAndSyncMutation.error)}
           {signOutMutation.isError && "Deconnexion impossible pour le moment."}
-          {syncMutation.isError && "Impossible de lancer la synchronisation AniList."}
-          {!syncMutation.isError && activeRun?.status === "error" && syncErrorMessage(activeRun.message)}
+          {!updateAndSyncMutation.isError && activeRun?.status === "error" && syncErrorMessage(activeRun.message)}
         </p>
       </article>
     </section>

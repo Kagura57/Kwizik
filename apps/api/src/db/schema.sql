@@ -329,12 +329,15 @@ create table if not exists anilist_account_links (
   user_id text primary key references "user"(id) on delete cascade,
   anilist_user_id text,
   anilist_username text,
-  access_token text not null,
+  access_token text,
   refresh_token text,
   expires_at timestamptz,
   scope text,
   updated_at timestamptz not null default now()
 );
+
+alter table anilist_account_links
+  alter column access_token drop not null;
 
 create table if not exists anilist_sync_runs (
   id bigserial primary key,

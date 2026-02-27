@@ -27,7 +27,7 @@ type PersistedLink = {
   userId: string;
   anilistUserId: string | null;
   anilistUsername: string | null;
-  accessToken: string;
+  accessToken: string | null;
   refreshToken: string | null;
   expiresAtMs: number | null;
   scope: string | null;
@@ -52,6 +52,15 @@ function readClientConfig() {
 function compact(value: string | null | undefined) {
   const trimmed = value?.trim() ?? "";
   return trimmed.length > 0 ? trimmed : null;
+}
+
+export function normalizeAniListUsername(value: unknown) {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return null;
+  const withoutPrefix = raw.replace(/^@+/, "");
+  if (!withoutPrefix) return null;
+  const safe = withoutPrefix.slice(0, 50);
+  return /^[A-Za-z0-9_-]+$/.test(safe) ? safe : null;
 }
 
 function safeParseState(rawState: string) {
@@ -137,7 +146,7 @@ async function upsertAniListLink(input: {
   userId: string;
   anilistUserId: string | null;
   anilistUsername: string | null;
-  accessToken: string;
+  accessToken: string | null;
   refreshToken: string | null;
   expiresAtMs: number | null;
   scope: string | null;
@@ -178,7 +187,7 @@ async function upsertAniListLink(input: {
       input.userId,
       input.anilistUserId,
       input.anilistUsername,
-      encryptToken(input.accessToken),
+      input.accessToken ? encryptToken(input.accessToken) : null,
       input.refreshToken ? encryptToken(input.refreshToken) : null,
       input.expiresAtMs ? new Date(input.expiresAtMs) : null,
       input.scope,
@@ -227,6 +236,55 @@ export async function handleAniListOAuthCallback(input: { code: string; state: s
   };
 }
 
+export async function setAniListUsernameForUser(input: { userId: string; username: string | null }) {
+  const userId = input.userId.trim();
+  if (!userId) return null;
+
+  const username = normalizeAniListUsername(input.username);
+
+  if (!isDbEnabled()) {
+    if (!username) {
+      memoryLinks.delete(userId);
+      return null;
+    }
+    const existing = memoryLinks.get(userId);
+    const nowMs = Date.now();
+    const next: PersistedLink = {
+      userId,
+      anilistUserId: existing?.anilistUserId ?? null,
+      anilistUsername: username,
+      accessToken: existing?.accessToken ?? null,
+      refreshToken: existing?.refreshToken ?? null,
+      expiresAtMs: existing?.expiresAtMs ?? null,
+      scope: existing?.scope ?? null,
+      updatedAtMs: nowMs,
+    };
+    memoryLinks.set(userId, next);
+    return next;
+  }
+
+  if (!username) {
+    await pool.query("delete from anilist_account_links where user_id = $1", [userId]);
+    return null;
+  }
+
+  await pool.query(
+    `
+      insert into anilist_account_links
+        (user_id, anilist_user_id, anilist_username, access_token, refresh_token, expires_at, scope, updated_at)
+      values
+        ($1, null, $2, null, null, null, null, now())
+      on conflict (user_id)
+      do update set
+        anilist_username = excluded.anilist_username,
+        updated_at = now()
+    `,
+    [userId, username],
+  );
+
+  return await getAniListLinkForUser(userId);
+}
+
 export async function getAniListLinkForUser(userId: string) {
   const key = userId.trim();
   if (!key) return null;
@@ -238,7 +296,7 @@ export async function getAniListLinkForUser(userId: string) {
     user_id: string;
     anilist_user_id: string | null;
     anilist_username: string | null;
-    access_token: string;
+    access_token: string | null;
     refresh_token: string | null;
     expires_at: Date | null;
     scope: string | null;
@@ -255,13 +313,11 @@ export async function getAniListLinkForUser(userId: string) {
 
   const row = result.rows[0];
   if (!row) return null;
-  const accessToken = decryptToken(row.access_token);
-  if (!accessToken) return null;
   return {
     userId: row.user_id,
     anilistUserId: row.anilist_user_id,
     anilistUsername: row.anilist_username,
-    accessToken,
+    accessToken: decryptToken(row.access_token),
     refreshToken: decryptToken(row.refresh_token),
     expiresAtMs: row.expires_at ? row.expires_at.getTime() : null,
     scope: row.scope,

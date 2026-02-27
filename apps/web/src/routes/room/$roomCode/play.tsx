@@ -102,7 +102,7 @@ function lobbyReadyStatusLabel(
     }
     if (state.sourceMode === "players_liked" || state.sourceMode === "anilist_union") {
       return isHost
-        ? " · Lie puis synchronise AniList pour lancer."
+        ? " · Configure un pseudo AniList puis synchronise pour lancer."
         : " · En attente de la configuration du host.";
     }
     return "";
@@ -1262,7 +1262,7 @@ export function RoomPlayPage() {
                       className={`source-preset-btn${sourceMode === "anilist_union" ? " active" : ""}`}
                       onClick={() => onSelectSourceMode("anilist_union")}
                     >
-                      <strong>AniList lié</strong>
+                      <strong>AniList synchronise</strong>
                       <span>Union des listes des joueurs connectés</span>
                     </button>
                   </div>
@@ -1270,7 +1270,7 @@ export function RoomPlayPage() {
                   {sourceMode === "anilist_union" && (
                     <div className="panel-form">
                       <p className="status">
-                        Les bibliothèques AniList synchronisées des joueurs sont utilisées automatiquement.
+                        Les bibliotheques AniList synchronisees des joueurs sont utilisees automatiquement.
                       </p>
                     </div>
                   )}
@@ -1314,7 +1314,7 @@ export function RoomPlayPage() {
                   <span>Mode source</span>
                   <strong>
                     {state.sourceMode === "anilist_union"
-                      ? "AniList lié"
+                      ? "AniList synchronise"
                       : state.sourceMode === "players_liked"
                         ? "Liked Songs joueurs"
                         : "Playlist publique"}

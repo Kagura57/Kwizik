@@ -173,7 +173,7 @@ export function HomePage() {
         <p className="panel-copy">Crée un lobby en un clic, choisis la visibilité, puis lance la partie.</p>
         {!account.userId && (
           <p className="status">
-            Astuce: connecte-toi pour lier AniList et synchroniser ta liste anime.
+            Astuce: connecte-toi puis renseigne ton pseudo AniList dans Settings pour synchroniser ta liste anime.
           </p>
         )}
 
@@ -243,7 +243,7 @@ export function HomePage() {
                       {room.state} · {room.playerCount} joueurs
                     </p>
                     <p>
-                      Mode: {room.sourceMode === "anilist_union" ? "AniList lie" : "Anime"}
+                      Mode: {room.sourceMode === "anilist_union" ? "AniList synchronise" : "Anime"}
                       {room.sourceMode === "public_playlist" && room.playlistName
                         ? ` · ${withRomajiLabel(room.playlistName)}`
                         : ""}

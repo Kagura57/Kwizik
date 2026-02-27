@@ -13,6 +13,9 @@ import {
 } from "./anilist-sync-queue";
 
 type AniListCollectionPayload = {
+  errors?: Array<{
+    message?: string;
+  }>;
   data?: {
     MediaListCollection?: {
       lists?: Array<{
@@ -33,6 +36,25 @@ type AniListCollectionPayload = {
 
 let workerInstance: Worker<AniListSyncJobPayload> | null = null;
 let workerConnection: IORedis | null = null;
+
+const ANILIST_COLLECTION_QUERY = `
+query ($userName: String) {
+  MediaListCollection(userName: $userName, type: ANIME, status_in: [CURRENT, COMPLETED]) {
+    lists {
+      entries {
+        status
+        media {
+          title {
+            romaji
+            english
+            native
+          }
+        }
+      }
+    }
+  }
+}
+`;
 
 function normalizeAnimeAlias(value: string) {
   return value
@@ -66,38 +88,31 @@ function extractTitles(entry: {
   return Array.from(new Set(values));
 }
 
-async function fetchAniListCollection(accessToken: string) {
+async function fetchAniListCollection(username: string) {
   const response = await fetch("https://graphql.anilist.co", {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({
-      query: `
-        query {
-          MediaListCollection(type: ANIME, status_in: [CURRENT, COMPLETED]) {
-            lists {
-              entries {
-                status
-                media {
-                  title {
-                    romaji
-                    english
-                    native
-                  }
-                }
-              }
-            }
-          }
-        }
-      `,
+      query: ANILIST_COLLECTION_QUERY,
+      variables: {
+        userName: username,
+      },
     }),
   });
   if (!response.ok) {
     throw new Error(`ANILIST_COLLECTION_HTTP_${response.status}`);
   }
-  return (await response.json()) as AniListCollectionPayload;
+  const payload = (await response.json()) as AniListCollectionPayload;
+  const firstError = payload.errors?.find((entry) => typeof entry.message === "string")?.message ?? null;
+  if (firstError) {
+    if (/not\s+found/i.test(firstError)) {
+      throw new Error("ANILIST_USER_NOT_FOUND");
+    }
+    throw new Error("ANILIST_COLLECTION_GRAPHQL_ERROR");
+  }
+  return payload;
 }
 
 async function mapTitlesToAnimeIds(normalizedTitles: string[]) {
@@ -125,11 +140,12 @@ async function mapTitlesToAnimeIds(normalizedTitles: string[]) {
 
 async function syncAniListLibrary(input: { userId: string; runId: number }) {
   const link = await getAniListLinkForUser(input.userId);
-  if (!link?.accessToken) {
-    throw new Error("ANILIST_NOT_LINKED");
+  const username = link?.anilistUsername?.trim() ?? "";
+  if (!username) {
+    throw new Error("ANILIST_USERNAME_NOT_SET");
   }
 
-  const payload = await fetchAniListCollection(link.accessToken);
+  const payload = await fetchAniListCollection(username);
   const lists = payload.data?.MediaListCollection?.lists ?? [];
 
   const staged: Array<{ animeId: number; listStatus: "WATCHING" | "COMPLETED" }> = [];
