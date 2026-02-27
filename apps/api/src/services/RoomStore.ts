@@ -522,15 +522,22 @@ export class RoomStore {
     return "players:liked";
   }
 
+  private hasSyncedLibraryTracks(player: Player, provider: LibraryProvider) {
+    const estimated = player.library.estimatedTrackCount[provider];
+    return typeof estimated === "number" && Number.isFinite(estimated) && estimated > 0;
+  }
+
+  private canUsePlayersLikedProvider(player: Player, provider: LibraryProvider) {
+    if (!player.library.includeInPool[provider]) return false;
+    if (player.library.linkedProviders[provider] === "linked") return true;
+    return this.hasSyncedLibraryTracks(player, provider);
+  }
+
   private playersLikedContributors(session: RoomSession) {
     return [...session.players.values()].filter((player) => {
       if (!player.userId) return false;
-      const spotifyIncluded =
-        player.library.includeInPool.spotify &&
-        player.library.linkedProviders.spotify === "linked";
-      const deezerIncluded =
-        player.library.includeInPool.deezer &&
-        player.library.linkedProviders.deezer === "linked";
+      const spotifyIncluded = this.canUsePlayersLikedProvider(player, "spotify");
+      const deezerIncluded = this.canUsePlayersLikedProvider(player, "deezer");
       return spotifyIncluded || deezerIncluded;
     });
   }
@@ -747,10 +754,10 @@ export class RoomStore {
 
     for (const contributor of contributors) {
       const providers: LibraryProvider[] = [];
-      if (contributor.library.includeInPool.spotify && contributor.library.linkedProviders.spotify === "linked") {
+      if (this.canUsePlayersLikedProvider(contributor, "spotify")) {
         providers.push("spotify");
       }
-      if (contributor.library.includeInPool.deezer && contributor.library.linkedProviders.deezer === "linked") {
+      if (this.canUsePlayersLikedProvider(contributor, "deezer")) {
         providers.push("deezer");
       }
       if (!contributor.userId || providers.length <= 0) continue;
@@ -1145,7 +1152,8 @@ export class RoomStore {
             typeof entry.estimatedTrackCount === "number" && Number.isFinite(entry.estimatedTrackCount)
               ? Math.max(0, Math.floor(entry.estimatedTrackCount))
               : null;
-          player.library.includeInPool[provider] = player.library.linkedProviders[provider] === "linked";
+          player.library.includeInPool[provider] =
+            player.library.linkedProviders[provider] === "linked" || this.hasSyncedLibraryTracks(player, provider);
         }
         player.library.syncStatus = "ready";
       }
@@ -1233,7 +1241,7 @@ export class RoomStore {
       session.categoryQuery = "players:liked";
       for (const player of session.players.values()) {
         for (const provider of ["spotify", "deezer"] as const) {
-          if (player.library.linkedProviders[provider] === "linked") {
+          if (player.library.linkedProviders[provider] === "linked" || this.hasSyncedLibraryTracks(player, provider)) {
             player.library.includeInPool[provider] = true;
           }
         }
@@ -1343,11 +1351,8 @@ export class RoomStore {
         typeof next.estimatedTrackCount === "number" && Number.isFinite(next.estimatedTrackCount)
           ? Math.max(0, Math.floor(next.estimatedTrackCount))
           : null;
-      if (player.library.linkedProviders[provider] !== "linked") {
-        player.library.includeInPool[provider] = false;
-      } else {
-        player.library.includeInPool[provider] = true;
-      }
+      player.library.includeInPool[provider] =
+        player.library.linkedProviders[provider] === "linked" || this.hasSyncedLibraryTracks(player, provider);
     }
 
     if (session.sourceMode === "players_liked") {
@@ -1462,8 +1467,10 @@ export class RoomStore {
       player.maxStreak = 0;
       player.totalResponseMs = 0;
       player.correctAnswers = 0;
-      player.library.includeInPool.spotify = player.library.linkedProviders.spotify === "linked";
-      player.library.includeInPool.deezer = player.library.linkedProviders.deezer === "linked";
+      player.library.includeInPool.spotify =
+        player.library.linkedProviders.spotify === "linked" || this.hasSyncedLibraryTracks(player, "spotify");
+      player.library.includeInPool.deezer =
+        player.library.linkedProviders.deezer === "linked" || this.hasSyncedLibraryTracks(player, "deezer");
     }
 
     return {

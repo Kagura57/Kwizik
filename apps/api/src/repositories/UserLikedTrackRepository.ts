@@ -211,6 +211,41 @@ export class UserLikedTrackRepository {
     return tracks;
   }
 
+  async countForUserByProvider(userIdInput: string): Promise<Record<LibraryProvider, number>> {
+    const userId = userIdInput.trim();
+    if (!userId) {
+      return { spotify: 0, deezer: 0 };
+    }
+
+    if (!this.dbEnabled) {
+      return {
+        spotify: (this.memoryUserTracks.get(memoryKey(userId, "spotify")) ?? []).length,
+        deezer: (this.memoryUserTracks.get(memoryKey(userId, "deezer")) ?? []).length,
+      };
+    }
+
+    const result = await pool.query<{
+      provider: string;
+      count: string;
+    }>(
+      `
+        select provider, count(*)::text as count
+        from user_liked_tracks
+        where user_id = $1
+        group by provider
+      `,
+      [userId],
+    );
+
+    const counts: Record<LibraryProvider, number> = { spotify: 0, deezer: 0 };
+    for (const row of result.rows) {
+      if (row.provider !== "spotify" && row.provider !== "deezer") continue;
+      const parsed = Number.parseInt(row.count, 10);
+      counts[row.provider] = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    }
+    return counts;
+  }
+
   clearMemory() {
     this.memoryUserTracks.clear();
   }

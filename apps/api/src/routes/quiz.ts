@@ -3,6 +3,7 @@ import { readSessionFromHeaders } from "../auth/client";
 import { musicAccountRepository } from "../repositories/MusicAccountRepository";
 import { matchRepository } from "../repositories/MatchRepository";
 import { profileRepository } from "../repositories/ProfileRepository";
+import { userLikedTrackRepository } from "../repositories/UserLikedTrackRepository";
 import { roomStore } from "../services/RoomStore";
 
 function readStringField(body: unknown, key: string): string | null {
@@ -66,14 +67,23 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
     const linkedProviders = authContext?.user.id
       ? await musicAccountRepository.listLinkStatuses(authContext.user.id)
       : undefined;
+    const syncedTrackCounts = authContext?.user.id
+      ? await userLikedTrackRepository.countForUserByProvider(authContext.user.id)
+      : undefined;
     const joined = roomStore.joinRoomAsUser(
       roomCode,
       displayName,
       authContext?.user.id ?? null,
       linkedProviders
         ? {
-            spotify: { status: linkedProviders.spotify.status, estimatedTrackCount: null },
-            deezer: { status: linkedProviders.deezer.status, estimatedTrackCount: null },
+            spotify: {
+              status: linkedProviders.spotify.status,
+              estimatedTrackCount: syncedTrackCounts?.spotify ?? 0,
+            },
+            deezer: {
+              status: linkedProviders.deezer.status,
+              estimatedTrackCount: syncedTrackCounts?.deezer ?? 0,
+            },
           }
         : undefined,
     );
@@ -301,9 +311,10 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       return { ok: false, error: "FORBIDDEN" };
     }
     const links = await musicAccountRepository.listLinkStatuses(authContext.user.id);
+    const syncedTrackCounts = await userLikedTrackRepository.countForUserByProvider(authContext.user.id);
     const synced = roomStore.setPlayerLibraryLinks(roomCode, playerId, {
-      spotify: { status: links.spotify.status, estimatedTrackCount: null },
-      deezer: { status: links.deezer.status, estimatedTrackCount: null },
+      spotify: { status: links.spotify.status, estimatedTrackCount: syncedTrackCounts.spotify },
+      deezer: { status: links.deezer.status, estimatedTrackCount: syncedTrackCounts.deezer },
     });
     if (synced.status === "room_not_found") {
       set.status = 404;

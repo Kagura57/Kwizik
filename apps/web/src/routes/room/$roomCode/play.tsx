@@ -82,11 +82,48 @@ function withRomajiLabel(value: string, providedRomaji?: string | null) {
   return `${value} · ${romaji}`;
 }
 
-function revealArtworkUrl(reveal: { provider: UnifiedPlaylistOption["provider"] | "youtube" | "apple-music" | "tidal"; trackId: string }) {
+function revealArtworkUrl(reveal: {
+  provider: UnifiedPlaylistOption["provider"] | "spotify" | "youtube" | "apple-music" | "tidal";
+  trackId: string;
+}) {
   if (reveal.provider === "youtube") {
     return `https://i.ytimg.com/vi/${reveal.trackId}/hqdefault.jpg`;
   }
   return null;
+}
+
+function lobbyReadyStatusLabel(
+  state: {
+    allReady: boolean;
+    canStart: boolean;
+    isResolvingTracks: boolean;
+    sourceMode: "public_playlist" | "players_liked";
+    sourceConfig: {
+      publicPlaylist: {
+        sourceQuery: string;
+      } | null;
+    };
+  } | null | undefined,
+  isHost: boolean,
+  hasActivePlayerSeat: boolean,
+) {
+  if (!state?.allReady) return "";
+  if (!hasActivePlayerSeat) return " · Ta session joueur n'est plus active. Rejoins la room.";
+  if (state.isResolvingTracks) return " · Préparation audio en cours...";
+  if (!state.canStart) {
+    if (state.sourceMode === "public_playlist" && !state.sourceConfig.publicPlaylist?.sourceQuery) {
+      return isHost
+        ? " · Choisis une playlist pour lancer."
+        : " · En attente de la playlist du host.";
+    }
+    if (state.sourceMode === "players_liked") {
+      return isHost
+        ? " · Active un compte lié ou une bibliothèque déjà synchronisée pour lancer."
+        : " · En attente de la configuration du host.";
+    }
+    return "";
+  }
+  return isHost ? " · Lancement auto en cours..." : " · En attente du host pour lancer.";
 }
 
 function isUnifiedPlaylistOption(value: unknown): value is UnifiedPlaylistOption {
@@ -179,6 +216,8 @@ export function RoomPlayPage() {
   const isWaitingLobby = state?.state === "waiting";
   const isResolvingTracks = Boolean(state?.isResolvingTracks);
   const currentPlayer = state?.players.find((player) => player.playerId === session.playerId) ?? null;
+  const hasActivePlayerSeat = Boolean(currentPlayer);
+  const lobbyReadyStatus = lobbyReadyStatusLabel(state, isHost, hasActivePlayerSeat);
   const typedPlaylistQuery = playlistQuery.trim();
   const normalizedPlaylistQuery = debouncedPlaylistQuery.trim();
   const chatMessages = useMemo(() => {
@@ -999,8 +1038,11 @@ export function RoomPlayPage() {
                 <button
                   className={`ghost-btn${currentPlayer?.isReady ? " selected" : ""}`}
                   type="button"
-                  disabled={!session.playerId || readyMutation.isPending || isResolvingTracks}
-                  onClick={() => readyMutation.mutate(!currentPlayer?.isReady)}
+                  disabled={!hasActivePlayerSeat || readyMutation.isPending || isResolvingTracks}
+                  onClick={() => {
+                    if (!currentPlayer) return;
+                    readyMutation.mutate(!currentPlayer.isReady);
+                  }}
                 >
                   {currentPlayer?.isReady ? "Je ne suis plus prêt" : "Je suis prêt"}
                 </button>
@@ -1017,7 +1059,7 @@ export function RoomPlayPage() {
 
               <p className="status">
                 Joueurs prêts: {state.readyCount}/{state.players.length}
-                {state.allReady ? " · Lancement auto quand le host est disponible." : ""}
+                {lobbyReadyStatus}
               </p>
               <ul className="lobby-player-list">
                 {state.players.map((player) => (
@@ -1171,6 +1213,7 @@ export function RoomPlayPage() {
             {startErrorCode === "SPOTIFY_RATE_LIMITED" &&
               `Spotify limite temporairement les requêtes. Réessaye dans ${spotifyCooldownRemainingSec}s.`}
             {startErrorCode === "SOURCE_NOT_SET" && "Le host doit choisir une playlist avant de lancer."}
+            {startErrorCode === "PLAYER_NOT_FOUND" && "Ta session joueur a expiré. Rejoins la room."}
             {startErrorCode === "PLAYERS_LIBRARY_NOT_READY" &&
               "Le mode Liked Songs nécessite au moins un joueur avec un compte musical connecté."}
             {startErrorCode === "PLAYERS_LIBRARY_SYNCING" &&
@@ -1179,6 +1222,7 @@ export function RoomPlayPage() {
             {sourceModeErrorCode === "HOST_ONLY" && "Seul le host peut changer le mode source."}
             {publicPlaylistErrorCode === "HOST_ONLY" && "Seul le host peut choisir la playlist publique."}
             {readyErrorCode === "INVALID_STATE" && "Le statut prêt se gère uniquement dans le lobby."}
+            {readyErrorCode === "PLAYER_NOT_FOUND" && "Ta session joueur a expiré. Rejoins la room."}
             {kickErrorCode === "HOST_ONLY" && "Seul le host peut éjecter un joueur."}
             {replayErrorCode === "HOST_ONLY" && "Seul le host peut relancer une partie."}
             {skipErrorCode === "HOST_ONLY" && "Seul le host peut passer automatiquement la manche."}
