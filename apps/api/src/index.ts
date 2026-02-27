@@ -13,6 +13,7 @@ import { spotifyAuthDiagnostics } from "./routes/music/spotify-auth";
 import { quizRoutes } from "./routes/quiz";
 import { realtimeRoutes } from "./routes/realtime";
 import { roomRoutes } from "./routes/room";
+import { startAnimeThemesCatalogRefreshJob } from "./services/jobs/animethemes-catalog-refresh";
 import { startAniListSyncWorker } from "./services/jobs/anilist-sync-worker";
 import { startSpotifySyncWorker } from "./services/jobs/spotify-sync-worker";
 import { roomStore } from "./services/RoomStore";
@@ -135,6 +136,7 @@ if (import.meta.main) {
     hostname: "0.0.0.0",
     port: apiPort,
   });
+  startAnimeThemesCatalogRefreshJob();
   startAniListSyncWorker();
   startSpotifySyncWorker();
   console.log(`Kwizik API running on http://0.0.0.0:${apiPort}`);
