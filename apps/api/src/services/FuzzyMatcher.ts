@@ -8,6 +8,18 @@ function normalize(value: string) {
     .trim();
 }
 
+function acronym(value: string) {
+  const normalized = normalize(value);
+  if (normalized.length <= 0) return "";
+  const letters = normalized
+    .split(" ")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => part[0])
+    .filter((char): char is string => typeof char === "string" && char.length > 0);
+  return letters.join("");
+}
+
 function toBigrams(value: string) {
   if (value.length < 2) return [value];
   const padded = ` ${value} `;
@@ -45,6 +57,10 @@ export function isTextAnswerCorrect(input: string, expected: string) {
   if (answer.length < 2 || truth.length < 2) return false;
 
   if (answer === truth) return true;
+  const answerAcronym = acronym(answer);
+  const truthAcronym = acronym(truth);
+  if (answer === truthAcronym || truth === answerAcronym) return true;
+  if (answerAcronym.length >= 2 && answerAcronym === truthAcronym) return true;
   if (truth.includes(answer) || answer.includes(truth)) return true;
 
   return diceCoefficient(answer, truth) >= 0.82;

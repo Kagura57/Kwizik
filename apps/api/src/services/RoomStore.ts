@@ -10,10 +10,13 @@ import type { MusicTrack } from "./music-types";
 import { getRomanizedJapaneseCached, scheduleRomanizeJapanese } from "./JapaneseRomanizer";
 import { SPOTIFY_RATE_LIMITED_ERROR, spotifyPlaylistRateLimitRetryAfterMs } from "../routes/music/spotify";
 import { fetchUserLikedTracksForProviders as fetchSyncedUserLikedTracksForProviders } from "./UserMusicLibrary";
+import { pool } from "../db/client";
+import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLikedTrackRepository } from "../repositories/UserLikedTrackRepository";
 
 type RoundMode = "mcq" | "text";
-type RoomSourceMode = "public_playlist" | "players_liked";
+type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type RoomThemeMode = "op_only" | "ed_only" | "mix";
 type LibraryProvider = "spotify" | "deezer";
 type ProviderLinkStatus = "linked" | "not_linked" | "expired";
 type PoolBuildStatus = "idle" | "building" | "ready" | "failed";
@@ -60,6 +63,7 @@ type RoomSession = {
   trackPool: MusicTrack[];
   distractorTrackPool: MusicTrack[];
   sourceMode: RoomSourceMode;
+  themeMode: RoomThemeMode;
   publicPlaylistSelection: {
     provider: "deezer";
     id: string;
@@ -137,6 +141,14 @@ const ROOM_BULK_ANSWER_TRACK_LIMIT = 16_000;
 const ROOM_BULK_ANSWER_SUGGESTION_LIMIT = 24_000;
 
 type RoundConfig = typeof DEFAULT_ROUND_CONFIG;
+
+function isLegacyPlayersLikedSource(mode: RoomSourceMode) {
+  return mode === "players_liked";
+}
+
+function isAniListUnionSource(mode: RoomSourceMode) {
+  return mode === "anilist_union";
+}
 
 type RoomStoreDependencies = {
   now?: () => number;
@@ -651,6 +663,9 @@ export class RoomStore {
     if (session.sourceMode === "public_playlist") {
       return session.publicPlaylistSelection?.sourceQuery?.trim() || session.categoryQuery.trim();
     }
+    if (isAniListUnionSource(session.sourceMode)) {
+      return "anilist:linked:union";
+    }
     return "players:liked";
   }
 
@@ -681,6 +696,9 @@ export class RoomStore {
 
     if (session.sourceMode === "public_playlist") {
       return this.sourceQueryForSession(session).length > 0;
+    }
+    if (isAniListUnionSource(session.sourceMode)) {
+      return [...session.players.values()].some((player) => player.userId !== null);
     }
 
     const contributors = this.playersLikedContributors(session);
@@ -863,6 +881,103 @@ export class RoomStore {
       rawTotal,
       playableTotal,
       cleanTotal,
+    };
+  }
+
+  private async buildAniListUnionTrackPool(session: RoomSession, requestedRounds: number) {
+    const safeRounds = Math.max(1, requestedRounds);
+    const targetCandidateSize = this.targetCandidatePoolSize(safeRounds);
+    const userIds = [...session.players.values()]
+      .map((player) => player.userId)
+      .filter((userId): userId is string => typeof userId === "string" && userId.length > 0);
+    if (userIds.length <= 0) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+    if (!(typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0)) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    const animeIds = await userAnimeLibraryRepository.unionAnimeIdsForUsers(
+      userIds,
+      Math.max(targetCandidateSize * 3, 60),
+    );
+    if (animeIds.length <= 0) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    const themeCondition =
+      session.themeMode === "op_only"
+        ? "and tv.theme_type = 'OP'"
+        : session.themeMode === "ed_only"
+          ? "and tv.theme_type = 'ED'"
+          : "";
+
+    const result = await pool.query<{
+      video_key: string;
+      webm_url: string;
+      theme_type: string;
+      theme_number: number | null;
+      title_romaji: string;
+    }>(
+      `
+        select tv.video_key, tv.webm_url, tv.theme_type, tv.theme_number, aa.title_romaji
+        from anime_theme_videos tv
+        join anime_catalog_anime aa on aa.id = tv.anime_id
+        where tv.is_playable = true
+          and tv.anime_id = any($1::bigint[])
+          ${themeCondition}
+        order by random()
+        limit $2
+      `,
+      [animeIds, Math.max(targetCandidateSize * 2, safeRounds + 8)],
+    );
+
+    const tracks: MusicTrack[] = result.rows.map((row) => {
+      const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
+      return {
+        provider: "animethemes",
+        id: row.video_key,
+        title: row.title_romaji,
+        artist: themeLabel.length > 0 ? themeLabel : row.theme_type,
+        previewUrl: row.webm_url,
+        sourceUrl: row.webm_url,
+        audioUrl: row.webm_url,
+        videoUrl: row.webm_url,
+        answer: {
+          canonical: row.title_romaji,
+        },
+      } satisfies MusicTrack;
+    });
+
+    const split = this.splitAnswerAndDistractorPools(tracks, safeRounds);
+    return {
+      tracks: split.tracks,
+      distractorTracks: split.distractorTracks,
+      candidateCount: split.candidateCount,
+      rawTotal: tracks.length,
+      playableTotal: tracks.length,
+      cleanTotal: tracks.length,
     };
   }
 
@@ -1206,6 +1321,19 @@ export class RoomStore {
       roomCode = randomRoomCode();
     }
 
+    const requestedCategory = options.categoryQuery?.trim() ?? "";
+    const lowerCategory = requestedCategory.toLowerCase();
+    const initialSourceMode: RoomSourceMode =
+      lowerCategory.startsWith("deezer:playlist:")
+        ? "public_playlist"
+        : lowerCategory === "players:liked"
+          ? "players_liked"
+          : "anilist_union";
+    const initialCategoryQuery =
+      initialSourceMode === "anilist_union"
+        ? "anilist:linked:union"
+        : requestedCategory;
+
     const session: RoomSession = {
       roomCode,
       createdAtMs: nowMs,
@@ -1216,7 +1344,8 @@ export class RoomStore {
       nextPlayerNumber: 1,
       trackPool: [],
       distractorTrackPool: [],
-      sourceMode: "public_playlist",
+      sourceMode: initialSourceMode,
+      themeMode: "mix",
       publicPlaylistSelection: null,
       playersLikedRules: {
         minContributors: 1,
@@ -1233,14 +1362,14 @@ export class RoomStore {
       },
       isResolvingTracks: false,
       trackResolutionJobsInFlight: 0,
-      categoryQuery: options.categoryQuery?.trim() ?? "",
+      categoryQuery: initialCategoryQuery,
       totalRounds: 0,
       roundModes: [],
       roundChoices: new Map(),
       latestReveal: null,
       chatMessages: [],
     };
-    if (session.categoryQuery.toLowerCase().startsWith("deezer:playlist:")) {
+    if (session.sourceMode === "public_playlist" && session.categoryQuery.toLowerCase().startsWith("deezer:playlist:")) {
       session.publicPlaylistSelection = {
         provider: "deezer",
         id: session.categoryQuery.slice("deezer:playlist:".length),
@@ -1397,7 +1526,7 @@ export class RoomStore {
       } else if (session.categoryQuery === "players:liked") {
         session.categoryQuery = "";
       }
-    } else {
+    } else if (isLegacyPlayersLikedSource(mode)) {
       session.publicPlaylistSelection = null;
       session.categoryQuery = "players:liked";
       for (const player of session.players.values()) {
@@ -1407,9 +1536,38 @@ export class RoomStore {
           }
         }
       }
+    } else {
+      session.publicPlaylistSelection = null;
+      session.playersLikedPool = [];
+      session.distractorTrackPool = [];
+      this.roomLikedPoolRebuildRequested.delete(roomCode);
+      session.poolBuild = {
+        status: "idle",
+        contributorsCount: 0,
+        mergedTracksCount: 0,
+        playableTracksCount: 0,
+        lastBuiltAtMs: null,
+        errorCode: null,
+      };
+      session.isResolvingTracks = false;
+      session.trackResolutionJobsInFlight = 0;
+      session.categoryQuery = "anilist:linked:union";
     }
     this.resetReadyStates(session);
     return { status: "ok" as const, mode: session.sourceMode };
+  }
+
+  setRoomThemeMode(roomCode: string, playerId: string, mode: RoomThemeMode) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.themeMode = mode;
+    this.resetReadyStates(session);
+    return { status: "ok" as const, mode: session.themeMode };
   }
 
   setRoomPublicPlaylist(
@@ -1596,7 +1754,8 @@ export class RoomStore {
     session.roundChoices.clear();
     session.latestReveal = null;
     session.chatMessages = [];
-    session.sourceMode = "public_playlist";
+    session.sourceMode = "anilist_union";
+    session.themeMode = "mix";
     session.publicPlaylistSelection = null;
     session.playersLikedPool = [];
     session.poolBuild = {
@@ -1609,7 +1768,7 @@ export class RoomStore {
     };
     session.isResolvingTracks = false;
     session.trackResolutionJobsInFlight = 0;
-    session.categoryQuery = "";
+    session.categoryQuery = "anilist:linked:union";
     this.resetReadyStates(session);
 
     for (const player of session.players.values()) {
@@ -1672,6 +1831,14 @@ export class RoomStore {
           error: "SOURCE_NOT_SET" as const,
         };
       }
+    } else if (isAniListUnionSource(session.sourceMode)) {
+      const hasLinkedUser = [...session.players.values()].some((player) => player.userId !== null);
+      if (!hasLinkedUser) {
+        return {
+          ok: false as const,
+          error: "PLAYERS_LIBRARY_NOT_READY" as const,
+        };
+      }
     } else {
       const contributors = this.playersLikedContributors(session);
       if (contributors.length < session.playersLikedRules.minContributors) {
@@ -1726,10 +1893,10 @@ export class RoomStore {
       playableTotal: number;
       cleanTotal: number;
     };
-    const reusablePlayersLikedPlayablePool = session.sourceMode === "players_liked"
+    const reusablePlayersLikedPlayablePool = isLegacyPlayersLikedSource(session.sourceMode)
       ? session.playersLikedPool.filter((track) => isTrackPlayable(track))
       : [];
-    const canReusePlayersLikedPool = session.sourceMode === "players_liked"
+    const canReusePlayersLikedPool = isLegacyPlayersLikedSource(session.sourceMode)
       && session.poolBuild.status === "ready"
       && reusablePlayersLikedPlayablePool.length >= poolSize;
 
@@ -1755,7 +1922,7 @@ export class RoomStore {
         candidatePoolSize: session.playersLikedPool.length,
         playablePoolSize: split.candidateCount,
       });
-    } else if (session.sourceMode === "players_liked") {
+    } else if (isLegacyPlayersLikedSource(session.sourceMode)) {
       if (session.manager.state() === "waiting" && session.poolBuild.status !== "building") {
         this.startPlayersLikedPoolBuild(session);
       }
@@ -1764,6 +1931,11 @@ export class RoomStore {
         error: "PLAYERS_LIBRARY_SYNCING" as const,
         retryAfterMs: 1_500,
       };
+    } else if (isAniListUnionSource(session.sourceMode)) {
+      startPoolStats = await this.resolveTracksWithFlag(
+        session,
+        async () => await this.buildAniListUnionTrackPool(session, poolSize),
+      );
     } else {
       try {
         startPoolStats = await this.resolveTracksWithFlag(
@@ -2207,6 +2379,7 @@ export class RoomStore {
       sourceMode: session.sourceMode,
       sourceConfig: {
         mode: session.sourceMode,
+        themeMode: session.themeMode,
         publicPlaylist: session.publicPlaylistSelection
           ? {
               provider: session.publicPlaylistSelection.provider,
