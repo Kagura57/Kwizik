@@ -819,6 +819,29 @@ select option {
   min-width: 0;
 }
 
+.leaderboard-player-block {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.leaderboard-reveal-answer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: rgba(232, 240, 255, 0.72);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.leaderboard-reveal-answer.correct {
+  color: rgba(101, 245, 184, 0.96);
+}
+
+.leaderboard-reveal-answer.wrong {
+  color: rgba(255, 170, 170, 0.94);
+}
+
 .answer-check {
   display: inline-flex;
   align-items: center;

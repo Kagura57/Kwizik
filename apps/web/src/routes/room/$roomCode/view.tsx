@@ -167,6 +167,22 @@ export function RoomViewPage() {
     usingYouTubePlayback &&
     (state?.state === "reveal" || state?.state === "leaderboard");
   const isResults = state?.state === "results";
+  const showRevealAnswersInLeaderboard = state?.state === "reveal" || state?.state === "leaderboard";
+  const revealAnswerByPlayerId = useMemo(() => {
+    const map = new Map<
+      string,
+      { answer: string | null; submitted: boolean; isCorrect: boolean }
+    >();
+    if (!showRevealAnswersInLeaderboard || !state?.reveal) return map;
+    for (const entry of state.reveal.playerAnswers) {
+      map.set(entry.playerId, {
+        answer: entry.answer,
+        submitted: entry.submitted,
+        isCorrect: entry.isCorrect,
+      });
+    }
+    return map;
+  }, [showRevealAnswersInLeaderboard, state?.reveal]);
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
 
@@ -300,23 +316,6 @@ export function RoomViewPage() {
                   <p className="reveal-artist">
                     {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
                   </p>
-                  {state.reveal.playerAnswers.length > 0 && (
-                    <ul className="reveal-answer-list">
-                      {state.reveal.playerAnswers.map((entry) => (
-                        <li
-                          key={entry.playerId}
-                          className={`reveal-answer-item${entry.isCorrect ? " correct" : entry.submitted ? " wrong" : ""}`}
-                        >
-                          <strong>{entry.displayName}</strong>
-                          <span>
-                            {entry.submitted && entry.answer
-                              ? withRomajiLabel(entry.answer)
-                              : "Pas de réponse"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </div>
               </div>
             )}
@@ -341,14 +340,30 @@ export function RoomViewPage() {
           {(state?.leaderboard ?? []).map((entry) => (
             <li key={entry.playerId} className={entry.hasAnsweredCurrentRound ? "answered" : ""}>
               <span>#{entry.rank}</span>
-              <strong className="leaderboard-name">
-                {entry.displayName}
-                {entry.hasAnsweredCurrentRound && (
-                  <i className="answer-check" aria-label="Reponse validee">
-                    ✓
-                  </i>
-                )}
-              </strong>
+              <div className="leaderboard-player-block">
+                <strong className="leaderboard-name">
+                  {entry.displayName}
+                  {entry.hasAnsweredCurrentRound && (
+                    <i className="answer-check" aria-label="Reponse validee">
+                      ✓
+                    </i>
+                  )}
+                </strong>
+                {showRevealAnswersInLeaderboard && (() => {
+                  const revealAnswer = revealAnswerByPlayerId.get(entry.playerId);
+                  if (!revealAnswer) return null;
+                  const label = revealAnswer.submitted && revealAnswer.answer
+                    ? withRomajiLabel(revealAnswer.answer)
+                    : "Pas de réponse";
+                  return (
+                    <small
+                      className={`leaderboard-reveal-answer${revealAnswer.isCorrect ? " correct" : revealAnswer.submitted ? " wrong" : ""}`}
+                    >
+                      {label}
+                    </small>
+                  );
+                })()}
+              </div>
               <div className="leaderboard-score-block">
                 <em>{entry.score} pts</em>
                 <small className="leaderboard-meta">

@@ -42,6 +42,49 @@ describe("music source routes", () => {
     expect(payload.count).toBeLessThanOrEqual(6);
   });
 
+  it("returns 400 on suggestion source route when source is missing", async () => {
+    const response = await app.handle(new Request("http://localhost/music/source/suggestions"));
+    expect(response.status).toBe(400);
+  });
+
+  it("returns autocomplete seed tracks from deezer playlist source", async () => {
+    vi.spyOn(deezerModule, "fetchDeezerPlaylistTracks").mockResolvedValue([
+      {
+        provider: "deezer",
+        id: "dz-track-1",
+        title: "Seed Track 1",
+        artist: "Seed Artist",
+        durationSec: 180,
+        previewUrl: "https://cdn.example/seed-1.mp3",
+        sourceUrl: "https://www.deezer.com/track/dz-track-1",
+      },
+    ]);
+
+    const response = await app.handle(
+      new Request("http://localhost/music/source/suggestions?source=deezer:playlist:3155776842&limit=300"),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      source: string;
+      parsed: { type: string };
+      count: number;
+      tracks: Array<{ id: string; title: string; artist: string }>;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.source).toBe("deezer:playlist:3155776842");
+    expect(payload.parsed.type).toBe("deezer_playlist");
+    expect(payload.count).toBe(1);
+    expect(payload.tracks).toEqual([
+      expect.objectContaining({
+        id: "dz-track-1",
+        title: "Seed Track 1",
+        artist: "Seed Artist",
+      }),
+    ]);
+    expect(deezerModule.fetchDeezerPlaylistTracks).toHaveBeenCalledWith("3155776842", 300);
+  });
+
   it("returns 400 when AniList users are missing", async () => {
     const response = await app.handle(new Request("http://localhost/music/anilist/titles"));
     expect(response.status).toBe(400);

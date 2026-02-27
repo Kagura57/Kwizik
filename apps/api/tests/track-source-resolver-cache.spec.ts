@@ -247,6 +247,56 @@ describe("track source resolver cache behavior", () => {
     expect(calledQueries.some((query) => query.includes("audio artist - audio fallback song"))).toBe(false);
   });
 
+  it("prefers exact japanese-title overlap over generic artist MV candidates", async () => {
+    vi.spyOn(resolvedTrackRepository, "getBySource").mockResolvedValue(null);
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([
+      {
+        provider: "spotify",
+        id: "sp-jp-1",
+        title: "修羅",
+        artist: "DOES",
+        previewUrl: null,
+        sourceUrl: "https://open.spotify.com/track/sp-jp-1",
+      },
+    ]);
+
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      const normalized = query.toLowerCase();
+      if (!normalized.includes("official video")) return [];
+      return [
+        {
+          provider: "youtube",
+          id: "yt-wrong-jp-1",
+          title: "JUMP MV / 銀魂 ×「修羅」",
+          artist: "DOES",
+          previewUrl: null,
+          sourceUrl: "https://www.youtube.com/watch?v=yt-wrong-jp-1",
+        },
+        {
+          provider: "youtube",
+          id: "yt-correct-jp-1",
+          title: "修羅 (Official Video)",
+          artist: "DOES",
+          previewUrl: null,
+          sourceUrl: "https://www.youtube.com/watch?v=yt-correct-jp-1",
+        },
+      ];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "spotify:playlist:cache123",
+      size: 1,
+    });
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      provider: "youtube",
+      id: "yt-correct-jp-1",
+      title: "修羅",
+      artist: "DOES",
+    });
+  });
+
   it("filters ad-like source tracks before youtube prioritization", async () => {
     fetchSpotifyPlaylistTracksMock.mockResolvedValue([
       {

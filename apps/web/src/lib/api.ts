@@ -829,3 +829,38 @@ export async function searchTracksAcrossProviders(input: { q: string; limit?: nu
     providerErrors: Record<string, string>;
   }>(`/music/search?${params.toString()}`);
 }
+
+export async function resolveTracksFromSource(input: { source: string; size?: number }) {
+  const params = new URLSearchParams();
+  params.set("source", input.source.trim());
+  if (typeof input.size === "number") {
+    params.set("limit", String(input.size));
+  }
+
+  return requestJson<{
+    ok: true;
+    source: string;
+    parsed: {
+      type:
+        | "search"
+        | "spotify_playlist"
+        | "spotify_popular"
+        | "deezer_playlist"
+        | "deezer_chart"
+        | "anilist_users";
+      original: string;
+      query: string;
+      payload: unknown;
+    };
+    count: number;
+    tracks: Array<{
+      provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
+      id: string;
+      title: string;
+      artist: string;
+      durationSec?: number | null;
+      previewUrl: string | null;
+      sourceUrl: string | null;
+    }>;
+  }>(`/music/source/suggestions?${params.toString()}`);
+}

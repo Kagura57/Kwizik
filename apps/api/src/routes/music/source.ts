@@ -1,9 +1,11 @@
 import { Elysia } from "elysia";
 import { fetchAniListUserAnimeTitles } from "./anilist";
-import { searchDeezerPlaylists } from "./deezer";
+import { fetchDeezerChartTracks, fetchDeezerPlaylistTracks, searchDeezerPlaylists } from "./deezer";
+import { fetchSpotifyPlaylistTracks, fetchSpotifyPopularTracks } from "./spotify";
 import { parseTrackSource, resolveTrackPoolFromSource } from "../../services/TrackSourceResolver";
 import { logEvent } from "../../lib/logger";
 import { readEnvVar } from "../../lib/env";
+import type { MusicTrack } from "../../services/music-types";
 
 function parseLimit(raw: string | undefined, fallback: number) {
   if (!raw) return fallback;
@@ -17,6 +19,10 @@ function parseOffset(raw: string | undefined, fallback = 0) {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(0, parsed);
+}
+
+function parseAutocompleteLimit(raw: string | undefined, fallback: number) {
+  return Math.max(1, Math.min(parseLimit(raw, fallback), 2_000));
 }
 
 function parseUsers(raw: string | undefined) {
@@ -129,6 +135,26 @@ function readSettledErrorMessage(value: PromiseSettledResult<unknown>) {
   return "UNKNOWN_ERROR";
 }
 
+async function fetchAutocompleteSeedTracks(source: string, limit: number): Promise<MusicTrack[]> {
+  const parsed = parseTrackSource(source);
+  const safeLimit = Math.max(1, Math.min(limit, 2_000));
+
+  if (parsed.type === "deezer_playlist" && parsed.payload?.playlistId) {
+    return fetchDeezerPlaylistTracks(parsed.payload.playlistId, safeLimit);
+  }
+  if (parsed.type === "spotify_playlist" && parsed.payload?.playlistId) {
+    return fetchSpotifyPlaylistTracks(parsed.payload.playlistId, Math.min(safeLimit, 100));
+  }
+  if (parsed.type === "deezer_chart") {
+    return fetchDeezerChartTracks(Math.min(safeLimit, 200));
+  }
+  if (parsed.type === "spotify_popular") {
+    return fetchSpotifyPopularTracks(Math.min(safeLimit, 100));
+  }
+
+  return [];
+}
+
 export const musicSourceRoutes = new Elysia({ prefix: "/music" })
   .get("/source/resolve", async ({ query, set }) => {
     const source = typeof query.source === "string" ? query.source.trim() : "";
@@ -171,6 +197,41 @@ export const musicSourceRoutes = new Elysia({ prefix: "/music" })
         count: 0,
         previewCount: 0,
         withoutPreviewCount: 0,
+        tracks: [],
+      };
+    }
+  })
+  .get("/source/suggestions", async ({ query, set }) => {
+    const source = typeof query.source === "string" ? query.source.trim() : "";
+    if (!source) {
+      set.status = 400;
+      return { error: "MISSING_SOURCE" };
+    }
+
+    const limit = parseAutocompleteLimit(typeof query.limit === "string" ? query.limit : undefined, 500);
+    const parsed = parseTrackSource(source);
+
+    try {
+      const tracks = await fetchAutocompleteSeedTracks(source, limit);
+      return {
+        ok: true as const,
+        source,
+        parsed,
+        count: tracks.length,
+        tracks,
+      };
+    } catch (error) {
+      logEvent("warn", "music_source_suggestions_failed", {
+        source,
+        limit,
+        parsedType: parsed.type,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+      });
+      return {
+        ok: true as const,
+        source,
+        parsed,
+        count: 0,
         tracks: [],
       };
     }

@@ -8,6 +8,7 @@ import {
   kickPlayer,
   leaveRoom as leaveRoomApi,
   replayRoom,
+  resolveTracksFromSource,
   searchPlaylistsAcrossProviders,
   searchTracksAcrossProviders,
   sendRoomChatMessage,
@@ -104,6 +105,9 @@ function lobbyReadyStatusLabel(
     allReady: boolean;
     canStart: boolean;
     isResolvingTracks: boolean;
+    poolBuild: {
+      status: "idle" | "building" | "ready" | "failed";
+    };
     sourceMode: "public_playlist" | "players_liked";
     sourceConfig: {
       publicPlaylist: {
@@ -129,6 +133,9 @@ function lobbyReadyStatusLabel(
         : " · En attente de la configuration du host.";
     }
     return "";
+  }
+  if (state.sourceMode === "players_liked" && state.poolBuild.status !== "ready") {
+    return " · Préparation de la playlist des joueurs en cours...";
   }
   return isHost ? " · Lancement auto en cours..." : " · En attente du host pour lancer.";
 }
@@ -163,7 +170,35 @@ function rankAnswerSuggestions(values: string[], query: string) {
     }
   }
 
+  if (startsWith.length <= 0 && includes.length <= 0) {
+    return values.slice(0, 8);
+  }
   return [...startsWith, ...includes];
+}
+
+function collectSuggestionValuesFromTracks(
+  tracks: Array<{ title: string; artist: string; titleRomaji?: string | null; artistRomaji?: string | null }>,
+  max = 240,
+) {
+  const values: string[] = [];
+  const seen = new Set<string>();
+
+  for (const track of tracks) {
+    const title = withRomajiLabel(track.title, track.titleRomaji);
+    const artist = withRomajiLabel(track.artist, track.artistRomaji);
+    const candidates = [title, artist, `${title} - ${artist}`];
+    for (const candidate of candidates) {
+      const normalized = candidate.trim();
+      if (normalized.length < 2) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      values.push(normalized);
+      if (values.length >= max) return values;
+    }
+  }
+
+  return values;
 }
 
 export function RoomPlayPage() {
@@ -247,11 +282,21 @@ export function RoomPlayPage() {
   const isHost = Boolean(session.playerId && state?.hostPlayerId === session.playerId);
   const isWaitingLobby = state?.state === "waiting";
   const isResolvingTracks = Boolean(state?.isResolvingTracks);
+  const isPlayersLikedPoolBuilding =
+    state?.sourceMode === "players_liked" && state.poolBuild.status === "building";
+  const isPlayersLikedPoolPending =
+    state?.sourceMode === "players_liked" && state.poolBuild.status !== "ready";
   const currentPlayer = state?.players.find((player) => player.playerId === session.playerId) ?? null;
   const hasActivePlayerSeat = Boolean(currentPlayer);
   const lobbyReadyStatus = lobbyReadyStatusLabel(state, isHost, hasActivePlayerSeat);
   const typedPlaylistQuery = playlistQuery.trim();
   const normalizedPlaylistQuery = debouncedPlaylistQuery.trim();
+  const selectedPlaylistSourceQuery =
+    state?.sourceMode === "public_playlist"
+      ? state.sourceConfig.publicPlaylist?.sourceQuery?.trim() ?? ""
+      : "";
+  const selectedPlaylistTrackCount =
+    state?.sourceMode === "public_playlist" ? state.sourceConfig.publicPlaylist?.trackCount ?? null : null;
   const typedAnswer = answer.trim();
   const normalizedAnswerQuery = debouncedAnswerQuery.trim();
   const isTextLockedForAutocomplete =
@@ -280,7 +325,7 @@ export function RoomPlayPage() {
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedAnswerQuery(answer);
-    }, 120);
+    }, 40);
     return () => window.clearTimeout(timeoutId);
   }, [answer]);
 
@@ -316,47 +361,71 @@ export function RoomPlayPage() {
     staleTime: 2 * 60_000,
   });
 
+  const preloadSuggestionLimit = useMemo(() => {
+    if (typeof selectedPlaylistTrackCount !== "number" || !Number.isFinite(selectedPlaylistTrackCount)) {
+      return 180;
+    }
+    return Math.max(60, Math.min(Math.floor(selectedPlaylistTrackCount), 500));
+  }, [selectedPlaylistTrackCount]);
+
+  const answerSourceSeedQuery = useQuery({
+    queryKey: ["answer-source-seed", roomCode, selectedPlaylistSourceQuery, preloadSuggestionLimit],
+    queryFn: async () =>
+      resolveTracksFromSource({
+        source: selectedPlaylistSourceQuery,
+        size: preloadSuggestionLimit,
+      }),
+    enabled:
+      selectedPlaylistSourceQuery.length > 0 &&
+      (state?.state === "waiting" || state?.state === "countdown"),
+    staleTime: 10 * 60_000,
+  });
+
+  const localMatchCount = useMemo(
+    () => rankAnswerSuggestions(answerSuggestionPool, typedAnswer).length,
+    [answerSuggestionPool, typedAnswer],
+  );
+
   const answerAutocompleteQuery = useQuery({
     queryKey: ["answer-autocomplete", normalizedAnswerQuery],
     queryFn: async () =>
       searchTracksAcrossProviders({
         q: normalizedAnswerQuery,
-        limit: 8,
+        limit: 12,
       }),
     enabled:
       state?.state === "playing" &&
       state.mode === "text" &&
       normalizedAnswerQuery.length >= 1 &&
-      !isTextLockedForAutocomplete,
+      !isTextLockedForAutocomplete &&
+      localMatchCount < 8,
     staleTime: 3 * 60_000,
     placeholderData: (previousData) => previousData,
   });
 
   const answerSuggestions = useMemo(() => {
     const source = answerAutocompleteQuery.data?.fallback ?? [];
-    const values: string[] = [];
-    const seen = new Set<string>();
-    for (const track of source) {
-      const title = withRomajiLabel(track.title);
-      const artist = withRomajiLabel(track.artist);
-      const candidates = [title, artist, `${title} - ${artist}`];
-      for (const candidate of candidates) {
-        const normalized = candidate.trim();
-        if (normalized.length < 2) continue;
-        const key = normalized.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        values.push(normalized);
-        if (values.length >= 12) return values;
-      }
-    }
-    return values;
+    return collectSuggestionValuesFromTracks(source, 12);
   }, [answerAutocompleteQuery.data?.fallback]);
 
   useEffect(() => {
-    if (!roomCode) return;
-    setAnswerSuggestionPool([]);
-  }, [roomCode]);
+    const sourceTracks = answerSourceSeedQuery.data?.tracks ?? [];
+    if (sourceTracks.length <= 0) return;
+    const seeded = collectSuggestionValuesFromTracks(sourceTracks, 800);
+    if (seeded.length <= 0) return;
+
+    setAnswerSuggestionPool((previous) => {
+      const merged = [...previous];
+      const seen = new Set(merged.map((value) => value.toLowerCase()));
+      for (const value of seeded) {
+        const key = value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(value);
+      }
+      return merged.slice(-800);
+    });
+  }, [answerSourceSeedQuery.data?.tracks]);
 
   useEffect(() => {
     if (answerSuggestions.length <= 0) return;
@@ -390,6 +459,23 @@ export function RoomPlayPage() {
     }
     return deduped;
   }, [answerSuggestionPool, answerSuggestions, typedAnswer]);
+
+  const showRevealAnswersInLeaderboard = state?.state === "reveal" || state?.state === "leaderboard";
+  const revealAnswerByPlayerId = useMemo(() => {
+    const map = new Map<
+      string,
+      { answer: string | null; submitted: boolean; isCorrect: boolean }
+    >();
+    if (!showRevealAnswersInLeaderboard || !state?.reveal) return map;
+    for (const entry of state.reveal.playerAnswers) {
+      map.set(entry.playerId, {
+        answer: entry.answer,
+        submitted: entry.submitted,
+        isCorrect: entry.isCorrect,
+      });
+    }
+    return map;
+  }, [showRevealAnswersInLeaderboard, state?.reveal]);
 
   useEffect(() => {
     if (!playlistSearchQuery.data) return;
@@ -461,6 +547,7 @@ export function RoomPlayPage() {
         // Keep auto-start active while liked tracks are still being resolved.
         autoStartRoundRef.current = 0;
         setSpotifyRateLimitUntilMs(null);
+        snapshotQuery.refetch();
         return;
       }
       setSpotifyRateLimitUntilMs(null);
@@ -472,7 +559,13 @@ export function RoomPlayPage() {
       autoStartRoundRef.current = 0;
       return;
     }
-    if (!state.allReady || !state.canStart || startMutation.isPending || isResolvingTracks) {
+    if (
+      !state.allReady ||
+      !state.canStart ||
+      startMutation.isPending ||
+      isResolvingTracks ||
+      isPlayersLikedPoolPending
+    ) {
       return;
     }
     const signature = state.readyCount * 1000 + state.players.length;
@@ -482,6 +575,7 @@ export function RoomPlayPage() {
   }, [
     isHost,
     isResolvingTracks,
+    isPlayersLikedPoolPending,
     startMutation,
     startMutation.isPending,
     state,
@@ -603,6 +697,7 @@ export function RoomPlayPage() {
   });
 
   const startErrorCode = startMutation.error instanceof Error ? startMutation.error.message : null;
+  const isNonBlockingStartError = startErrorCode === "PLAYERS_LIBRARY_SYNCING";
   const sourceModeErrorCode = sourceModeMutation.error instanceof Error ? sourceModeMutation.error.message : null;
   const publicPlaylistErrorCode =
     publicPlaylistMutation.error instanceof Error ? publicPlaylistMutation.error.message : null;
@@ -615,6 +710,11 @@ export function RoomPlayPage() {
     return Math.max(0, spotifyRateLimitUntilMs - clockNow);
   }, [clockNow, spotifyRateLimitUntilMs]);
   const spotifyCooldownRemainingSec = Math.max(1, Math.ceil(spotifyCooldownRemainingMs / 1000));
+
+  useEffect(() => {
+    if (!isNonBlockingStartError) return;
+    startMutation.reset();
+  }, [isNonBlockingStartError, startMutation]);
 
   const remainingMs = useMemo(() => {
     if (!state?.deadlineMs) return null;
@@ -1029,14 +1129,30 @@ export function RoomPlayPage() {
                 {state.leaderboard.map((entry) => (
                   <li key={entry.playerId} className={entry.hasAnsweredCurrentRound ? "answered" : ""}>
                     <span>#{entry.rank}</span>
-                    <strong className="leaderboard-name">
-                      {entry.displayName}
-                      {entry.hasAnsweredCurrentRound && (
-                        <i className="answer-check" aria-label="Reponse validee">
-                          ✓
-                        </i>
-                      )}
-                    </strong>
+                    <div className="leaderboard-player-block">
+                      <strong className="leaderboard-name">
+                        {entry.displayName}
+                        {entry.hasAnsweredCurrentRound && (
+                          <i className="answer-check" aria-label="Reponse validee">
+                            ✓
+                          </i>
+                        )}
+                      </strong>
+                      {showRevealAnswersInLeaderboard && (() => {
+                        const revealAnswer = revealAnswerByPlayerId.get(entry.playerId);
+                        if (!revealAnswer) return null;
+                        const label = revealAnswer.submitted && revealAnswer.answer
+                          ? withRomajiLabel(revealAnswer.answer)
+                          : "Pas de réponse";
+                        return (
+                          <small
+                            className={`leaderboard-reveal-answer${revealAnswer.isCorrect ? " correct" : revealAnswer.submitted ? " wrong" : ""}`}
+                          >
+                            {label}
+                          </small>
+                        );
+                      })()}
+                    </div>
                     <div className="leaderboard-score-block">
                       <em>{entry.score} pts</em>
                       <small className="leaderboard-meta">
@@ -1088,7 +1204,7 @@ export function RoomPlayPage() {
           {state?.state === "waiting" && (
             <div className="waiting-box">
               <h2>Le host peut lancer la partie quand il le souhaite.</h2>
-              {isResolvingTracks && (
+              {(isResolvingTracks || isPlayersLikedPoolBuilding) && (
                 <div className="resolving-tracks-banner" role="status" aria-live="polite">
                   <span className="resolving-tracks-spinner" aria-hidden="true" />
                   <div>
@@ -1235,7 +1351,12 @@ export function RoomPlayPage() {
                   <button
                     className="solid-btn"
                     onClick={() => startMutation.mutate()}
-                    disabled={startMutation.isPending || !state.canStart || isResolvingTracks}
+                    disabled={
+                      startMutation.isPending ||
+                      !state.canStart ||
+                      isResolvingTracks ||
+                      isPlayersLikedPoolPending
+                    }
                   >
                     {startMutation.isPending ? "Lancement..." : "Lancer la partie"}
                   </button>
@@ -1318,14 +1439,15 @@ export function RoomPlayPage() {
                         : "Aucune suggestion"
                       : "Tape un titre ou un artiste"
                   }
-                  isLoading={typedAnswer.length >= 1 && answerAutocompleteQuery.isFetching}
+                  isLoading={
+                    typedAnswer.length >= 1 &&
+                    answerAutocompleteQuery.isFetching &&
+                    answerSelectOptions.length <= 0
+                  }
                   openMenuOnFocus
                   blurInputOnSelect={false}
                   isDisabled={textLocked || answerMutation.isPending}
                 />
-                {typedAnswer.length >= 1 && typedAnswer === normalizedAnswerQuery && answerAutocompleteQuery.isFetching && (
-                  <small className="status">Suggestions...</small>
-                )}
               </label>
               <button
                 className="solid-btn"
@@ -1355,23 +1477,6 @@ export function RoomPlayPage() {
                   <p className="reveal-artist">
                     {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
                   </p>
-                  {state.reveal.playerAnswers.length > 0 && (
-                    <ul className="reveal-answer-list">
-                      {state.reveal.playerAnswers.map((entry) => (
-                        <li
-                          key={entry.playerId}
-                          className={`reveal-answer-item${entry.isCorrect ? " correct" : entry.submitted ? " wrong" : ""}`}
-                        >
-                          <strong>{entry.displayName}</strong>
-                          <span>
-                            {entry.submitted && entry.answer
-                              ? withRomajiLabel(entry.answer)
-                              : "Pas de réponse"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </div>
               </div>
             )}
@@ -1427,7 +1532,7 @@ export function RoomPlayPage() {
             className={
               snapshotQuery.isError ||
               answerMutation.isError ||
-              startMutation.isError ||
+              (startMutation.isError && !isNonBlockingStartError) ||
               sourceModeMutation.isError ||
               publicPlaylistMutation.isError ||
               chatMutation.isError ||
@@ -1447,8 +1552,10 @@ export function RoomPlayPage() {
             {startErrorCode === "PLAYER_NOT_FOUND" && "Ta session joueur a expiré. Rejoins la room."}
             {startErrorCode === "PLAYERS_LIBRARY_NOT_READY" &&
               "Le mode Liked Songs nécessite au moins un joueur avec un compte musical connecté."}
-            {startErrorCode === "PLAYERS_LIBRARY_SYNCING" &&
-              "Les musiques des joueurs sont en cours de préparation. Réessaie dans quelques secondes."}
+            {isWaitingLobby &&
+              state?.sourceMode === "players_liked" &&
+              state.poolBuild.status === "building" &&
+              "Préparation de la playlist des joueurs... lancement automatique dès que c'est prêt."}
             {startErrorCode === "HOST_ONLY" && "Seul le host peut lancer la partie."}
             {sourceModeErrorCode === "HOST_ONLY" && "Seul le host peut changer le mode source."}
             {publicPlaylistErrorCode === "HOST_ONLY" && "Seul le host peut choisir la playlist publique."}

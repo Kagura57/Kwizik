@@ -227,18 +227,18 @@ function buildYouTubeQueryPlan(track: Pick<MusicTrack, "title" | "artist">): You
       intent: "official_clip",
       queries: uniqueQueries([
         `${artist} ${title} official video`,
-        `${artist} ${sanitizedTitle} official video`,
         `${artist} ${title} official clip`,
         `${artist} ${title} music video`,
+        `${artist} ${fallbackTitle} official video`,
       ]),
     },
     {
-      intent: "official_audio",
-      queries: uniqueQueries([`${artist} ${title} official audio`, `${artist} ${fallbackTitle} official audio`]),
+      intent: "fallback",
+      queries: uniqueQueries([`${artist} ${title}`, `${artist} ${fallbackTitle}`]),
     },
     {
-      intent: "fallback",
-      queries: uniqueQueries([`${artist} - ${title}`, `${artist} - ${fallbackTitle}`]),
+      intent: "official_audio",
+      queries: uniqueQueries([`${artist} ${title} official audio`]),
     },
   ].filter((step) => step.queries.length > 0);
 }
@@ -324,6 +324,13 @@ const YOUTUBE_DEPRIORITY_PATTERNS = [
   /\bnightcore\b/i,
   /\bslowed\b/i,
   /\bsped\s*up\b/i,
+  /\bshorts?\b/i,
+  /\bvlog\b/i,
+  /\bteaser\b/i,
+  /\btrailer\b/i,
+  /\binterview\b/i,
+  /\bbehind\s+the\s+scenes\b/i,
+  /\b(tour|travel)\s+diary\b/i,
 ];
 
 function normalizeSearchText(value: string) {
@@ -331,7 +338,7 @@ function normalizeSearchText(value: string) {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/[^\p{L}\p{N} ]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -392,7 +399,41 @@ type ScoredYouTubeCandidate = {
   isClip: boolean;
   isAudio: boolean;
   artistChannel: boolean;
+  titleTokenOverlap: number;
+  titleTokenCount: number;
 };
+
+const TITLE_TOKEN_STOP_WORDS = new Set([
+  "official",
+  "video",
+  "clip",
+  "music",
+  "audio",
+  "mv",
+  "topic",
+  "version",
+  "feat",
+  "featuring",
+  "ft",
+  "the",
+  "and",
+  "with",
+  "from",
+  "for",
+  "live",
+  "lyrics",
+]);
+
+function titleTokens(value: string) {
+  return normalizeSearchText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => {
+      if (token.length <= 0 || TITLE_TOKEN_STOP_WORDS.has(token)) return false;
+      if (token.length >= 3) return true;
+      return /[^\x00-\x7f]/.test(token);
+    });
+}
 
 function scoreYouTubeCandidate(
   candidate: Pick<MusicTrack, "title" | "artist">,
@@ -402,6 +443,9 @@ function scoreYouTubeCandidate(
   const candidateTitleText = normalizeSearchText(candidate.title);
   const sourceArtist = normalizeSearchText(source.artist);
   const sourceTitle = normalizeSearchText(sanitizeTrackSearchValue(source.title));
+  const sourceTitleTokens = titleTokens(sourceTitle);
+  const candidateTitleTokens = new Set(titleTokens(candidateTitleText));
+  const candidateTitleTokenCount = candidateTitleTokens.size;
   const artistChannel = isArtistChannel(candidate.artist, source.artist);
   const isClip = YOUTUBE_CLIP_PATTERNS.some((pattern) => pattern.test(candidateTitleText));
   const isAudio =
@@ -411,8 +455,28 @@ function scoreYouTubeCandidate(
       normalizeSearchText(candidate.artist).includes("topic"));
 
   let score = 0;
+  let titleTokenOverlap = 0;
+  for (const token of sourceTitleTokens) {
+    if (candidateTitleTokens.has(token)) titleTokenOverlap += 1;
+  }
+
   if (sourceArtist.length > 0 && candidateText.includes(sourceArtist)) score += 80;
   if (sourceTitle.length > 0 && candidateText.includes(sourceTitle)) score += 90;
+  if (sourceTitleTokens.length > 0) {
+    if (titleTokenOverlap <= 0) {
+      score -= 320;
+    } else {
+      score += 55 * titleTokenOverlap;
+      score += Math.round((titleTokenOverlap / sourceTitleTokens.length) * 90);
+      if (candidateTitleTokenCount > 0) {
+        score += Math.round((titleTokenOverlap / candidateTitleTokenCount) * 120);
+      }
+      const extraTitleTokens = Math.max(0, candidateTitleTokenCount - titleTokenOverlap);
+      if (extraTitleTokens > 0) {
+        score -= extraTitleTokens * 35;
+      }
+    }
+  }
   if (artistChannel) score += 260;
   if (isClip) score += 240;
   if (isAudio) score += 130;
@@ -422,7 +486,14 @@ function scoreYouTubeCandidate(
     if (pattern.test(candidateText)) score -= 120;
   }
 
-  return { score, isClip, isAudio, artistChannel };
+  return {
+    score,
+    isClip,
+    isAudio,
+    artistChannel,
+    titleTokenOverlap,
+    titleTokenCount: sourceTitleTokens.length,
+  };
 }
 
 type RankedYouTubeCandidate = {
@@ -442,9 +513,13 @@ function selectRankedYouTubeCandidate(
 
   let scoped = ranked;
   if (intent === "official_clip") {
-    scoped = ranked.filter(({ scored }) => scored.isClip);
+    scoped = ranked.filter(({ scored }) => scored.isClip && (scored.titleTokenCount <= 0 || scored.titleTokenOverlap > 0));
   } else if (intent === "official_audio") {
-    scoped = ranked.filter(({ scored }) => scored.isAudio && !scored.isClip);
+    scoped = ranked.filter(
+      ({ scored }) => scored.isAudio && !scored.isClip && (scored.titleTokenCount <= 0 || scored.titleTokenOverlap > 0),
+    );
+  } else {
+    scoped = ranked.filter(({ scored }) => scored.titleTokenCount <= 0 || scored.titleTokenOverlap > 0);
   }
   if (scoped.length <= 0) return null;
 

@@ -220,7 +220,7 @@ function asChoiceLabel(track: MusicTrack) {
   return `${track.title} - ${track.artist}`;
 }
 
-type TrackLanguageGroup = "japanese" | "korean" | "latin" | "other";
+type TrackLanguageGroup = "japanese" | "korean" | "french" | "english" | "latin" | "other";
 type TrackGenreGroup =
   | "metal"
   | "rock"
@@ -240,6 +240,15 @@ type TrackChoiceProfile = {
 
 const JAPANESE_SCRIPT_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u;
 const KOREAN_SCRIPT_RE = /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/u;
+const FRENCH_WORD_HINTS = new Set([
+  "le", "la", "les", "de", "des", "du", "une", "un", "et", "avec", "pour", "dans", "sur", "pas", "plus",
+  "toi", "moi", "amour", "coeur", "vie", "nuit", "jour", "toujours", "jamais", "sans", "mon", "ma", "mes",
+  "ton", "ta", "tes", "notre", "votre", "que", "qui", "est",
+]);
+const ENGLISH_WORD_HINTS = new Set([
+  "the", "and", "of", "to", "in", "on", "for", "with", "my", "your", "you", "me", "we", "they", "is", "are",
+  "love", "night", "day", "heart", "never", "always", "without", "from", "this", "that",
+]);
 
 const GENRE_PATTERNS: Array<{ genre: TrackGenreGroup; regex: RegExp }> = [
   { genre: "metal", regex: /\b(metal|deathcore|metalcore|thrash|black metal|heavy metal)\b/i },
@@ -337,6 +346,20 @@ function detectLanguageGroup(track: Pick<MusicTrack, "title" | "artist">): Track
   if (KOREAN_SCRIPT_RE.test(text)) return "korean";
 
   const normalized = normalizeChoiceText(text);
+  const tokens = normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (tokens.length > 0) {
+    let frenchHits = 0;
+    let englishHits = 0;
+    for (const token of tokens) {
+      if (FRENCH_WORD_HINTS.has(token)) frenchHits += 1;
+      if (ENGLISH_WORD_HINTS.has(token)) englishHits += 1;
+    }
+    if (frenchHits >= 2 && frenchHits >= englishHits + 1) return "french";
+    if (englishHits >= 2 && englishHits >= frenchHits + 1) return "english";
+  }
   if (/^[\x00-\x7f\s\W]+$/.test(normalized)) return "latin";
   return "other";
 }
@@ -378,7 +401,7 @@ function choiceCoherenceScore(
   candidateTrack: Pick<MusicTrack, "artist">,
 ) {
   let score = 0;
-  if (source.language === candidate.language) score += 70;
+  if (source.language === candidate.language) score += 80;
   if (source.genre === candidate.genre) score += 45;
   if (source.vocal !== "unknown" && source.vocal === candidate.vocal) score += 25;
 
@@ -386,10 +409,20 @@ function choiceCoherenceScore(
     normalizeChoiceText(sourceTrack.artist).trim() === normalizeChoiceText(candidateTrack.artist).trim();
   if (sameArtist) score -= 20;
 
+  if (source.language === "french" && candidate.language === "english") score -= 55;
+  if (source.language === "english" && candidate.language === "french") score -= 35;
+  if (source.language === "french" && candidate.language !== "french") score -= 30;
+  if (source.language === "english" && candidate.language !== "english" && candidate.language !== "latin") score -= 25;
   if (source.language === "japanese" && candidate.language !== "japanese") score -= 40;
+  if (source.language === "korean" && candidate.language !== "korean") score -= 35;
   if (source.genre !== "other" && candidate.genre !== source.genre) score -= 15;
 
   return score;
+}
+
+function minChoiceCoherenceScore(language: TrackLanguageGroup) {
+  if (language === "japanese" || language === "korean" || language === "french") return 35;
+  return 15;
 }
 
 const TRACK_PROMOTION_PATTERNS = [
@@ -703,11 +736,13 @@ export class RoomStore {
         score: choiceCoherenceScore(sourceProfile, entry.profile, track, entry.track),
       }))
       .sort((left, right) => right.score - left.score);
+    const minimumScore = minChoiceCoherenceScore(sourceProfile.language);
 
     const uniqueOptions = [correct];
     const seen = new Set(uniqueOptions);
     for (const distractor of rankedDistractors) {
       if (seen.has(distractor.label)) continue;
+      if (distractor.score < minimumScore) continue;
       uniqueOptions.push(distractor.label);
       seen.add(distractor.label);
       if (uniqueOptions.length >= MCQ_REQUIRED_CHOICES) break;
