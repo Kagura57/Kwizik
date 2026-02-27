@@ -194,6 +194,43 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
   };
 }
 
+export async function runAniListSyncJob(input: { userId: string; runId: number }) {
+  const userId = input.userId?.trim() ?? "";
+  const runId = Math.max(1, Math.floor(input.runId ?? 0));
+  if (!userId || !runId) {
+    throw new Error("INVALID_SYNC_PAYLOAD");
+  }
+
+  await aniListSyncRunRepository.update({
+    runId,
+    status: "running",
+    progress: 10,
+    startedAtMs: Date.now(),
+  });
+
+  try {
+    const result = await syncAniListLibrary({ userId, runId });
+    await aniListSyncRunRepository.update({
+      runId,
+      status: "success",
+      progress: 100,
+      message: `SYNCED_${result.stagedCount}`,
+      finishedAtMs: Date.now(),
+    });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
+    await aniListSyncRunRepository.update({
+      runId,
+      status: "error",
+      progress: 0,
+      message,
+      finishedAtMs: Date.now(),
+    });
+    throw error;
+  }
+}
+
 export function startAniListSyncWorker() {
   if (workerInstance) return workerInstance;
   const redisUrl = readRedisUrl();
@@ -210,40 +247,10 @@ export function startAniListSyncWorker() {
   workerInstance = new Worker<AniListSyncJobPayload>(
     ANILIST_SYNC_QUEUE_NAME,
     async (job) => {
-      const userId = job.data.userId?.trim() ?? "";
-      const runId = Math.max(1, Math.floor(job.data.runId ?? 0));
-      if (!userId || !runId) {
-        throw new Error("INVALID_SYNC_PAYLOAD");
-      }
-
-      await aniListSyncRunRepository.update({
-        runId,
-        status: "running",
-        progress: 10,
-        startedAtMs: Date.now(),
+      return await runAniListSyncJob({
+        userId: job.data.userId,
+        runId: job.data.runId,
       });
-
-      try {
-        const result = await syncAniListLibrary({ userId, runId });
-        await aniListSyncRunRepository.update({
-          runId,
-          status: "success",
-          progress: 100,
-          message: `SYNCED_${result.stagedCount}`,
-          finishedAtMs: Date.now(),
-        });
-        return result;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-        await aniListSyncRunRepository.update({
-          runId,
-          status: "error",
-          progress: 0,
-          message,
-          finishedAtMs: Date.now(),
-        });
-        throw error;
-      }
     },
     {
       connection: workerConnection,
