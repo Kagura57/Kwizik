@@ -100,6 +100,13 @@ type RoomSession = {
     sourceUrl: string | null;
     embedUrl: string | null;
     choices: string[] | null;
+    playerAnswers: Array<{
+      playerId: string;
+      displayName: string;
+      answer: string | null;
+      submitted: boolean;
+      isCorrect: boolean;
+    }>;
   } | null;
   chatMessages: RoomChatMessage[];
 };
@@ -117,6 +124,7 @@ const DEFAULT_ROUND_CONFIG = {
 const TRACK_POOL_TARGET_MULTIPLIER = 5;
 const TRACK_POOL_MIN_CANDIDATES = 24;
 const TRACK_POOL_MAX_CANDIDATES = 100;
+const PLAYERS_LIKED_TARGET_BUFFER = 2;
 const PLAYERS_LIKED_REBUILD_COOLDOWN_MS = 15_000;
 const YOUTUBE_RANDOM_START_MIN_SEC = 18;
 const YOUTUBE_RANDOM_START_FALLBACK_MAX_SEC = 45;
@@ -794,7 +802,11 @@ export class RoomStore {
 
   private async buildPlayersLikedTrackPool(session: RoomSession, requestedRounds: number) {
     const safeRounds = Math.max(1, requestedRounds);
-    const targetCandidateSize = this.targetCandidatePoolSize(safeRounds);
+    // Keep players_liked startup close to requested rounds to avoid massive YouTube resolution bursts.
+    const targetCandidateSize = Math.min(
+      TRACK_POOL_MAX_CANDIDATES,
+      safeRounds + PLAYERS_LIKED_TARGET_BUFFER,
+    );
     const contributors = this.playersLikedContributors(session);
     const mergedTracks: MusicTrack[] = [];
     const seen = new Set<string>();
@@ -814,7 +826,7 @@ export class RoomStore {
         this.getPlayerLikedTracks({
           userId: contributor.userId,
           providers,
-          size: Math.max(targetCandidateSize, 20),
+          size: targetCandidateSize,
         }),
         20_000,
         "PLAYERS_LIBRARY_TIMEOUT",
@@ -1034,12 +1046,17 @@ export class RoomStore {
     const roundMode = session.roundModes[round.round - 1] ?? "text";
     const roundChoices =
       roundMode === "mcq" ? this.buildRoundChoices(session, round.round) : null;
+    const playerRoundResults = new Map<
+      string,
+      { answer: string | null; submitted: boolean; isCorrect: boolean }
+    >();
 
     for (const player of session.players.values()) {
       const submitted = round.answers.get(player.id);
       const isCorrect = submitted ? this.isAnswerCorrect(roundMode, submitted.value, track) : false;
       const responseMs =
         submitted && isCorrect ? Math.max(0, submitted.submittedAtMs - round.startedAtMs) : 0;
+      const trimmedAnswer = submitted?.value.trim() ?? "";
       const scoring = applyScore({
         isCorrect,
         responseMs,
@@ -1056,12 +1073,29 @@ export class RoomStore {
         player.correctAnswers += 1;
         player.totalResponseMs += responseMs;
       }
+
+      playerRoundResults.set(player.id, {
+        answer: trimmedAnswer.length > 0 ? trimmedAnswer : null,
+        submitted: Boolean(submitted),
+        isCorrect,
+      });
     }
 
     if (track) {
       scheduleRomanizeJapanese(track.title);
       scheduleRomanizeJapanese(track.artist);
     }
+
+    const revealAnswers = this.sortedPlayers(session).map((player) => {
+      const result = playerRoundResults.get(player.id);
+      return {
+        playerId: player.id,
+        displayName: player.displayName,
+        answer: result?.answer ?? null,
+        submitted: result?.submitted ?? false,
+        isCorrect: result?.isCorrect ?? false,
+      };
+    });
 
     session.latestReveal = track
       ? {
@@ -1078,6 +1112,7 @@ export class RoomStore {
           sourceUrl: track.sourceUrl,
           embedUrl: embedUrlForTrack(track, { roomCode: session.roomCode, round: round.round }),
           choices: roundChoices,
+          playerAnswers: revealAnswers,
         }
       : null;
   }
@@ -1617,57 +1652,95 @@ export class RoomStore {
       playableTotal: number;
       cleanTotal: number;
     };
-    try {
-      startPoolStats = await this.resolveTracksWithFlag(
-        session,
-        async () => session.sourceMode === "players_liked"
-          ? await this.buildPlayersLikedTrackPool(session, poolSize)
-          : await this.buildStartTrackPool(resolvedQuery, poolSize),
-      );
-      for (
-        let retryAttempt = 2;
-        startPoolStats.tracks.length < poolSize && retryAttempt <= START_POOL_RETRY_ATTEMPTS;
-        retryAttempt += 1
-      ) {
-        await sleepMs(START_POOL_RETRY_DELAY_MS);
-        logEvent("info", "room_start_trackpool_retry", {
-          roomCode,
-          categoryQuery: resolvedQuery,
-          requestedRounds: poolSize,
-          retryAttempt,
-          selectedPoolSize: startPoolStats.tracks.length,
-          candidatePoolSize: startPoolStats.candidateCount,
-        });
+    const canReusePlayersLikedPool = session.sourceMode === "players_liked"
+      && session.poolBuild.status === "ready"
+      && session.playersLikedPool.length >= poolSize;
+
+    if (canReusePlayersLikedPool) {
+      const split = this.splitAnswerAndDistractorPools(session.playersLikedPool, poolSize);
+      startPoolStats = {
+        tracks: split.tracks,
+        distractorTracks: split.distractorTracks,
+        candidateCount: split.candidateCount,
+        rawTotal: split.candidateCount,
+        playableTotal: split.candidateCount,
+        cleanTotal: split.candidateCount,
+      };
+      logEvent("info", "room_start_trackpool_reused_prebuilt", {
+        roomCode,
+        categoryQuery: resolvedQuery,
+        startupPoolSize: poolSize,
+        requestedRounds: poolSize,
+        candidatePoolSize: split.candidateCount,
+      });
+    } else {
+      try {
         startPoolStats = await this.resolveTracksWithFlag(
           session,
           async () => session.sourceMode === "players_liked"
             ? await this.buildPlayersLikedTrackPool(session, poolSize)
             : await this.buildStartTrackPool(resolvedQuery, poolSize),
         );
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message === SPOTIFY_RATE_LIMITED_ERROR) {
+        for (
+          let retryAttempt = 2;
+          startPoolStats.tracks.length < poolSize && retryAttempt <= START_POOL_RETRY_ATTEMPTS;
+          retryAttempt += 1
+        ) {
+          await sleepMs(START_POOL_RETRY_DELAY_MS);
+          logEvent("info", "room_start_trackpool_retry", {
+            roomCode,
+            categoryQuery: resolvedQuery,
+            requestedRounds: poolSize,
+            retryAttempt,
+            selectedPoolSize: startPoolStats.tracks.length,
+            candidatePoolSize: startPoolStats.candidateCount,
+          });
+          startPoolStats = await this.resolveTracksWithFlag(
+            session,
+            async () => session.sourceMode === "players_liked"
+              ? await this.buildPlayersLikedTrackPool(session, poolSize)
+              : await this.buildStartTrackPool(resolvedQuery, poolSize),
+          );
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "UNKNOWN_ERROR";
+        if (errorMessage === SPOTIFY_RATE_LIMITED_ERROR) {
+          return {
+            ok: false as const,
+            error: "SPOTIFY_RATE_LIMITED" as const,
+            retryAfterMs: spotifyPlaylistRateLimitRetryAfterMs(),
+          };
+        }
+
+        logEvent("warn", "room_start_trackpool_loading_failed", {
+          roomCode,
+          categoryQuery: resolvedQuery,
+          startupPoolSize: poolSize,
+          requestedRounds: poolSize,
+          durationMs: Date.now() - startupLoadStartedAt,
+          error: errorMessage,
+          youtubeProviderMetrics: providerMetricsSnapshot().youtube ?? null,
+          spotifyProviderMetrics: providerMetricsSnapshot().spotify ?? null,
+        });
+
+        if (
+          session.sourceMode === "players_liked" &&
+          (errorMessage === "PLAYERS_LIBRARY_TIMEOUT" || errorMessage === "PLAYERS_LIBRARY_SYNC_TIMEOUT")
+        ) {
+          if (session.manager.state() === "waiting" && session.poolBuild.status !== "building") {
+            this.startPlayersLikedPoolBuild(session);
+          }
+          return {
+            ok: false as const,
+            error: "PLAYERS_LIBRARY_SYNCING" as const,
+          };
+        }
+
         return {
           ok: false as const,
-          error: "SPOTIFY_RATE_LIMITED" as const,
-          retryAfterMs: spotifyPlaylistRateLimitRetryAfterMs(),
+          error: "NO_TRACKS_FOUND" as const,
         };
       }
-
-      logEvent("warn", "room_start_trackpool_loading_failed", {
-        roomCode,
-        categoryQuery: resolvedQuery,
-        startupPoolSize: poolSize,
-        requestedRounds: poolSize,
-        durationMs: Date.now() - startupLoadStartedAt,
-        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
-        youtubeProviderMetrics: providerMetricsSnapshot().youtube ?? null,
-        spotifyProviderMetrics: providerMetricsSnapshot().spotify ?? null,
-      });
-      return {
-        ok: false as const,
-        error: "NO_TRACKS_FOUND" as const,
-      };
     }
 
     logEvent("info", "room_start_trackpool_loading_done", {
@@ -1842,6 +1915,21 @@ export class RoomStore {
     if (!player) return { status: "player_not_found" as const };
 
     const result = session.manager.submitAnswer(playerId, answer, nowMs);
+    return { status: "ok" as const, accepted: result.accepted };
+  }
+
+  submitDraftAnswer(roomCode: string, playerId: string, answer: string) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+
+    const nowMs = this.now();
+    this.progressSession(session, nowMs);
+
+    const player = session.players.get(playerId);
+    if (!player) return { status: "player_not_found" as const };
+
+    const normalized = answer.trim().slice(0, 120);
+    const result = session.manager.setDraftAnswer(playerId, normalized, nowMs);
     return { status: "ok" as const, accepted: result.accepted };
   }
 

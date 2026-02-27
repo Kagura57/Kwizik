@@ -35,4 +35,19 @@ describe("RoomManager", () => {
     expect(first.accepted).toBe(true);
     expect(second.accepted).toBe(false);
   });
+
+  it("promotes draft answers when round timer expires", () => {
+    const room = new RoomManager("ABCD12");
+    room.startGame({ nowMs: 0, countdownMs: 0, totalRounds: 1 });
+    room.tick({ nowMs: 0, roundMs: 10_000, revealMs: 1_000, leaderboardMs: 1_000 });
+
+    const draft = room.setDraftAnswer("p1", "pending title", 9_500);
+    expect(draft.accepted).toBe(true);
+
+    const tick = room.tick({ nowMs: 10_000, roundMs: 10_000, revealMs: 1_000, leaderboardMs: 1_000 });
+    expect(tick.closedRounds).toHaveLength(1);
+    const promoted = tick.closedRounds[0]?.answers.get("p1");
+    expect(promoted?.value).toBe("pending title");
+    expect(promoted?.submittedAtMs).toBe(10_000);
+  });
 });

@@ -53,6 +53,7 @@ export class RoomManager {
   private roundStartedAtMs: number | null = null;
   private plannedTotalRounds = 0;
   private answers = new Map<string, RoundAnswer>();
+  private drafts = new Map<string, string>();
 
   constructor(public readonly roomCode: string) {}
 
@@ -88,6 +89,7 @@ export class RoomManager {
     this.currentRound = 0;
     this.roundStartedAtMs = null;
     this.answers.clear();
+    this.drafts.clear();
     this.plannedTotalRounds = Math.max(0, input.totalRounds);
     this.gameState = "countdown";
     this.roundDeadlineMs = input.nowMs + safeCountdownMs;
@@ -104,10 +106,11 @@ export class RoomManager {
       round: this.currentRound,
       startedAtMs: this.roundStartedAtMs ?? Math.max(0, input.nowMs - safeRoundMs),
       deadlineMs: input.nowMs,
-      answers: new Map(this.answers),
+      answers: this.finalizeCurrentRoundAnswers(input.nowMs),
     };
 
     this.answers.clear();
+    this.drafts.clear();
 
     if (this.currentRound >= this.plannedTotalRounds) {
       this.gameState = "results";
@@ -125,6 +128,7 @@ export class RoomManager {
 
   forcePlayingRound(round: number, deadlineMs: number, startedAtMs?: number) {
     this.answers.clear();
+    this.drafts.clear();
     this.currentRound = Math.max(1, round);
     this.roundStartedAtMs =
       startedAtMs !== undefined ? startedAtMs : Math.max(0, deadlineMs - 15_000);
@@ -156,6 +160,7 @@ export class RoomManager {
         this.roundStartedAtMs = transitionAtMs;
         this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.answers.clear();
+        this.drafts.clear();
         this.gameState = "playing";
         transitioned = true;
         continue;
@@ -167,9 +172,10 @@ export class RoomManager {
           round: this.currentRound,
           startedAtMs,
           deadlineMs: transitionAtMs,
-          answers: new Map(this.answers),
+          answers: this.finalizeCurrentRoundAnswers(transitionAtMs),
         });
         this.answers.clear();
+        this.drafts.clear();
         this.roundStartedAtMs = null;
         this.roundDeadlineMs = transitionAtMs + safeRevealMs;
         this.gameState = "reveal";
@@ -198,6 +204,7 @@ export class RoomManager {
         this.roundStartedAtMs = transitionAtMs;
         this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.answers.clear();
+        this.drafts.clear();
         this.gameState = "playing";
         transitioned = true;
         continue;
@@ -216,6 +223,22 @@ export class RoomManager {
     }
     if (this.answers.has(playerId)) return { accepted: false as const };
     this.answers.set(playerId, { value, submittedAtMs });
+    this.drafts.delete(playerId);
+    return { accepted: true as const };
+  }
+
+  setDraftAnswer(playerId: string, value: string, submittedAtMs: number) {
+    if (this.gameState !== "playing") return { accepted: false as const };
+    if (this.roundDeadlineMs !== null && submittedAtMs > this.roundDeadlineMs) {
+      return { accepted: false as const };
+    }
+    if (this.answers.has(playerId)) return { accepted: false as const };
+    const trimmed = value.trim();
+    if (trimmed.length <= 0) {
+      this.drafts.delete(playerId);
+      return { accepted: true as const };
+    }
+    this.drafts.set(playerId, trimmed);
     return { accepted: true as const };
   }
 
@@ -234,5 +257,20 @@ export class RoomManager {
     this.roundStartedAtMs = null;
     this.plannedTotalRounds = 0;
     this.answers.clear();
+    this.drafts.clear();
+  }
+
+  private finalizeCurrentRoundAnswers(deadlineMs: number) {
+    const merged = new Map(this.answers);
+    for (const [playerId, value] of this.drafts.entries()) {
+      if (merged.has(playerId)) continue;
+      const trimmed = value.trim();
+      if (trimmed.length <= 0) continue;
+      merged.set(playerId, {
+        value: trimmed,
+        submittedAtMs: deadlineMs,
+      });
+    }
+    return merged;
   }
 }

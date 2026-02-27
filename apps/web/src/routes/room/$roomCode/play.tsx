@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import Select, { type InputActionMeta, type SingleValue } from "react-select";
 import { toRomaji } from "wanakana";
 import {
   HttpStatusError,
@@ -16,6 +17,7 @@ import {
   skipRoomRound,
   startRoom,
   submitRoomAnswer,
+  submitRoomAnswerDraft,
   type UnifiedPlaylistOption,
 } from "../../../lib/api";
 import { fetchLiveRoomState } from "../../../lib/realtime";
@@ -27,6 +29,10 @@ const REVEAL_MS = 4_000;
 const LEADERBOARD_MS = 3_000;
 
 type SourceMode = "public_playlist" | "players_liked";
+type AnswerSelectOption = {
+  value: string;
+  label: string;
+};
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -139,6 +145,27 @@ function isUnifiedPlaylistOption(value: unknown): value is UnifiedPlaylistOption
   );
 }
 
+function rankAnswerSuggestions(values: string[], query: string) {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length <= 0) return values;
+
+  const startsWith: string[] = [];
+  const includes: string[] = [];
+
+  for (const value of values) {
+    const normalized = value.toLowerCase();
+    if (normalized.startsWith(normalizedQuery)) {
+      startsWith.push(value);
+      continue;
+    }
+    if (normalized.includes(normalizedQuery)) {
+      includes.push(value);
+    }
+  }
+
+  return [...startsWith, ...includes];
+}
+
 export function RoomPlayPage() {
   const { roomCode } = useParams({ from: "/room/$roomCode/play" });
   const navigate = useNavigate();
@@ -158,6 +185,7 @@ export function RoomPlayPage() {
   const [submittedMcq, setSubmittedMcq] = useState<{ round: number; choice: string } | null>(null);
   const [submittedText, setSubmittedText] = useState<{ round: number; value: string } | null>(null);
   const [debouncedAnswerQuery, setDebouncedAnswerQuery] = useState("");
+  const [answerSuggestionPool, setAnswerSuggestionPool] = useState<string[]>([]);
   const [sourceMode, setSourceMode] = useState<SourceMode>("public_playlist");
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
   const [debouncedPlaylistQuery, setDebouncedPlaylistQuery] = useState("top hits");
@@ -174,6 +202,8 @@ export function RoomPlayPage() {
   const progressStateRef = useRef<{ key: string; value: number }>({ key: "", value: 0 });
   const postRoundProgressRef = useRef<{ key: string; startedAtMs: number } | null>(null);
   const audioRetryTimeoutRef = useRef<number | null>(null);
+  const autoSubmitSignatureRef = useRef<string | null>(null);
+  const draftSignatureRef = useRef<string | null>(null);
   const userInteractionUnlockedRef = useRef(false);
   const roomMissingRedirectedRef = useRef(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
@@ -229,7 +259,6 @@ export function RoomPlayPage() {
     state.mode === "text" &&
     submittedText !== null &&
     submittedText.round === state.round;
-  const answerSuggestionsListId = `answer-suggestions-${roomCode}`;
   const chatMessages = useMemo(() => {
     const messages = [...(state?.chatMessages ?? [])];
     messages.sort((left, right) => left.sentAtMs - right.sentAtMs);
@@ -251,7 +280,7 @@ export function RoomPlayPage() {
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setDebouncedAnswerQuery(answer);
-    }, 260);
+    }, 120);
     return () => window.clearTimeout(timeoutId);
   }, [answer]);
 
@@ -297,9 +326,10 @@ export function RoomPlayPage() {
     enabled:
       state?.state === "playing" &&
       state.mode === "text" &&
-      normalizedAnswerQuery.length >= 2 &&
+      normalizedAnswerQuery.length >= 1 &&
       !isTextLockedForAutocomplete,
-    staleTime: 45_000,
+    staleTime: 3 * 60_000,
+    placeholderData: (previousData) => previousData,
   });
 
   const answerSuggestions = useMemo(() => {
@@ -322,6 +352,44 @@ export function RoomPlayPage() {
     }
     return values;
   }, [answerAutocompleteQuery.data?.fallback]);
+
+  useEffect(() => {
+    if (!roomCode) return;
+    setAnswerSuggestionPool([]);
+  }, [roomCode]);
+
+  useEffect(() => {
+    if (answerSuggestions.length <= 0) return;
+    setAnswerSuggestionPool((previous) => {
+      const merged = [...previous];
+      const seen = new Set(merged.map((value) => value.toLowerCase()));
+      for (const value of answerSuggestions) {
+        const key = value.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(value);
+      }
+      return merged.slice(-240);
+    });
+  }, [answerSuggestions]);
+
+  const answerSelectOptions = useMemo<AnswerSelectOption[]>(() => {
+    const rankedPool = rankAnswerSuggestions(answerSuggestionPool, typedAnswer);
+    const rankedRemote = rankAnswerSuggestions(answerSuggestions, typedAnswer);
+    const values = [...rankedPool, ...rankedRemote];
+    const deduped: AnswerSelectOption[] = [];
+    const seen = new Set<string>();
+    for (const value of values) {
+      const normalized = value.trim();
+      if (normalized.length <= 0) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push({ value: normalized, label: normalized });
+      if (deduped.length >= 16) break;
+    }
+    return deduped;
+  }, [answerSuggestionPool, answerSuggestions, typedAnswer]);
 
   useEffect(() => {
     if (!playlistSearchQuery.data) return;
@@ -364,6 +432,7 @@ export function RoomPlayPage() {
             previewUrl: state.reveal.previewUrl,
             sourceUrl: state.reveal.sourceUrl,
             embedUrl: state.reveal.embedUrl,
+            playerAnswers: state.reveal.playerAnswers,
           }
         : null,
       leaderboard: state.leaderboard,
@@ -386,6 +455,12 @@ export function RoomPlayPage() {
       if (error instanceof HttpStatusError && error.message === "SPOTIFY_RATE_LIMITED") {
         const retryAfterMs = error.retryAfterMs && error.retryAfterMs > 0 ? error.retryAfterMs : 10_000;
         setSpotifyRateLimitUntilMs(Date.now() + retryAfterMs);
+        return;
+      }
+      if (error instanceof HttpStatusError && error.message === "PLAYERS_LIBRARY_SYNCING") {
+        // Keep auto-start active while liked tracks are still being resolved.
+        autoStartRoundRef.current = 0;
+        setSpotifyRateLimitUntilMs(null);
         return;
       }
       setSpotifyRateLimitUntilMs(null);
@@ -493,6 +568,15 @@ export function RoomPlayPage() {
         answer: value,
       }),
     onSuccess: () => snapshotQuery.refetch(),
+  });
+
+  const answerDraftMutation = useMutation({
+    mutationFn: (value: string) =>
+      submitRoomAnswerDraft({
+        roomCode,
+        playerId: session.playerId ?? "",
+        answer: value,
+      }),
   });
 
   const chatMutation = useMutation({
@@ -772,6 +856,53 @@ export function RoomPlayPage() {
     setAnswer("");
   }, [state?.round]);
 
+  useEffect(() => {
+    if (!state || state.state !== "playing" || state.mode !== "text" || !session.playerId || textLocked) {
+      draftSignatureRef.current = null;
+      return;
+    }
+
+    const value = answer.trim().slice(0, 80);
+    const signature = `${state.round}:${value}`;
+    if (draftSignatureRef.current === signature) return;
+    draftSignatureRef.current = signature;
+
+    const timeoutId = window.setTimeout(() => {
+      answerDraftMutation.mutate(value);
+    }, 90);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [answer, answerDraftMutation, session.playerId, state, textLocked]);
+
+  useEffect(() => {
+    if (!state || state.state !== "playing" || state.mode !== "text") {
+      autoSubmitSignatureRef.current = null;
+      return;
+    }
+    if (!session.playerId || textLocked || answerMutation.isPending || !state.deadlineMs) return;
+
+    const value = answer.trim();
+    if (!value) return;
+
+    const remainingMs = state.deadlineMs - clockNow;
+    if (remainingMs > 220 || remainingMs < -700) return;
+
+    const signature = `${state.round}:${value.toLowerCase()}`;
+    if (autoSubmitSignatureRef.current === signature) return;
+    autoSubmitSignatureRef.current = signature;
+
+    setSubmittedText({ round: state.round, value });
+    answerMutation.mutate(value);
+  }, [
+    answer,
+    answerMutation,
+    clockNow,
+    session.playerId,
+    state,
+    textLocked,
+  ]);
+
   function onSubmitText(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!state || state.state !== "playing" || state.mode !== "text") return;
@@ -779,6 +910,7 @@ export function RoomPlayPage() {
 
     const value = answer.trim();
     if (!value || !session.playerId) return;
+    autoSubmitSignatureRef.current = `${state.round}:${value.toLowerCase()}`;
     setSubmittedText({ round: state.round, value });
     answerMutation.mutate(value);
   }
@@ -1158,21 +1290,40 @@ export function RoomPlayPage() {
             <form className="panel-form answer-box" onSubmit={onSubmitText}>
               <label>
                 <span>Réponse (titre ou artiste)</span>
-                <input
-                  value={answer}
-                  onChange={(event) => setAnswer(event.currentTarget.value)}
-                  list={answerSuggestionsListId}
-                  autoComplete="off"
+                <Select<AnswerSelectOption, false>
+                  classNamePrefix="answer-select"
+                  inputId="answer-select-input"
+                  unstyled
+                  options={answerSelectOptions}
+                  inputValue={answer}
+                  value={null}
+                  onInputChange={(inputValue: string, actionMeta: InputActionMeta) => {
+                    if (actionMeta.action === "input-change") {
+                      setAnswer(inputValue.slice(0, 80));
+                      return;
+                    }
+                    if (actionMeta.action === "clear") {
+                      setAnswer("");
+                    }
+                  }}
+                  onChange={(option: SingleValue<AnswerSelectOption>) => {
+                    if (!option) return;
+                    setAnswer(option.value.slice(0, 80));
+                  }}
                   placeholder="Ex: Daft Punk"
-                  maxLength={80}
-                  disabled={textLocked || answerMutation.isPending}
+                  noOptionsMessage={() =>
+                    typedAnswer.length >= 1
+                      ? answerAutocompleteQuery.isFetching
+                        ? "Recherche..."
+                        : "Aucune suggestion"
+                      : "Tape un titre ou un artiste"
+                  }
+                  isLoading={typedAnswer.length >= 1 && answerAutocompleteQuery.isFetching}
+                  openMenuOnFocus
+                  blurInputOnSelect={false}
+                  isDisabled={textLocked || answerMutation.isPending}
                 />
-                <datalist id={answerSuggestionsListId}>
-                  {answerSuggestions.map((candidate) => (
-                    <option key={candidate} value={candidate} />
-                  ))}
-                </datalist>
-                {typedAnswer.length >= 2 && typedAnswer === normalizedAnswerQuery && answerAutocompleteQuery.isFetching && (
+                {typedAnswer.length >= 1 && typedAnswer === normalizedAnswerQuery && answerAutocompleteQuery.isFetching && (
                   <small className="status">Suggestions...</small>
                 )}
               </label>
@@ -1204,6 +1355,23 @@ export function RoomPlayPage() {
                   <p className="reveal-artist">
                     {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
                   </p>
+                  {state.reveal.playerAnswers.length > 0 && (
+                    <ul className="reveal-answer-list">
+                      {state.reveal.playerAnswers.map((entry) => (
+                        <li
+                          key={entry.playerId}
+                          className={`reveal-answer-item${entry.isCorrect ? " correct" : entry.submitted ? " wrong" : ""}`}
+                        >
+                          <strong>{entry.displayName}</strong>
+                          <span>
+                            {entry.submitted && entry.answer
+                              ? withRomajiLabel(entry.answer)
+                              : "Pas de réponse"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             )}

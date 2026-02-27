@@ -478,6 +478,30 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       deadlineMs: result.deadlineMs,
     };
   })
+  .post("/answer/draft", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const answer = readOptionalStringField(body, "answer") ?? "";
+
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.submitDraftAnswer(roomCode, playerId, answer);
+
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+
+    return { accepted: result.accepted };
+  })
   .post("/answer", ({ body, set }) => {
     const roomCode = readStringField(body, "roomCode");
     const playerId = readStringField(body, "playerId");

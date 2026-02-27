@@ -5,8 +5,12 @@ vi.mock("../src/services/JapaneseRomanizer", () => ({
     const map: Record<string, string> = {
       "夜のドライブ": "yoru no doraibu",
       "光のシグナル": "hikari no shigunaru",
+      "蒼いメモリー": "aoi memori",
+      "風のリズム": "kaze no rizumu",
       "ミライ": "mirai",
       "ハルカ": "haruka",
+      "ユナ": "yuna",
+      "アオイ": "aoi",
     };
     return map[value] ?? null;
   },
@@ -32,6 +36,22 @@ const JAPANESE_TRACKS: MusicTrack[] = [
     artist: "ハルカ",
     previewUrl: null,
     sourceUrl: "https://www.youtube.com/watch?v=jp-2",
+  },
+  {
+    provider: "youtube",
+    id: "jp-3",
+    title: "蒼いメモリー",
+    artist: "ユナ",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=jp-3",
+  },
+  {
+    provider: "youtube",
+    id: "jp-4",
+    title: "風のリズム",
+    artist: "アオイ",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=jp-4",
   },
 ];
 
@@ -81,7 +101,15 @@ describe("RoomStore romaji answer matching", () => {
 
     const round2Track = JAPANESE_TRACKS.find((track) => track.id === round2?.media?.trackId);
     expect(round2Track).toBeDefined();
-    const romajiArtist = round2Track?.artist === "ミライ" ? "mirai" : "haruka";
+    const romajiByArtist: Record<string, string> = {
+      "ミライ": "mirai",
+      "ハルカ": "haruka",
+      "ユナ": "yuna",
+      "アオイ": "aoi",
+    };
+    const romajiArtist = round2Track?.artist ? romajiByArtist[round2Track.artist] : undefined;
+    expect(romajiArtist).toBeDefined();
+    if (!romajiArtist) return;
     store.submitAnswer(created.roomCode, player.value.playerId, romajiArtist);
 
     nowMs = 95;

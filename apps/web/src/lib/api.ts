@@ -134,6 +134,13 @@ export type RoomState = {
     previewUrl: string | null;
     sourceUrl: string | null;
     embedUrl: string | null;
+    playerAnswers: Array<{
+      playerId: string;
+      displayName: string;
+      answer: string | null;
+      submitted: boolean;
+      isCorrect: boolean;
+    }>;
   } | null;
   leaderboard: Array<{
     rank: number;
@@ -541,6 +548,17 @@ export async function submitRoomAnswer(input: {
   answer: string;
 }) {
   return requestJson<{ accepted: boolean }>("/quiz/answer", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function submitRoomAnswerDraft(input: {
+  roomCode: string;
+  playerId: string;
+  answer: string;
+}) {
+  return requestJson<{ accepted: boolean }>("/quiz/answer/draft", {
     method: "POST",
     body: JSON.stringify(input),
   });

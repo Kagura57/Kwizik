@@ -4,7 +4,7 @@ import * as deezerModule from "../src/routes/music/deezer";
 import * as spotifyModule from "../src/routes/music/spotify";
 import * as youtubeModule from "../src/routes/music/youtube";
 import * as aggregatorModule from "../src/services/MusicAggregator";
-import { resolveTrackPoolFromSource } from "../src/services/TrackSourceResolver";
+import { resolveTrackPoolFromSource, resolveTracksToPlayableYouTube } from "../src/services/TrackSourceResolver";
 import { resolvedTrackRepository } from "../src/repositories/ResolvedTrackRepository";
 
 let fetchSpotifyPlaylistTracksMock: ReturnType<typeof vi.fn>;
@@ -127,6 +127,124 @@ describe("track source resolver cache behavior", () => {
       provider: "youtube",
       id: "yt-cache-1",
     });
+  });
+
+  it("prioritizes official clip from artist channel over non-artist channel matches", async () => {
+    vi.spyOn(resolvedTrackRepository, "getBySource").mockResolvedValue(null);
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([
+      {
+        provider: "spotify",
+        id: "sp-priority-1",
+        title: "Preference Song (feat. Someone)",
+        artist: "Exact Artist",
+        previewUrl: null,
+        sourceUrl: "https://open.spotify.com/track/sp-priority-1",
+      },
+    ]);
+
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      const normalized = query.toLowerCase();
+      if (normalized.includes("official video") && normalized.includes("feat")) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-clip-fan",
+            title: "Preference Song Official Video",
+            artist: "Fan Uploads Channel",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-clip-fan",
+          },
+        ];
+      }
+      if (normalized.includes("official video")) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-clip-artist",
+            title: "Preference Song Official Video",
+            artist: "Exact Artist",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-clip-artist",
+          },
+        ];
+      }
+      return [];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "spotify:playlist:cache123",
+      size: 1,
+    });
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      provider: "youtube",
+      id: "yt-clip-artist",
+      title: "Preference Song (feat. Someone)",
+      artist: "Exact Artist",
+    });
+  });
+
+  it("falls back to official audio when no official clip candidate is found", async () => {
+    vi.spyOn(resolvedTrackRepository, "getBySource").mockResolvedValue(null);
+    fetchSpotifyPlaylistTracksMock.mockResolvedValue([
+      {
+        provider: "spotify",
+        id: "sp-audio-1",
+        title: "Audio Fallback Song",
+        artist: "Audio Artist",
+        previewUrl: null,
+        sourceUrl: "https://open.spotify.com/track/sp-audio-1",
+      },
+    ]);
+
+    searchYouTubeMock.mockImplementation(async (query: string) => {
+      const normalized = query.toLowerCase();
+      if (
+        normalized.includes("official video") ||
+        normalized.includes("official clip") ||
+        normalized.includes("music video")
+      ) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-lyrics-only",
+            title: "Audio Fallback Song Lyrics",
+            artist: "Random Channel",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-lyrics-only",
+          },
+        ];
+      }
+      if (normalized.includes("official audio")) {
+        return [
+          {
+            provider: "youtube",
+            id: "yt-official-audio",
+            title: "Audio Fallback Song (Official Audio)",
+            artist: "Audio Artist",
+            previewUrl: null,
+            sourceUrl: "https://www.youtube.com/watch?v=yt-official-audio",
+          },
+        ];
+      }
+      return [];
+    });
+
+    const resolved = await resolveTrackPoolFromSource({
+      categoryQuery: "spotify:playlist:cache123",
+      size: 1,
+    });
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({
+      provider: "youtube",
+      id: "yt-official-audio",
+      title: "Audio Fallback Song",
+      artist: "Audio Artist",
+    });
+    const calledQueries = searchYouTubeMock.mock.calls.map((call) => String(call[0]).toLowerCase());
+    expect(calledQueries.some((query) => query.includes("audio artist - audio fallback song"))).toBe(false);
   });
 
   it("filters ad-like source tracks before youtube prioritization", async () => {
@@ -413,5 +531,23 @@ describe("track source resolver cache behavior", () => {
 
     expect(resolved).toHaveLength(10);
     expect(maxInFlight).toBeLessThanOrEqual(5);
+  });
+
+  it("limits direct resolution budget to requested size for liked-track resolution", async () => {
+    searchYouTubeMock.mockResolvedValue([]);
+
+    const tracks = Array.from({ length: 10 }, (_, index) => ({
+      provider: "spotify" as const,
+      id: `sp-budget-${index + 1}`,
+      title: `Budget Song ${index + 1}`,
+      artist: "Budget Artist",
+      previewUrl: null,
+      sourceUrl: `https://open.spotify.com/track/sp-budget-${index + 1}`,
+    }));
+
+    const resolved = await resolveTracksToPlayableYouTube(tracks, 1);
+    expect(resolved).toEqual([]);
+    expect(searchYouTubeMock.mock.calls.length).toBeGreaterThan(0);
+    expect(searchYouTubeMock.mock.calls.length).toBeLessThanOrEqual(8);
   });
 });

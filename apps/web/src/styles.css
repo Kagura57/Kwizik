@@ -1530,6 +1530,69 @@ select option {
   justify-self: center;
 }
 
+.answer-box .answer-select__control {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  min-height: 46px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.answer-box .answer-select__control--is-focused {
+  border-color: rgba(54, 214, 180, 0.78);
+  box-shadow: 0 0 0 3px rgba(54, 214, 180, 0.16);
+}
+
+.answer-box .answer-select__control--is-disabled {
+  opacity: 0.62;
+}
+
+.answer-box .answer-select__value-container {
+  padding: 0 12px;
+}
+
+.answer-box .answer-select__placeholder,
+.answer-box .answer-select__input-container,
+.answer-box .answer-select__single-value {
+  margin: 0;
+  color: var(--text);
+}
+
+.answer-box .answer-select__indicator-separator,
+.answer-box .answer-select__indicators {
+  display: none;
+}
+
+.answer-box .answer-select__menu {
+  margin-top: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(5, 10, 18, 0.98);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34);
+  z-index: 10;
+}
+
+.answer-box .answer-select__menu-list {
+  padding: 4px;
+}
+
+.answer-box .answer-select__option {
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: rgba(232, 240, 255, 0.9);
+}
+
+.answer-box .answer-select__option--is-focused {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.answer-box .answer-select__option--is-selected {
+  background: rgba(54, 214, 180, 0.24);
+  color: #d9fff0;
+}
+
 .answer-lock {
   margin: 0;
   border: 1px solid rgba(54, 214, 180, 0.45);
@@ -1589,6 +1652,49 @@ select option {
   display: grid;
   gap: 8px;
   align-content: center;
+}
+
+.reveal-answer-list {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.reveal-answer-item {
+  display: grid;
+  grid-template-columns: minmax(0, 120px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 7px 9px;
+  background: rgba(6, 11, 20, 0.5);
+}
+
+.reveal-answer-item strong {
+  font-size: 0.72rem;
+  color: rgba(232, 240, 255, 0.72);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.reveal-answer-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  color: rgba(232, 240, 255, 0.92);
+}
+
+.reveal-answer-item.correct {
+  border-color: rgba(101, 245, 184, 0.52);
+  background: rgba(54, 214, 180, 0.14);
+}
+
+.reveal-answer-item.wrong {
+  border-color: rgba(255, 150, 150, 0.46);
+  background: rgba(255, 92, 92, 0.12);
 }
 
 .reveal-title {
@@ -1680,6 +1786,11 @@ select option {
   .app-shell {
     width: calc(100% - 24px);
     margin-top: 14px;
+  }
+
+  .reveal-answer-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .brand-lockup {

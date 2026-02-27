@@ -288,6 +288,22 @@ describe("RoomStore gameplay progression", () => {
     const revealRound1 = store.roomState(created.roomCode);
     expect(revealRound1?.state).toBe("reveal");
     expect(revealRound1?.reveal?.title).toBe(round1Track?.title);
+    expect(revealRound1?.reveal?.playerAnswers).toEqual([
+      {
+        playerId: host.value.playerId,
+        displayName: "Host",
+        answer: `${round1Track?.title ?? ""} - ${round1Track?.artist ?? ""}`,
+        submitted: true,
+        isCorrect: true,
+      },
+      {
+        playerId: guest.value.playerId,
+        displayName: "Guest",
+        answer: "wrong title",
+        submitted: true,
+        isCorrect: false,
+      },
+    ]);
     expect(revealRound1?.previewUrl).toBeNull();
     expect(revealRound1?.reveal?.sourceUrl).toBe(round1Track?.sourceUrl);
     expect(revealRound1?.reveal?.embedUrl).toContain(
@@ -311,7 +327,24 @@ describe("RoomStore gameplay progression", () => {
     store.submitAnswer(created.roomCode, host.value.playerId, round2Track?.artist ?? "");
 
     nowMs = 230;
-    expect(store.roomState(created.roomCode)?.state).toBe("reveal");
+    const revealRound2 = store.roomState(created.roomCode);
+    expect(revealRound2?.state).toBe("reveal");
+    expect(revealRound2?.reveal?.playerAnswers).toEqual([
+      {
+        playerId: host.value.playerId,
+        displayName: "Host",
+        answer: round2Track?.artist ?? null,
+        submitted: true,
+        isCorrect: true,
+      },
+      {
+        playerId: guest.value.playerId,
+        displayName: "Guest",
+        answer: null,
+        submitted: false,
+        isCorrect: false,
+      },
+    ]);
 
     nowMs = 240;
     expect(store.roomState(created.roomCode)?.state).toBe("leaderboard");
@@ -331,6 +364,61 @@ describe("RoomStore gameplay progression", () => {
     expect((winner?.score ?? 0) > 0).toBe(true);
     expect(loser?.displayName).toBe("Guest");
     expect(loser?.score).toBe(0);
+  });
+
+  it("auto-validates latest draft answer when text round ends", async () => {
+    let nowMs = 0;
+    const draftTrack = FIXTURE_TRACKS[0];
+    if (!draftTrack) return;
+
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => [draftTrack],
+      config: {
+        countdownMs: 10,
+        playingMs: 100,
+        revealMs: 10,
+        leaderboardMs: 10,
+        baseScore: 1_000,
+        maxRounds: 1,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(created.roomCode, host.value.playerId, "single track");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    nowMs = 10;
+    const playing = store.roomState(created.roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.mode).toBe("text");
+
+    nowMs = 80;
+    const draft = store.submitDraftAnswer(created.roomCode, host.value.playerId, draftTrack.artist);
+    expect(draft.status).toBe("ok");
+    if (draft.status === "ok") {
+      expect(draft.accepted).toBe(true);
+    }
+
+    nowMs = 110;
+    const reveal = store.roomState(created.roomCode);
+    expect(reveal?.state).toBe("reveal");
+    expect(reveal?.reveal?.playerAnswers).toEqual([
+      {
+        playerId: host.value.playerId,
+        displayName: "Host",
+        answer: draftTrack.artist,
+        submitted: true,
+        isCorrect: true,
+      },
+    ]);
   });
 
   it("resets streak when a player misses a round", async () => {
@@ -889,6 +977,44 @@ describe("RoomStore gameplay progression", () => {
     expect(started).toMatchObject({
       ok: true,
       sourceMode: "players_liked",
+    });
+  });
+
+  it("returns PLAYERS_LIBRARY_SYNCING when players_liked loading times out", async () => {
+    const store = new RoomStore({
+      getPlayerLikedTracks: async () => {
+        throw new Error("PLAYERS_LIBRARY_TIMEOUT");
+      },
+      config: {
+        maxRounds: 10,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoomAsUser(
+      created.roomCode,
+      "Host",
+      "user-host",
+      { spotify: { status: "linked", estimatedTrackCount: 120 } },
+    );
+    if ("status" in host) return;
+
+    const modeSet = store.setRoomSourceMode(created.roomCode, host.playerId, "players_liked");
+    expect(modeSet.status).toBe("ok");
+    const contribution = store.setPlayerLibraryContribution(
+      created.roomCode,
+      host.playerId,
+      "spotify",
+      true,
+    );
+    expect(contribution.status).toBe("ok");
+    const ready = store.setPlayerReady(created.roomCode, host.playerId, true);
+    expect(ready.status).toBe("ok");
+
+    const started = await store.startGame(created.roomCode, host.playerId);
+    expect(started).toMatchObject({
+      ok: false,
+      error: "PLAYERS_LIBRARY_SYNCING",
     });
   });
 

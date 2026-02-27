@@ -300,6 +300,23 @@ export function RoomViewPage() {
                   <p className="reveal-artist">
                     {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
                   </p>
+                  {state.reveal.playerAnswers.length > 0 && (
+                    <ul className="reveal-answer-list">
+                      {state.reveal.playerAnswers.map((entry) => (
+                        <li
+                          key={entry.playerId}
+                          className={`reveal-answer-item${entry.isCorrect ? " correct" : entry.submitted ? " wrong" : ""}`}
+                        >
+                          <strong>{entry.displayName}</strong>
+                          <span>
+                            {entry.submitted && entry.answer
+                              ? withRomajiLabel(entry.answer)
+                              : "Pas de réponse"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </div>
             )}

@@ -199,26 +199,48 @@ function sanitizeTrackSearchValue(value: string) {
     .trim();
 }
 
-function buildYouTubeQueryVariants(track: Pick<MusicTrack, "title" | "artist">) {
+type YouTubeSearchIntent = "official_clip" | "official_audio" | "fallback";
+
+type YouTubeQueryPlanStep = {
+  intent: YouTubeSearchIntent;
+  queries: string[];
+};
+
+function uniqueQueries(values: string[]) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value.replace(/\s+/g, " ").trim())
+        .filter((value) => value.length > 0),
+    ),
+  );
+}
+
+function buildYouTubeQueryPlan(track: Pick<MusicTrack, "title" | "artist">): YouTubeQueryPlanStep[] {
   const title = track.title.trim();
   const artist = track.artist.trim();
   const sanitizedTitle = sanitizeTrackSearchValue(title);
+  const fallbackTitle = sanitizedTitle.length > 0 ? sanitizedTitle : title;
 
-  return Array.from(
-    new Set(
-      [
+  return [
+    {
+      intent: "official_clip",
+      queries: uniqueQueries([
         `${artist} ${title} official video`,
         `${artist} ${sanitizedTitle} official video`,
-        `${artist} ${title} official mv`,
-        `${artist} ${title} mv`,
-        `${artist} - ${title}`,
-        `${artist} - ${sanitizedTitle}`,
-        `${artist} ${title}`,
-      ]
-        .map((query) => query.replace(/\s+/g, " ").trim())
-        .filter((query) => query.length > 0),
-    ),
-  );
+        `${artist} ${title} official clip`,
+        `${artist} ${title} music video`,
+      ]),
+    },
+    {
+      intent: "official_audio",
+      queries: uniqueQueries([`${artist} ${title} official audio`, `${artist} ${fallbackTitle} official audio`]),
+    },
+    {
+      intent: "fallback",
+      queries: uniqueQueries([`${artist} - ${title}`, `${artist} - ${fallbackTitle}`]),
+    },
+  ].filter((step) => step.queries.length > 0);
 }
 
 function randomShuffle<T>(values: T[]) {
@@ -283,11 +305,15 @@ async function searchPlayableYouTube(query: string, limit: number): Promise<Musi
   return dedupeTracks(youtube, safeLimit);
 }
 
-const YOUTUBE_PRIORITY_PATTERNS = [
-  /\bofficial(\s+(music|mv|video))?\b/i,
+const YOUTUBE_CLIP_PATTERNS = [
+  /\bofficial\s+(music\s+)?video\b/i,
+  /\bofficial\s+clip\b/i,
   /\bmusic\s+video\b/i,
+  /\bofficial\s+mv\b/i,
   /\bmv\b/i,
 ];
+
+const YOUTUBE_AUDIO_PATTERNS = [/\bofficial\s+audio\b/i, /\baudio\b/i, /\btopic\b/i];
 
 const YOUTUBE_DEPRIORITY_PATTERNS = [
   /\blyrics?\b/i,
@@ -304,29 +330,133 @@ function normalizeSearchText(value: string) {
   return value
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
+
+const ARTIST_CHANNEL_STOP_WORDS = new Set([
+  "official",
+  "music",
+  "records",
+  "recordings",
+  "recording",
+  "entertainment",
+  "vevo",
+  "topic",
+  "channel",
+  "tv",
+  "videos",
+  "video",
+]);
+
+function normalizeCompact(value: string) {
+  return normalizeSearchText(value).replace(/\s+/g, "");
+}
+
+function isArtistChannel(candidateChannelTitle: string, sourceArtist: string) {
+  const channel = normalizeSearchText(candidateChannelTitle);
+  const artist = normalizeSearchText(sourceArtist);
+  if (channel.length <= 0 || artist.length <= 0) return false;
+  if (channel.includes(artist)) return true;
+
+  const compactChannel = normalizeCompact(candidateChannelTitle);
+  const compactArtist = normalizeCompact(sourceArtist);
+  if (compactChannel.length > 0 && compactArtist.length > 0 && compactChannel.includes(compactArtist)) {
+    return true;
+  }
+
+  const sourceTokens = artist
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1 && !ARTIST_CHANNEL_STOP_WORDS.has(token));
+  const channelTokens = new Set(
+    channel
+      .split(" ")
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1 && !ARTIST_CHANNEL_STOP_WORDS.has(token)),
+  );
+  if (sourceTokens.length <= 0 || channelTokens.size <= 0) return false;
+
+  let matches = 0;
+  for (const token of sourceTokens) {
+    if (channelTokens.has(token)) matches += 1;
+  }
+  if (sourceTokens.length === 1) return matches === 1;
+  return matches >= sourceTokens.length - 1;
+}
+
+type ScoredYouTubeCandidate = {
+  score: number;
+  isClip: boolean;
+  isAudio: boolean;
+  artistChannel: boolean;
+};
 
 function scoreYouTubeCandidate(
   candidate: Pick<MusicTrack, "title" | "artist">,
   source: Pick<MusicTrack, "title" | "artist">,
-) {
+): ScoredYouTubeCandidate {
   const candidateText = normalizeSearchText(`${candidate.title} ${candidate.artist}`);
+  const candidateTitleText = normalizeSearchText(candidate.title);
   const sourceArtist = normalizeSearchText(source.artist);
   const sourceTitle = normalizeSearchText(sanitizeTrackSearchValue(source.title));
+  const artistChannel = isArtistChannel(candidate.artist, source.artist);
+  const isClip = YOUTUBE_CLIP_PATTERNS.some((pattern) => pattern.test(candidateTitleText));
+  const isAudio =
+    YOUTUBE_AUDIO_PATTERNS.some((pattern) => pattern.test(candidateTitleText)) ||
+    (sourceTitle.length > 0 &&
+      candidateTitleText.includes(sourceTitle) &&
+      normalizeSearchText(candidate.artist).includes("topic"));
 
   let score = 0;
-  if (sourceArtist.length > 0 && candidateText.includes(sourceArtist)) score += 40;
-  if (sourceTitle.length > 0 && candidateText.includes(sourceTitle)) score += 50;
-
-  for (const pattern of YOUTUBE_PRIORITY_PATTERNS) {
-    if (pattern.test(candidateText)) score += 70;
-  }
+  if (sourceArtist.length > 0 && candidateText.includes(sourceArtist)) score += 80;
+  if (sourceTitle.length > 0 && candidateText.includes(sourceTitle)) score += 90;
+  if (artistChannel) score += 260;
+  if (isClip) score += 240;
+  if (isAudio) score += 130;
+  if (artistChannel && isClip) score += 220;
+  if (artistChannel && isAudio) score += 120;
   for (const pattern of YOUTUBE_DEPRIORITY_PATTERNS) {
     if (pattern.test(candidateText)) score -= 120;
   }
 
-  return score;
+  return { score, isClip, isAudio, artistChannel };
+}
+
+type RankedYouTubeCandidate = {
+  track: MusicTrack;
+  score: number;
+  artistChannel: boolean;
+};
+
+function selectRankedYouTubeCandidate(
+  candidates: MusicTrack[],
+  source: Pick<MusicTrack, "title" | "artist">,
+  intent: YouTubeSearchIntent,
+): RankedYouTubeCandidate | null {
+  const ranked = candidates
+    .map((track) => ({ track, scored: scoreYouTubeCandidate(track, source) }))
+    .filter(({ scored }) => Number.isFinite(scored.score));
+
+  let scoped = ranked;
+  if (intent === "official_clip") {
+    scoped = ranked.filter(({ scored }) => scored.isClip);
+  } else if (intent === "official_audio") {
+    scoped = ranked.filter(({ scored }) => scored.isAudio && !scored.isClip);
+  }
+  if (scoped.length <= 0) return null;
+
+  scoped.sort((left, right) => right.scored.score - left.scored.score);
+  const winner = scoped[0];
+  if (!winner) return null;
+
+  return {
+    track: winner.track,
+    score: winner.scored.score,
+    artistChannel: winner.scored.artistChannel,
+  };
 }
 
 type YouTubePlaybackResolution = {
@@ -429,43 +559,54 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
     };
   }
 
-  const queryVariants = buildYouTubeQueryVariants(track);
+  const queryPlan = buildYouTubeQueryPlan(track);
   let attemptedQueries = 0;
   let failedQueries = 0;
   let emptyResultQueries = 0;
   let lastError: string | null = null;
-  for (const searchQuery of queryVariants) {
-    attemptedQueries += 1;
-    let candidates: MusicTrack[] = [];
-    try {
-      candidates = await searchPlayableYouTube(searchQuery, 5);
-    } catch (error) {
-      failedQueries += 1;
-      lastError = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-      logEvent("warn", "track_source_youtube_query_failed", {
-        query: searchQuery,
-        title: track.title,
-        artist: track.artist,
-        error: lastError,
-      });
-      continue;
-    }
+  for (const step of queryPlan) {
+    let best: RankedYouTubeCandidate | null = null;
+    let selectedQuery: string | null = null;
 
-    const selected = [...candidates]
-      .sort((left, right) => scoreYouTubeCandidate(right, track) - scoreYouTubeCandidate(left, track))[0] ?? null;
-    if (!selected) {
-      emptyResultQueries += 1;
-      continue;
+    for (const searchQuery of step.queries) {
+      attemptedQueries += 1;
+      let candidates: MusicTrack[] = [];
+      try {
+        candidates = await searchPlayableYouTube(searchQuery, 5);
+      } catch (error) {
+        failedQueries += 1;
+        lastError = error instanceof Error ? error.message : "UNKNOWN_ERROR";
+        logEvent("warn", "track_source_youtube_query_failed", {
+          query: searchQuery,
+          title: track.title,
+          artist: track.artist,
+          error: lastError,
+        });
+        continue;
+      }
+
+      const selected = selectRankedYouTubeCandidate(candidates, track, step.intent);
+      if (!selected) {
+        emptyResultQueries += 1;
+        continue;
+      }
+
+      if (!best || selected.score > best.score) {
+        best = selected;
+        selectedQuery = searchQuery;
+      }
+      if (selected.artistChannel) break;
     }
+    if (!best) continue;
 
     const resolved = {
       provider: "youtube" as const,
-      id: selected.id,
+      id: best.track.id,
       title: track.title,
       artist: track.artist,
-      durationSec: track.durationSec ?? selected.durationSec ?? null,
+      durationSec: track.durationSec ?? best.track.durationSec ?? null,
       previewUrl: null,
-      sourceUrl: selected.sourceUrl ?? `https://www.youtube.com/watch?v=${selected.id}`,
+      sourceUrl: best.track.sourceUrl ?? `https://www.youtube.com/watch?v=${best.track.id}`,
     } satisfies MusicTrack;
 
     try {
@@ -474,7 +615,7 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
         sourceId: track.id,
         title: track.title,
         artist: track.artist,
-        youtubeVideoId: selected.id,
+        youtubeVideoId: best.track.id,
         durationMs: secToDurationMs(resolved.durationSec),
       });
     } catch (error) {
@@ -483,7 +624,7 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
         sourceTrackId: track.id,
         title: track.title,
         artist: track.artist,
-        youtubeVideoId: selected.id,
+        youtubeVideoId: best.track.id,
         error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
       });
     }
@@ -500,7 +641,7 @@ async function resolveYouTubePlayback(track: MusicTrack): Promise<YouTubePlaybac
       fromCache: false,
       fromPersistentCache: false,
       alreadyYouTube: false,
-      selectedQuery: searchQuery,
+      selectedQuery,
       lastError,
     };
   }
@@ -711,10 +852,14 @@ export async function resolveTracksToPlayableYouTube(
   size: number,
   fillQuery = "",
 ) {
+  const constrainedResolveBudget = Math.max(
+    YOUTUBE_RESOLVE_BUDGET_MIN,
+    Math.floor(Math.max(1, size)),
+  );
   return prioritizeYouTubePlayback(tracks, size, {
     fillQuery,
     allowQueryFill: fillQuery.trim().length > 0,
-    maxResolveBudget: tracks.length,
+    maxResolveBudget: constrainedResolveBudget,
   });
 }
 

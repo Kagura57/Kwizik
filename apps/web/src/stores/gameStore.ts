@@ -24,6 +24,13 @@ export type LiveRoundState = {
     previewUrl: string | null;
     sourceUrl: string | null;
     embedUrl: string | null;
+    playerAnswers: Array<{
+      playerId: string;
+      displayName: string;
+      answer: string | null;
+      submitted: boolean;
+      isCorrect: boolean;
+    }>;
   } | null;
   leaderboard: Array<{
     rank: number;
