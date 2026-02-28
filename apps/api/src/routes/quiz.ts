@@ -508,6 +508,41 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       deadlineMs: result.deadlineMs,
     };
   })
+  .post("/media/unavailable", async ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const trackId = readStringField(body, "trackId");
+    if (!roomCode || !playerId || !trackId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = await roomStore.reportMediaUnavailable(roomCode, playerId, trackId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    if (result.status === "invalid_payload") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    return {
+      ok: true as const,
+      accepted: result.accepted,
+      state: result.state,
+      round: result.round,
+      deadlineMs: result.deadlineMs,
+    };
+  })
   .post("/answer/draft", ({ body, set }) => {
     const roomCode = readStringField(body, "roomCode");
     const playerId = readStringField(body, "playerId");

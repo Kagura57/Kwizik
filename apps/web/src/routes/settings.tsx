@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
+  getAniListRecoveredLibrary,
   getAniListLibrarySyncStatus,
   getAniListLinkStatus,
   getAuthSession,
@@ -125,6 +126,16 @@ export function SettingsPage() {
     },
   });
 
+  const anilistRecoveredLibraryQuery = useQuery({
+    queryKey: ["anilist-recovered-library", sessionQuery.data?.user?.id ?? null],
+    queryFn: () => getAniListRecoveredLibrary({ limit: 5_000 }),
+    enabled: Boolean(sessionQuery.data?.user),
+    refetchInterval: () => {
+      const runStatus = anilistSyncStatusQuery.data?.run?.status;
+      return runStatus === "queued" || runStatus === "running" ? 2_000 : false;
+    },
+  });
+
   useEffect(() => {
     if (usernameDirty) return;
     const username = anilistLinkQuery.data?.link?.anilistUsername ?? "";
@@ -148,6 +159,7 @@ export function SettingsPage() {
       setUsernameDirty(false);
       await anilistLinkQuery.refetch();
       await anilistSyncStatusQuery.refetch();
+      await anilistRecoveredLibraryQuery.refetch();
     },
   });
 
@@ -168,6 +180,8 @@ export function SettingsPage() {
   const activeRun = anilistSyncStatusQuery.data?.run ?? null;
   const runStatus = activeRun?.status ?? "idle";
   const lastCompletedAtMs = activeRun?.finishedAtMs ?? null;
+  const recoveredAnimeItems = anilistRecoveredLibraryQuery.data?.items ?? [];
+  const recoveredAnimeCount = anilistRecoveredLibraryQuery.data?.total ?? 0;
 
   return (
     <section className="single-panel">
@@ -249,6 +263,50 @@ export function SettingsPage() {
                 Progression: <strong>{typeof activeRun?.progress === "number" ? `${activeRun.progress}%` : "0%"}</strong>
               </p>
               <p className="status">Derniere execution: {formatSyncTimestamp(activeRun?.createdAtMs ?? null)}</p>
+            </div>
+
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">AniList</p>
+                  <h3>Animes recuperes</h3>
+                </div>
+                <span className={`provider-badge ${recoveredAnimeCount > 0 ? "connected" : "idle"}`}>
+                  {recoveredAnimeCount}
+                </span>
+              </div>
+              <p className="status">Titres presents dans la bibliotheque synchronisee locale (watching + completed).</p>
+
+              {anilistRecoveredLibraryQuery.isPending && (
+                <p className="status">Chargement de la bibliotheque anime...</p>
+              )}
+
+              {anilistRecoveredLibraryQuery.isError && (
+                <p className="status error">Impossible de charger la bibliotheque anime.</p>
+              )}
+
+              {!anilistRecoveredLibraryQuery.isPending && recoveredAnimeItems.length <= 0 && (
+                <p className="status">
+                  Aucun anime trouve pour le moment. Lance une synchronisation puis recharge cette page.
+                </p>
+              )}
+
+              {recoveredAnimeItems.length > 0 && (
+                <ul className="anilist-library-list">
+                  {recoveredAnimeItems.map((entry) => (
+                    <li key={`${entry.animeId}:${entry.listStatus}`} className="anilist-library-item">
+                      <strong>{entry.title}</strong>
+                      <span
+                        className={`anilist-library-status${
+                          entry.listStatus === "WATCHING" ? " watching" : " completed"
+                        }`}
+                      >
+                        {entry.listStatus === "WATCHING" ? "Watching" : "Completed"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             <div className="waiting-actions">

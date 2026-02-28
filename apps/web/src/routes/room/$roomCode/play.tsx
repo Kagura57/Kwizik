@@ -8,6 +8,7 @@ import {
   HttpStatusError,
   kickPlayer,
   leaveRoom as leaveRoomApi,
+  reportRoomMediaUnavailable,
   replayRoom,
   searchAnimeAutocomplete,
   searchPlaylistsAcrossProviders,
@@ -197,6 +198,7 @@ export function RoomPlayPage() {
   const audioRetryTimeoutRef = useRef<number | null>(null);
   const autoSubmitSignatureRef = useRef<string | null>(null);
   const draftSignatureRef = useRef<string | null>(null);
+  const reportedUnavailableMediaRef = useRef<string | null>(null);
   const userInteractionUnlockedRef = useRef(false);
   const roomMissingRedirectedRef = useRef(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
@@ -650,6 +652,21 @@ export function RoomPlayPage() {
     onSuccess: () => snapshotQuery.refetch(),
   });
 
+  const mediaUnavailableMutation = useMutation({
+    mutationFn: (trackId: string) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return reportRoomMediaUnavailable({
+        roomCode,
+        playerId: session.playerId,
+        trackId,
+      });
+    },
+    onSuccess: () => snapshotQuery.refetch(),
+    onError: () => {
+      reportedUnavailableMediaRef.current = null;
+    },
+  });
+
   const answerMutation = useMutation({
     mutationFn: (value: string) =>
       submitRoomAnswer({
@@ -857,6 +874,20 @@ export function RoomPlayPage() {
     !session.playerId ||
     hasLockedRevealVote;
 
+  function handleAnimeMediaUnavailable() {
+    setAudioError(true);
+    if (!session.playerId) return;
+    if (!state?.media || state.media.provider !== "animethemes") return;
+    if (state.state !== "playing" && state.state !== "reveal" && state.state !== "leaderboard") return;
+
+    const reportKey = `${state.state}:${state.round}:${state.media.trackId}`;
+    if (reportedUnavailableMediaRef.current === reportKey) return;
+    if (mediaUnavailableMutation.isPending) return;
+
+    reportedUnavailableMediaRef.current = reportKey;
+    mediaUnavailableMutation.mutate(state.media.trackId);
+  }
+
   useEffect(() => {
     if (!phaseSkipVote) return;
     if (!state) {
@@ -871,6 +902,10 @@ export function RoomPlayPage() {
       setPhaseSkipVote(null);
     }
   }, [phaseSkipVote, state]);
+
+  useEffect(() => {
+    reportedUnavailableMediaRef.current = null;
+  }, [state?.state, state?.round, state?.media?.trackId]);
 
   useEffect(() => {
     const iframe = youtubeIframeRef.current;
@@ -1281,9 +1316,7 @@ export function RoomPlayPage() {
                     src={activeAnimeVideoSource}
                     preload="auto"
                     playsInline
-                    onError={() => {
-                      setAudioError(true);
-                    }}
+                    onError={handleAnimeMediaUnavailable}
                   />
                 )}
                 {activeYoutubeEmbed && (
@@ -1670,6 +1703,10 @@ export function RoomPlayPage() {
             {!session.playerId && "Tu dois rejoindre la room pour répondre."}
             {snapshotQuery.isError && "Synchronisation impossible."}
             {answerMutation.isError && "Réponse refusée."}
+            {mediaUnavailableMutation.isPending &&
+              "Thème indisponible détecté, passage automatique au round suivant..."}
+            {mediaUnavailableMutation.isError &&
+              "Signalement du thème indisponible impossible. Utilise Skip pour continuer."}
             {audioError && usingAnimeVideoPlayback && "Erreur média: thème indisponible."}
             {audioError && !usingYouTubePlayback && !usingAnimeVideoPlayback && "Erreur audio: extrait indisponible."}
           </p>

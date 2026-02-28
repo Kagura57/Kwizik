@@ -160,8 +160,36 @@ async function upsertThemeVideo(input: {
   );
 }
 
+async function syncAnimeThemeVideoPlayability(input: { animeId: number; activeVideoKeys: string[] }) {
+  const keys = input.activeVideoKeys
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (keys.length <= 0) {
+    await pool.query(
+      `
+        update anime_theme_videos
+        set is_playable = false, updated_at = now()
+        where anime_id = $1 and is_playable = true
+      `,
+      [input.animeId],
+    );
+    return;
+  }
+
+  await pool.query(
+    `
+      update anime_theme_videos
+      set is_playable = false, updated_at = now()
+      where anime_id = $1
+        and is_playable = true
+        and video_key <> all($2::text[])
+    `,
+    [input.animeId, keys],
+  );
+}
+
 export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
-  const maxPages = Math.max(1, Math.min(input?.maxPages ?? 40, 200));
+  const maxPages = Math.max(1, Math.min(input?.maxPages ?? 200, 200));
   if (!isDbEnabled()) {
     return {
       pageCount: 0,
@@ -200,6 +228,7 @@ export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
       });
       aliasCount += 1;
 
+      const activeVideoKeys: string[] = [];
       const themes = anime.animethemes ?? [];
       for (const theme of themes) {
         const themeType = toThemeType(theme.type);
@@ -234,10 +263,16 @@ export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
               resolution: clampResolution(video.resolution),
               isCreditless: Boolean(video.nc),
             });
+            activeVideoKeys.push(key);
             videoCount += 1;
           }
         }
       }
+
+      await syncAnimeThemeVideoPlayability({
+        animeId,
+        activeVideoKeys,
+      });
     }
 
     const nextPage = payload.links?.next?.trim() ?? "";

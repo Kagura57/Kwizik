@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { pool } from "../src/db/client";
+import { userAnimeLibraryRepository } from "../src/repositories/UserAnimeLibraryRepository";
 import { RoomStore } from "../src/services/RoomStore";
 import type { MusicTrack } from "../src/services/music-types";
 
@@ -228,6 +230,19 @@ function youtubeStartFromEmbed(embedUrl: string | null | undefined) {
   } catch {
     return null;
   }
+}
+
+function makeAniListThemeRows(count: number, offset = 0) {
+  return Array.from({ length: count }, (_, index) => {
+    const value = offset + index + 1;
+    return {
+      video_key: `theme-${value}`,
+      webm_url: `https://v.animethemes.moe/theme-${value}.webm`,
+      theme_type: "OP",
+      theme_number: 1,
+      title_romaji: `Anime ${value}`,
+    };
+  });
 }
 
 describe("RoomStore gameplay progression", () => {
@@ -546,6 +561,110 @@ describe("RoomStore gameplay progression", () => {
     }
 
     expect(store.roomState(roomCode)?.state).toBe("results");
+  });
+
+  it("reports unavailable animethemes media and skips the current round", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      config: {
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(roomCode) as {
+      manager: {
+        forcePlayingRound: (round: number, deadlineMs: number, startedAtMs?: number) => void;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+
+    session.trackPool = [
+      {
+        provider: "animethemes",
+        id: "AhiruNoSora-OP2-NCBD1080",
+        title: "Ahiru no Sora",
+        artist: "OP2",
+        previewUrl: "https://v.animethemes.moe/AhiruNoSora-OP2-NCBD1080.webm",
+        sourceUrl: "https://v.animethemes.moe/AhiruNoSora-OP2-NCBD1080.webm",
+      },
+    ];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    session.manager.forcePlayingRound(1, 100, 0);
+
+    const before = store.roomState(roomCode);
+    expect(before?.state).toBe("playing");
+    expect(before?.media?.provider).toBe("animethemes");
+    expect(before?.media?.trackId).toBe("AhiruNoSora-OP2-NCBD1080");
+
+    nowMs = 5;
+    const reported = await store.reportMediaUnavailable(roomCode, host.value.playerId, "AhiruNoSora-OP2-NCBD1080");
+    expect(reported.status).toBe("ok");
+    if (reported.status === "ok") {
+      expect(reported.accepted).toBe(true);
+      expect(reported.state).toBe("results");
+    }
+
+    expect(store.roomState(roomCode)?.state).toBe("results");
+  });
+
+  it("rejects animethemes unavailable reports for a non-active track", async () => {
+    const store = new RoomStore({
+      config: {
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(roomCode) as {
+      manager: {
+        forcePlayingRound: (round: number, deadlineMs: number, startedAtMs?: number) => void;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+
+    session.trackPool = [
+      {
+        provider: "animethemes",
+        id: "valid-track",
+        title: "Valid",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/Valid-OP1.webm",
+        sourceUrl: "https://v.animethemes.moe/Valid-OP1.webm",
+      },
+    ];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    session.manager.forcePlayingRound(1, Date.now() + 100, Date.now());
+
+    const reported = await store.reportMediaUnavailable(roomCode, host.value.playerId, "other-track");
+    expect(reported.status).toBe("invalid_payload");
   });
 
   it("auto-validates latest draft answer when text round ends", async () => {
@@ -1011,6 +1130,56 @@ describe("RoomStore gameplay progression", () => {
     expect(lobby?.players).toHaveLength(2);
     expect(lobby?.categoryQuery).toBe("anilist:linked:union");
     expect(lobby?.readyCount).toBe(0);
+  });
+
+  it("uses an unbiased AniList random draw without recent-history exclusions", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    const animeIds = Array.from({ length: 741 }, (_, index) => index + 1);
+    const unionSpy = vi
+      .spyOn(userAnimeLibraryRepository, "unionAnimeIdsForUsers")
+      .mockResolvedValue(animeIds);
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(30),
+    } as never);
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 1,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({
+        ok: true,
+        sourceMode: "anilist_union",
+      });
+
+      expect(unionSpy).toHaveBeenCalledTimes(1);
+      const requestedLimit = unionSpy.mock.calls[0]?.[1] ?? 0;
+      expect(requestedLimit).toBeGreaterThanOrEqual(2_000);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      const queryParams = querySpy.mock.calls[0]?.[1] as unknown[] | undefined;
+      expect(Array.isArray(queryParams)).toBe(true);
+      expect(queryParams ?? []).toHaveLength(2);
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      unionSpy.mockRestore();
+      querySpy.mockRestore();
+    }
   });
 
   it("starts only when the full requested round pool is prepared", async () => {

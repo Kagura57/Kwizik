@@ -7,6 +7,12 @@ export type UserAnimeLibraryRow = {
   syncedAtMs: number;
 };
 
+export type UserAnimeLibraryDetailedRow = UserAnimeLibraryRow & {
+  titleRomaji: string | null;
+  titleEnglish: string | null;
+  titleNative: string | null;
+};
+
 type StagingRow = {
   userId: string;
   animeId: number;
@@ -146,6 +152,60 @@ export class UserAnimeLibraryRepository {
     } satisfies UserAnimeLibraryRow));
   }
 
+  async listDetailedByUser(userId: string, limit = 5_000) {
+    const normalizedUserId = userId.trim();
+    if (!normalizedUserId) return [];
+    const safeLimit = Math.max(1, Math.min(limit, 5_000));
+
+    if (!isDbEnabled()) {
+      return (this.memoryActiveByUser.get(normalizedUserId) ?? []).slice(0, safeLimit).map((row) => ({
+        ...row,
+        titleRomaji: null,
+        titleEnglish: null,
+        titleNative: null,
+      }));
+    }
+
+    const result = await pool.query<{
+      user_id: string;
+      anime_id: number;
+      list_status: string;
+      synced_at: Date;
+      title_romaji: string | null;
+      title_english: string | null;
+      title_native: string | null;
+    }>(
+      `
+        select
+          ua.user_id,
+          ua.anime_id,
+          ua.list_status,
+          ua.synced_at,
+          aa.title_romaji,
+          aa.title_english,
+          aa.title_native
+        from user_anime_library_active ua
+        join anime_catalog_anime aa on aa.id = ua.anime_id
+        where ua.user_id = $1
+        order by
+          coalesce(nullif(aa.title_romaji, ''), nullif(aa.title_english, ''), nullif(aa.title_native, ''), ua.anime_id::text) asc,
+          ua.anime_id asc
+        limit $2
+      `,
+      [normalizedUserId, safeLimit],
+    );
+
+    return result.rows.map((row) => ({
+      userId: row.user_id,
+      animeId: row.anime_id,
+      listStatus: normalizeStatus(row.list_status),
+      syncedAtMs: row.synced_at.getTime(),
+      titleRomaji: row.title_romaji,
+      titleEnglish: row.title_english,
+      titleNative: row.title_native,
+    } satisfies UserAnimeLibraryDetailedRow));
+  }
+
   async unionAnimeIdsForUsers(userIds: string[], limit = 20_000) {
     const cleanUsers = Array.from(new Set(userIds.map((value) => value.trim()).filter((value) => value.length > 0)));
     const safeLimit = Math.max(1, Math.min(limit, 50_000));
@@ -166,9 +226,14 @@ export class UserAnimeLibraryRepository {
 
     const result = await pool.query<{ anime_id: number }>(
       `
-        select distinct anime_id
-        from user_anime_library_active
-        where user_id = any($1::text[])
+        with union_anime as (
+          select distinct anime_id
+          from user_anime_library_active
+          where user_id = any($1::text[])
+        )
+        select anime_id
+        from union_anime
+        order by random()
         limit $2
       `,
       [cleanUsers, safeLimit],

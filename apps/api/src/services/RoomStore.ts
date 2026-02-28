@@ -91,7 +91,6 @@ type RoomSession = {
   totalRounds: number;
   roundModes: RoundMode[];
   roundChoices: Map<number, string[]>;
-  recentAnimeThemeIds: string[];
   latestReveal: {
     round: number;
     trackId: string;
@@ -140,7 +139,6 @@ const PLAYERS_LIKED_POOL_BUILD_TIMEOUT_MS = 45_000;
 const ROOM_ANSWER_SUGGESTION_LIMIT = 1_000;
 const ROOM_BULK_ANSWER_TRACK_LIMIT = 16_000;
 const ROOM_BULK_ANSWER_SUGGESTION_LIMIT = 24_000;
-const ANILIST_RECENT_THEME_HISTORY_LIMIT = 280;
 
 type RoundConfig = typeof DEFAULT_ROUND_CONFIG;
 
@@ -768,27 +766,6 @@ export class RoomStore {
     };
   }
 
-  private rememberAniListThemeHistory(session: RoomSession, tracks: MusicTrack[]) {
-    if (!isAniListUnionSource(session.sourceMode) || tracks.length <= 0) return;
-    const incoming = tracks
-      .filter((track) => track.provider === "animethemes")
-      .map((track) => track.id)
-      .filter((value) => value.trim().length > 0);
-    if (incoming.length <= 0) return;
-
-    const merged = [...session.recentAnimeThemeIds, ...incoming];
-    const deduped: string[] = [];
-    const seen = new Set<string>();
-    for (let index = merged.length - 1; index >= 0; index -= 1) {
-      const key = merged[index]?.trim();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      deduped.push(key);
-      if (deduped.length >= ANILIST_RECENT_THEME_HISTORY_LIMIT) break;
-    }
-    session.recentAnimeThemeIds = deduped.reverse();
-  }
-
   private buildRoundChoices(session: RoomSession, round: number) {
     const existing = session.roundChoices.get(round);
     if (existing) return existing;
@@ -954,10 +931,8 @@ export class RoomStore {
       };
     }
 
-    const animeIds = await userAnimeLibraryRepository.unionAnimeIdsForUsers(
-      userIds,
-      Math.max(targetCandidateSize * 3, 60),
-    );
+    const animeLookupLimit = Math.min(20_000, Math.max(targetCandidateSize * 30, 2_000));
+    const animeIds = await userAnimeLibraryRepository.unionAnimeIdsForUsers(userIds, animeLookupLimit);
     if (animeIds.length <= 0) {
       return {
         tracks: [] as MusicTrack[],
@@ -977,42 +952,45 @@ export class RoomStore {
           : "";
 
     const rowLimit = Math.max(targetCandidateSize * 2, safeRounds + 8);
-    const recentWindow = Math.max(safeRounds * 3, targetCandidateSize);
-    const recentThemeIds = session.recentAnimeThemeIds.slice(-recentWindow);
-    const queryRows = async (excludeRecent: boolean) =>
-      await pool.query<{
-        video_key: string;
-        webm_url: string;
-        theme_type: string;
-        theme_number: number | null;
-        title_romaji: string;
-      }>(
-        `
-          select tv.video_key, tv.webm_url, tv.theme_type, tv.theme_number, aa.title_romaji
+    const selected = await pool.query<{
+      video_key: string;
+      webm_url: string;
+      theme_type: string;
+      theme_number: number | null;
+      title_romaji: string;
+    }>(
+      `
+        with best_theme_video as (
+          select distinct on (tv.anime_id, tv.theme_type, coalesce(tv.theme_number, 0))
+            tv.video_key,
+            tv.webm_url,
+            tv.theme_type,
+            tv.theme_number,
+            aa.title_romaji
           from anime_theme_videos tv
           join anime_catalog_anime aa on aa.id = tv.anime_id
           where tv.is_playable = true
+            and tv.webm_url like 'https://v.animethemes.moe/%'
             and tv.anime_id = any($1::bigint[])
-            and ($3::boolean = false or tv.video_key <> all($4::text[]))
             ${themeCondition}
-          order by random()
-          limit $2
-        `,
-        [animeIds, rowLimit, excludeRecent, recentThemeIds],
-      );
+          order by
+            tv.anime_id,
+            tv.theme_type,
+            coalesce(tv.theme_number, 0),
+            tv.updated_at desc,
+            tv.is_creditless desc,
+            coalesce(tv.resolution, 0) desc,
+            tv.video_key desc
+        )
+        select video_key, webm_url, theme_type, theme_number, title_romaji
+        from best_theme_video
+        order by random()
+        limit $2
+      `,
+      [animeIds, rowLimit],
+    );
 
-    const primary = await queryRows(recentThemeIds.length > 0);
-    const rowsByVideoKey = new Map(primary.rows.map((row) => [row.video_key, row]));
-    if (rowsByVideoKey.size < rowLimit) {
-      const refill = await queryRows(false);
-      for (const row of refill.rows) {
-        if (!rowsByVideoKey.has(row.video_key)) {
-          rowsByVideoKey.set(row.video_key, row);
-        }
-      }
-    }
-
-    const tracks: MusicTrack[] = randomShuffle([...rowsByVideoKey.values()]).map((row) => {
+    const tracks: MusicTrack[] = randomShuffle(selected.rows).map((row) => {
       const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
       return {
         provider: "animethemes",
@@ -1034,7 +1012,7 @@ export class RoomStore {
       tracks: split.tracks,
       distractorTracks: split.distractorTracks,
       candidateCount: split.candidateCount,
-      rawTotal: rowsByVideoKey.size,
+      rawTotal: selected.rows.length,
       playableTotal: tracks.length,
       cleanTotal: tracks.length,
     };
@@ -1315,6 +1293,27 @@ export class RoomStore {
     return false;
   }
 
+  private async markAnimeThemeVideoUnavailable(videoKey: string) {
+    if (!(typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0)) {
+      return;
+    }
+    try {
+      await pool.query(
+        `
+          update anime_theme_videos
+          set is_playable = false, updated_at = now()
+          where video_key = $1
+        `,
+        [videoKey],
+      );
+    } catch (error) {
+      logEvent("warn", "animethemes_mark_unavailable_failed", {
+        videoKey,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+      });
+    }
+  }
+
   private progressSession(session: RoomSession, nowMs: number) {
     const tick = session.manager.tick({
       nowMs,
@@ -1458,7 +1457,6 @@ export class RoomStore {
       totalRounds: 0,
       roundModes: [],
       roundChoices: new Map(),
-      recentAnimeThemeIds: [],
       latestReveal: null,
       chatMessages: [],
     };
@@ -2146,7 +2144,6 @@ export class RoomStore {
 
     session.trackPool = startPoolStats.tracks;
     session.distractorTrackPool = startPoolStats.distractorTracks;
-    this.rememberAniListThemeHistory(session, [...session.trackPool, ...session.distractorTrackPool]);
     if (session.sourceMode === "players_liked") {
       session.playersLikedPool = [...startPoolStats.tracks, ...startPoolStats.distractorTracks];
       session.poolBuild.status = startPoolStats.tracks.length >= poolSize ? "ready" : "failed";
@@ -2316,6 +2313,49 @@ export class RoomStore {
     }
 
     return { status: "invalid_state" as const };
+  }
+
+  async reportMediaUnavailable(roomCode: string, playerId: string, trackId: string) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+
+    const nowMs = this.now();
+    this.progressSession(session, nowMs);
+    const state = session.manager.state();
+    if (state !== "playing" && state !== "reveal" && state !== "leaderboard") {
+      return { status: "invalid_state" as const };
+    }
+
+    const currentRound = session.manager.round();
+    const playingTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
+    const revealTrack = session.latestReveal;
+    const activeTrack = state === "playing" ? playingTrack : revealTrack;
+    if (!activeTrack || activeTrack.provider !== "animethemes") {
+      return { status: "invalid_payload" as const };
+    }
+    if (activeTrack.id !== trackId) {
+      return { status: "invalid_payload" as const };
+    }
+
+    await this.markAnimeThemeVideoUnavailable(trackId);
+
+    if (state === "playing") {
+      session.manager.skipPlayingRound({
+        nowMs,
+        roundMs: this.config.playingMs,
+      });
+    } else if (session.manager.expireCurrentPhase(nowMs)) {
+      this.progressSession(session, nowMs);
+    }
+
+    return {
+      status: "ok" as const,
+      accepted: true,
+      state: session.manager.state(),
+      round: session.manager.round(),
+      deadlineMs: session.manager.deadlineMs(),
+    };
   }
 
   submitAnswer(roomCode: string, playerId: string, answer: string) {

@@ -590,6 +590,23 @@ export async function skipRoomRound(input: { roomCode: string; playerId: string 
   });
 }
 
+export async function reportRoomMediaUnavailable(input: {
+  roomCode: string;
+  playerId: string;
+  trackId: string;
+}) {
+  return requestJson<{
+    ok: true;
+    accepted: boolean;
+    state: string;
+    round: number;
+    deadlineMs: number | null;
+  }>("/quiz/media/unavailable", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function submitRoomAnswer(input: {
   roomCode: string;
   playerId: string;
@@ -823,6 +840,28 @@ export async function getAniListLibrarySyncStatus() {
       createdAtMs: number;
     } | null;
   }>("/account/anilist/sync/status");
+}
+
+export async function getAniListRecoveredLibrary(input?: { limit?: number }) {
+  const params = new URLSearchParams();
+  if (typeof input?.limit === "number" && Number.isFinite(input.limit)) {
+    params.set("limit", String(Math.max(1, Math.floor(input.limit))));
+  }
+  const suffix = params.toString();
+  const path = suffix.length > 0 ? `/account/anilist/library?${suffix}` : "/account/anilist/library";
+  return requestJson<{
+    ok: true;
+    total: number;
+    items: Array<{
+      animeId: number;
+      title: string;
+      titleRomaji: string | null;
+      titleEnglish: string | null;
+      titleNative: string | null;
+      listStatus: "WATCHING" | "COMPLETED";
+      syncedAtMs: number;
+    }>;
+  }>(path);
 }
 
 export async function getMusicProviderLinks() {

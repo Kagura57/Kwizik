@@ -4,6 +4,7 @@ import { aniListSyncRunRepository } from "../repositories/AniListSyncRunReposito
 import { musicAccountRepository, type MusicProvider } from "../repositories/MusicAccountRepository";
 import { matchRepository } from "../repositories/MatchRepository";
 import { profileRepository } from "../repositories/ProfileRepository";
+import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLibrarySyncRepository } from "../repositories/UserLibrarySyncRepository";
 import {
   buildAniListConnectUrl,
@@ -34,6 +35,13 @@ function parseLimit(raw: string | undefined, fallback: number) {
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(1, Math.min(parsed, 200));
+}
+
+function parseAniListLibraryLimit(raw: string | undefined, fallback: number) {
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(parsed, 5_000));
 }
 
 function readStringField(body: unknown, key: string) {
@@ -209,6 +217,33 @@ export const accountRoutes = new Elysia({ prefix: "/account" })
     return {
       ok: true as const,
       run,
+    };
+  })
+  .get("/anilist/library", async ({ headers, query, set }) => {
+    const authContext = await requireSession(headers as unknown, set);
+    if (!authContext) {
+      return { ok: false, error: "UNAUTHORIZED" };
+    }
+
+    const limit = parseAniListLibraryLimit(typeof query.limit === "string" ? query.limit : undefined, 5_000);
+    const rows = await userAnimeLibraryRepository.listDetailedByUser(authContext.user.id, limit);
+
+    return {
+      ok: true as const,
+      total: rows.length,
+      items: rows.map((row) => {
+        const preferredTitle =
+          row.titleRomaji?.trim() || row.titleEnglish?.trim() || row.titleNative?.trim() || `Anime #${row.animeId}`;
+        return {
+          animeId: row.animeId,
+          title: preferredTitle,
+          titleRomaji: row.titleRomaji,
+          titleEnglish: row.titleEnglish,
+          titleNative: row.titleNative,
+          listStatus: row.listStatus,
+          syncedAtMs: row.syncedAtMs,
+        };
+      }),
     };
   })
   .get("/music/providers", async ({ headers, set }) => {
