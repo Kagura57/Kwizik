@@ -120,9 +120,9 @@ type RoomSession = {
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_ROUND_CONFIG = {
   countdownMs: 3_000,
-  playingMs: 12_000,
-  revealMs: 4_000,
-  leaderboardMs: 3_000,
+  playingMs: 20_000,
+  revealMs: 20_000,
+  leaderboardMs: 0,
   baseScore: 1_000,
   maxRounds: 10,
 } as const;
@@ -1282,6 +1282,39 @@ export class RoomStore {
     return Date.now() - lastSeenAtMs <= 30_000;
   }
 
+  private activePlayerIds(session: RoomSession) {
+    return this.sortedPlayers(session).map((player) => player.id);
+  }
+
+  private isGuessPhaseDoneForAll(session: RoomSession) {
+    const ids = this.activePlayerIds(session);
+    if (ids.length <= 0) return false;
+    return ids.every((playerId) => session.manager.hasGuessDone(playerId));
+  }
+
+  private isRevealSkipDoneForAll(session: RoomSession) {
+    const ids = this.activePlayerIds(session);
+    if (ids.length <= 0) return false;
+    return ids.every((playerId) => session.manager.hasRevealSkipped(playerId));
+  }
+
+  private maybeAdvanceOnUnanimousPhaseCompletion(session: RoomSession, nowMs: number) {
+    const state = session.manager.state();
+    if (state === "playing" && this.isGuessPhaseDoneForAll(session)) {
+      if (session.manager.expireCurrentPhase(nowMs)) {
+        this.progressSession(session, nowMs);
+      }
+      return true;
+    }
+    if (state === "reveal" && this.isRevealSkipDoneForAll(session)) {
+      if (session.manager.expireCurrentPhase(nowMs)) {
+        this.progressSession(session, nowMs);
+      }
+      return true;
+    }
+    return false;
+  }
+
   private progressSession(session: RoomSession, nowMs: number) {
     const tick = session.manager.tick({
       nowMs,
@@ -1790,6 +1823,10 @@ export class RoomStore {
     this.ensureHost(session);
     if (session.manager.state() === "waiting") {
       this.resetReadyStates(session);
+    } else {
+      const nowMs = this.now();
+      this.progressSession(session, nowMs);
+      this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
     }
 
     return { status: "ok" as const, playerCount: session.players.size, hostPlayerId: session.hostPlayerId };
@@ -2246,29 +2283,39 @@ export class RoomStore {
   skipCurrentRound(roomCode: string, playerId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    this.ensureHost(session);
     if (!session.players.has(playerId)) return { status: "player_not_found" as const };
-    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
 
     const nowMs = this.now();
     this.progressSession(session, nowMs);
-    if (session.manager.state() !== "playing") return { status: "invalid_state" as const };
-
-    const skipped = session.manager.skipPlayingRound({
-      nowMs,
-      roundMs: this.config.playingMs,
-    });
-    if (!skipped.skipped || !skipped.closedRound) {
-      return { status: "invalid_state" as const };
+    const state = session.manager.state();
+    if (state === "playing") {
+      const result = session.manager.skipGuessForPlayer(playerId, nowMs);
+      if (result.accepted) {
+        this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+      }
+      return {
+        status: "ok" as const,
+        accepted: result.accepted,
+        state: session.manager.state(),
+        round: session.manager.round(),
+        deadlineMs: session.manager.deadlineMs(),
+      };
+    }
+    if (state === "reveal") {
+      const result = session.manager.skipRevealForPlayer(playerId, nowMs);
+      if (result.accepted) {
+        this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+      }
+      return {
+        status: "ok" as const,
+        accepted: result.accepted,
+        state: session.manager.state(),
+        round: session.manager.round(),
+        deadlineMs: session.manager.deadlineMs(),
+      };
     }
 
-    this.applyRoundResults(session, skipped.closedRound);
-    return {
-      status: "ok" as const,
-      state: session.manager.state(),
-      round: session.manager.round(),
-      deadlineMs: session.manager.deadlineMs(),
-    };
+    return { status: "invalid_state" as const };
   }
 
   submitAnswer(roomCode: string, playerId: string, answer: string) {
@@ -2282,6 +2329,9 @@ export class RoomStore {
     if (!player) return { status: "player_not_found" as const };
 
     const result = session.manager.submitAnswer(playerId, answer, nowMs);
+    if (result.accepted) {
+      this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+    }
     return { status: "ok" as const, accepted: result.accepted };
   }
 
@@ -2353,7 +2403,7 @@ export class RoomStore {
       playerId: player.id,
       displayName: player.displayName,
       isReady: player.isReady,
-      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasSubmittedAnswer(player.id) : false,
+      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(player.id) : false,
       isHost: player.id === hostPlayerId,
       canContributeLibrary: Boolean(player.userId),
       libraryContribution: {
@@ -2380,8 +2430,17 @@ export class RoomStore {
       .slice(0, 10)
       .map((entry) => ({
         ...entry,
-        hasAnsweredCurrentRound: state === "playing" ? session.manager.hasSubmittedAnswer(entry.playerId) : false,
+        hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(entry.playerId) : false,
       }));
+    const activePlayerIds = players.map((player) => player.playerId);
+    const guessTotalCount = state === "playing" ? activePlayerIds.length : 0;
+    const guessDoneCount =
+      state === "playing" ? activePlayerIds.filter((playerId) => session.manager.hasGuessDone(playerId)).length : 0;
+    const revealSkipTotalCount = state === "reveal" ? activePlayerIds.length : 0;
+    const revealSkipCount =
+      state === "reveal"
+        ? activePlayerIds.filter((playerId) => session.manager.hasRevealSkipped(playerId)).length
+        : 0;
     if (session.latestReveal) {
       scheduleRomanizeJapanese(session.latestReveal.title);
       scheduleRomanizeJapanese(session.latestReveal.artist);
@@ -2466,6 +2525,10 @@ export class RoomStore {
       },
       totalRounds: session.totalRounds,
       deadlineMs: session.manager.deadlineMs(),
+      guessDoneCount,
+      guessTotalCount,
+      revealSkipCount,
+      revealSkipTotalCount,
       previewUrl:
         state === "playing"
           ? activeTrack?.previewUrl ?? null

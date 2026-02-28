@@ -115,6 +115,10 @@ export type RoomState = {
   };
   totalRounds: number;
   deadlineMs: number | null;
+  guessDoneCount: number;
+  guessTotalCount: number;
+  revealSkipCount: number;
+  revealSkipTotalCount: number;
   previewUrl: string | null;
   media: {
     provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
@@ -576,6 +580,7 @@ export async function replayRoom(input: { roomCode: string; playerId: string }) 
 export async function skipRoomRound(input: { roomCode: string; playerId: string }) {
   return requestJson<{
     ok: true;
+    accepted: boolean;
     state: string;
     round: number;
     deadlineMs: number | null;

@@ -4,10 +4,10 @@ import { useParams } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
 import { fetchLiveRoomState } from "../../../lib/realtime";
 
-const ROUND_MS = 12_000;
+const ROUND_MS = 20_000;
 const COUNTDOWN_MS = 3_000;
-const REVEAL_MS = 4_000;
-const LEADERBOARD_MS = 3_000;
+const REVEAL_MS = 20_000;
+const LEADERBOARD_MS = 0;
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -18,7 +18,10 @@ function phaseProgress(phase: string | undefined, remainingMs: number | null) {
   if (phase === "countdown") return clamp01((COUNTDOWN_MS - remainingMs) / COUNTDOWN_MS);
   if (phase === "playing") return clamp01((ROUND_MS - remainingMs) / ROUND_MS);
   if (phase === "reveal") return clamp01((REVEAL_MS - remainingMs) / REVEAL_MS);
-  if (phase === "leaderboard") return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  if (phase === "leaderboard") {
+    if (LEADERBOARD_MS <= 0) return 1;
+    return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  }
   return 0;
 }
 
@@ -53,6 +56,11 @@ export function RoomViewPage() {
     key: string;
     embedUrl: string;
   } | null>(null);
+  const [stableAnimeVideoPlayback, setStableAnimeVideoPlayback] = useState<{
+    key: string;
+    sourceUrl: string;
+  } | null>(null);
+  const animeVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
   const progressStateRef = useRef<{ key: string; value: number }>({ key: "", value: 0 });
@@ -142,6 +150,15 @@ export function RoomViewPage() {
     };
   }, [state?.media?.embedUrl, state?.media?.provider, state?.media?.trackId]);
 
+  const animeVideoPlayback = useMemo(() => {
+    if (!state?.media?.sourceUrl || !state.media.trackId) return null;
+    if (state.media.provider !== "animethemes") return null;
+    return {
+      key: `${state.media.provider}:${state.media.trackId}`,
+      sourceUrl: state.media.sourceUrl,
+    };
+  }, [state?.media?.sourceUrl, state?.media?.provider, state?.media?.trackId]);
+
   useEffect(() => {
     if (youtubePlayback) {
       setStableYoutubePlayback((previous) => {
@@ -161,12 +178,31 @@ export function RoomViewPage() {
     }
   }, [state?.state, youtubePlayback]);
 
+  useEffect(() => {
+    if (animeVideoPlayback) {
+      setStableAnimeVideoPlayback((previous) => {
+        if (previous?.key === animeVideoPlayback.key) return previous;
+        return animeVideoPlayback;
+      });
+      return;
+    }
+
+    const shouldClear =
+      state?.state === "waiting" ||
+      state?.state === "results" ||
+      state?.state === undefined;
+    if (shouldClear) {
+      setStableAnimeVideoPlayback(null);
+    }
+  }, [animeVideoPlayback, state?.state]);
+
   const activeYoutubeEmbed = stableYoutubePlayback?.embedUrl ?? null;
+  const activeAnimeVideoSource = stableAnimeVideoPlayback?.sourceUrl ?? null;
   const usingYouTubePlayback = Boolean(activeYoutubeEmbed);
+  const usingAnimeVideoPlayback = Boolean(activeAnimeVideoSource);
   const revealVideoActive =
-    usingYouTubePlayback &&
+    (usingYouTubePlayback || usingAnimeVideoPlayback) &&
     (state?.state === "reveal" || state?.state === "leaderboard");
-  const isResults = state?.state === "results";
   const showRevealAnswersInLeaderboard = state?.state === "reveal" || state?.state === "leaderboard";
   const revealAnswerByPlayerId = useMemo(() => {
     const map = new Map<
@@ -187,6 +223,28 @@ export function RoomViewPage() {
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
 
   useEffect(() => {
+    const video = animeVideoRef.current;
+    if (!video) return;
+
+    if (!activeAnimeVideoSource) {
+      video.pause();
+      video.removeAttribute("src");
+      return;
+    }
+
+    const currentSrc = video.getAttribute("src");
+    if (currentSrc !== activeAnimeVideoSource) {
+      video.setAttribute("src", activeAnimeVideoSource);
+      video.currentTime = 0;
+    }
+
+    const playPromise = video.play();
+    if (playPromise) {
+      playPromise.catch(() => undefined);
+    }
+  }, [activeAnimeVideoSource, stableAnimeVideoPlayback?.key]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     if (audioRetryTimeoutRef.current !== null) {
@@ -194,7 +252,7 @@ export function RoomViewPage() {
       audioRetryTimeoutRef.current = null;
     }
 
-    if (activeYoutubeEmbed) {
+    if (activeYoutubeEmbed || activeAnimeVideoSource) {
       audio.pause();
       audio.removeAttribute("src");
       lastPreviewRef.current = null;
@@ -227,7 +285,7 @@ export function RoomViewPage() {
         }, 320);
       });
     }
-  }, [activeYoutubeEmbed, state?.previewUrl, state?.state]);
+  }, [activeAnimeVideoSource, activeYoutubeEmbed, state?.previewUrl, state?.state]);
 
   useEffect(() => {
     function unlockAudioPlayback() {
@@ -237,6 +295,10 @@ export function RoomViewPage() {
       const audio = audioRef.current;
       if (audio && audio.src) {
         audio.play().catch(() => undefined);
+      }
+      const video = animeVideoRef.current;
+      if (video && activeAnimeVideoSource) {
+        video.play().catch(() => undefined);
       }
       if (shouldKickIframe) {
         setIframeEpoch((value) => value + 1);
@@ -249,7 +311,7 @@ export function RoomViewPage() {
       window.removeEventListener("pointerdown", unlockAudioPlayback);
       window.removeEventListener("keydown", unlockAudioPlayback);
     };
-  }, [activeYoutubeEmbed]);
+  }, [activeAnimeVideoSource, activeYoutubeEmbed]);
 
   useEffect(() => {
     return () => {
@@ -267,20 +329,48 @@ export function RoomViewPage() {
           <strong>Manche {roundLabel}</strong>
         </div>
 
-        <div className={`sound-visual large${revealVideoActive ? " reveal-active" : ""}`}>
-          <div className="wave-bars" aria-hidden="true">
-            {WAVE_BARS.map((bar) => (
-              <span
-                key={bar.key}
-                style={{
-                  height: `${bar.heightPercent}%`,
-                  animationDelay: `${bar.delaySec}s`,
-                }}
-              />
-            ))}
-          </div>
-          <div className="sound-timeline">
-            <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
+        <div className={`sound-visual media-shell large${revealVideoActive ? " reveal-active" : ""}`}>
+          {activeAnimeVideoSource && (
+            <video
+              ref={animeVideoRef}
+              key={stableAnimeVideoPlayback?.key ?? "none"}
+              className="media-video-layer anime-video-layer"
+              src={activeAnimeVideoSource}
+              preload="auto"
+              playsInline
+              onError={() => {
+                setAudioError(true);
+              }}
+            />
+          )}
+          {activeYoutubeEmbed && (
+            <iframe
+              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
+              className="media-video-layer youtube-video-layer"
+              src={activeYoutubeEmbed}
+              title="Projection playback"
+              allow="autoplay; encrypted-media"
+              onError={() => {
+                setAudioError(true);
+                setIframeEpoch((value) => value + 1);
+              }}
+            />
+          )}
+          <div className="media-wave-layer" aria-hidden="true">
+            <div className="wave-bars">
+              {WAVE_BARS.map((bar) => (
+                <span
+                  key={bar.key}
+                  style={{
+                    height: `${bar.heightPercent}%`,
+                    animationDelay: `${bar.delaySec}s`,
+                  }}
+                />
+              ))}
+            </div>
+            <div className="sound-timeline">
+              <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
+            </div>
           </div>
         </div>
 
@@ -319,22 +409,6 @@ export function RoomViewPage() {
                 </div>
               </div>
             )}
-
-        {!isResults && activeYoutubeEmbed && (
-          <div className="blindtest-video-shell">
-            <iframe
-              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
-              className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
-              src={activeYoutubeEmbed}
-              title="Projection playback"
-              allow="autoplay; encrypted-media"
-              onError={() => {
-                setAudioError(true);
-                setIframeEpoch((value) => value + 1);
-              }}
-            />
-          </div>
-        )}
 
         <ol className="leaderboard-list compact">
           {(state?.leaderboard ?? []).map((entry) => (
@@ -390,7 +464,7 @@ export function RoomViewPage() {
         <track kind="captions" />
       </audio>
 
-      {audioError && !usingYouTubePlayback && (
+      {audioError && !usingYouTubePlayback && !usingAnimeVideoPlayback && (
         <div className="projection-audio-status">
           <p className="status error">Erreur audio sur la piste en cours.</p>
         </div>

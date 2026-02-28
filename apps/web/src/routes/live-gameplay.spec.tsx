@@ -10,6 +10,10 @@ describe("live gameplay store", () => {
       round: 1,
       totalRounds: 10,
       deadlineMs: 123,
+      guessDoneCount: 1,
+      guessTotalCount: 2,
+      revealSkipCount: 0,
+      revealSkipTotalCount: 2,
       previewUrl: null,
       media: {
         provider: "animethemes",

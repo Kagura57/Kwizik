@@ -495,10 +495,6 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       set.status = 404;
       return { ok: false, error: "PLAYER_NOT_FOUND" };
     }
-    if (result.status === "forbidden") {
-      set.status = 403;
-      return { ok: false, error: "HOST_ONLY" };
-    }
     if (result.status === "invalid_state") {
       set.status = 409;
       return { ok: false, error: "INVALID_STATE" };
@@ -506,6 +502,7 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
 
     return {
       ok: true as const,
+      accepted: result.accepted,
       state: result.state,
       round: result.round,
       deadlineMs: result.deadlineMs,

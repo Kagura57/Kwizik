@@ -54,6 +54,8 @@ export class RoomManager {
   private plannedTotalRounds = 0;
   private answers = new Map<string, RoundAnswer>();
   private drafts = new Map<string, string>();
+  private guessedSkipPlayerIds = new Set<string>();
+  private revealSkipPlayerIds = new Set<string>();
 
   constructor(public readonly roomCode: string) {}
 
@@ -90,6 +92,8 @@ export class RoomManager {
     this.roundStartedAtMs = null;
     this.answers.clear();
     this.drafts.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
     this.plannedTotalRounds = Math.max(0, input.totalRounds);
     this.gameState = "countdown";
     this.roundDeadlineMs = input.nowMs + safeCountdownMs;
@@ -111,6 +115,8 @@ export class RoomManager {
 
     this.answers.clear();
     this.drafts.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
 
     if (this.currentRound >= this.plannedTotalRounds) {
       this.gameState = "results";
@@ -129,12 +135,27 @@ export class RoomManager {
   forcePlayingRound(round: number, deadlineMs: number, startedAtMs?: number) {
     this.answers.clear();
     this.drafts.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
     this.currentRound = Math.max(1, round);
     this.roundStartedAtMs =
       startedAtMs !== undefined ? startedAtMs : Math.max(0, deadlineMs - 15_000);
     this.roundDeadlineMs = deadlineMs;
     this.gameState = "playing";
     this.plannedTotalRounds = Math.max(this.plannedTotalRounds, this.currentRound);
+  }
+
+  expireCurrentPhase(nowMs: number) {
+    if (
+      this.gameState !== "countdown" &&
+      this.gameState !== "playing" &&
+      this.gameState !== "reveal" &&
+      this.gameState !== "leaderboard"
+    ) {
+      return false;
+    }
+    this.roundDeadlineMs = nowMs;
+    return true;
   }
 
   tick(input: TickInput): TickResult {
@@ -161,6 +182,8 @@ export class RoomManager {
         this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.answers.clear();
         this.drafts.clear();
+        this.guessedSkipPlayerIds.clear();
+        this.revealSkipPlayerIds.clear();
         this.gameState = "playing";
         transitioned = true;
         continue;
@@ -176,6 +199,8 @@ export class RoomManager {
         });
         this.answers.clear();
         this.drafts.clear();
+        this.guessedSkipPlayerIds.clear();
+        this.revealSkipPlayerIds.clear();
         this.roundStartedAtMs = null;
         this.roundDeadlineMs = transitionAtMs + safeRevealMs;
         this.gameState = "reveal";
@@ -184,6 +209,7 @@ export class RoomManager {
       }
 
       if (this.gameState === "reveal") {
+        this.revealSkipPlayerIds.clear();
         this.gameState = "leaderboard";
         this.roundDeadlineMs = transitionAtMs + safeLeaderboardMs;
         this.roundStartedAtMs = null;
@@ -205,6 +231,8 @@ export class RoomManager {
         this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.answers.clear();
         this.drafts.clear();
+        this.guessedSkipPlayerIds.clear();
+        this.revealSkipPlayerIds.clear();
         this.gameState = "playing";
         transitioned = true;
         continue;
@@ -221,6 +249,7 @@ export class RoomManager {
     if (this.roundDeadlineMs !== null && submittedAtMs > this.roundDeadlineMs) {
       return { accepted: false as const };
     }
+    if (this.guessedSkipPlayerIds.has(playerId)) return { accepted: false as const };
     if (this.answers.has(playerId)) return { accepted: false as const };
     this.answers.set(playerId, { value, submittedAtMs });
     this.drafts.delete(playerId);
@@ -232,6 +261,7 @@ export class RoomManager {
     if (this.roundDeadlineMs !== null && submittedAtMs > this.roundDeadlineMs) {
       return { accepted: false as const };
     }
+    if (this.guessedSkipPlayerIds.has(playerId)) return { accepted: false as const };
     if (this.answers.has(playerId)) return { accepted: false as const };
     const trimmed = value.trim();
     if (trimmed.length <= 0) {
@@ -246,6 +276,40 @@ export class RoomManager {
     return this.answers.has(playerId);
   }
 
+  skipGuessForPlayer(playerId: string, nowMs: number) {
+    if (this.gameState !== "playing") return { accepted: false as const };
+    if (this.roundDeadlineMs !== null && nowMs > this.roundDeadlineMs) {
+      return { accepted: false as const };
+    }
+    if (this.answers.has(playerId)) return { accepted: false as const };
+    if (this.guessedSkipPlayerIds.has(playerId)) return { accepted: false as const };
+    this.guessedSkipPlayerIds.add(playerId);
+    this.drafts.delete(playerId);
+    return { accepted: true as const };
+  }
+
+  skipRevealForPlayer(playerId: string, nowMs: number) {
+    if (this.gameState !== "reveal") return { accepted: false as const };
+    if (this.roundDeadlineMs !== null && nowMs > this.roundDeadlineMs) {
+      return { accepted: false as const };
+    }
+    if (this.revealSkipPlayerIds.has(playerId)) return { accepted: false as const };
+    this.revealSkipPlayerIds.add(playerId);
+    return { accepted: true as const };
+  }
+
+  hasGuessSkipped(playerId: string) {
+    return this.guessedSkipPlayerIds.has(playerId);
+  }
+
+  hasGuessDone(playerId: string) {
+    return this.answers.has(playerId) || this.guessedSkipPlayerIds.has(playerId);
+  }
+
+  hasRevealSkipped(playerId: string) {
+    return this.revealSkipPlayerIds.has(playerId);
+  }
+
   answeredPlayerIds() {
     return [...this.answers.keys()];
   }
@@ -258,12 +322,15 @@ export class RoomManager {
     this.plannedTotalRounds = 0;
     this.answers.clear();
     this.drafts.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
   }
 
   private finalizeCurrentRoundAnswers(deadlineMs: number) {
     const merged = new Map(this.answers);
     for (const [playerId, value] of this.drafts.entries()) {
       if (merged.has(playerId)) continue;
+      if (this.guessedSkipPlayerIds.has(playerId)) continue;
       const trimmed = value.trim();
       if (trimmed.length <= 0) continue;
       merged.set(playerId, {

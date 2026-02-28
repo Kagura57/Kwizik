@@ -25,10 +25,10 @@ import {
 import { fetchLiveRoomState } from "../../../lib/realtime";
 import { useGameStore } from "../../../stores/gameStore";
 
-const ROUND_MS = 12_000;
+const ROUND_MS = 20_000;
 const COUNTDOWN_MS = 3_000;
-const REVEAL_MS = 4_000;
-const LEADERBOARD_MS = 3_000;
+const REVEAL_MS = 20_000;
+const LEADERBOARD_MS = 0;
 
 type SourceMode = "public_playlist" | "players_liked" | "anilist_union";
 type ThemeMode = "op_only" | "ed_only" | "mix";
@@ -46,7 +46,10 @@ function phaseProgress(phase: string | undefined, remainingMs: number | null) {
   if (phase === "countdown") return clamp01((COUNTDOWN_MS - remainingMs) / COUNTDOWN_MS);
   if (phase === "playing") return clamp01((ROUND_MS - remainingMs) / ROUND_MS);
   if (phase === "reveal") return clamp01((REVEAL_MS - remainingMs) / REVEAL_MS);
-  if (phase === "leaderboard") return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  if (phase === "leaderboard") {
+    if (LEADERBOARD_MS <= 0) return 1;
+    return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  }
   return 0;
 }
 
@@ -182,6 +185,7 @@ export function RoomPlayPage() {
   const [chatInput, setChatInput] = useState("");
   const [spotifyRateLimitUntilMs, setSpotifyRateLimitUntilMs] = useState<number | null>(null);
   const [startRetryNotBeforeMs, setStartRetryNotBeforeMs] = useState<number | null>(null);
+  const [phaseSkipVote, setPhaseSkipVote] = useState<{ phase: "playing" | "reveal"; round: number } | null>(null);
   const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
   const animeVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -446,6 +450,10 @@ export function RoomPlayPage() {
       round: state.round,
       totalRounds: state.totalRounds,
       deadlineMs: state.deadlineMs,
+      guessDoneCount: state.guessDoneCount,
+      guessTotalCount: state.guessTotalCount,
+      revealSkipCount: state.revealSkipCount,
+      revealSkipTotalCount: state.revealSkipTotalCount,
       previewUrl: state.previewUrl,
       media: state.media,
       choices: state.choices,
@@ -627,6 +635,17 @@ export function RoomPlayPage() {
         roomCode,
         playerId: session.playerId,
       });
+    },
+    onMutate: () => {
+      if (!state) return;
+      if (state.state !== "playing" && state.state !== "reveal") return;
+      setPhaseSkipVote({
+        phase: state.state,
+        round: state.round,
+      });
+    },
+    onError: () => {
+      setPhaseSkipVote(null);
     },
     onSuccess: () => snapshotQuery.refetch(),
   });
@@ -820,6 +839,38 @@ export function RoomPlayPage() {
     submittedText.round === state.round;
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
+  const hasLockedGuessVote =
+    state?.state === "playing" &&
+    phaseSkipVote?.phase === "playing" &&
+    phaseSkipVote.round === state.round;
+  const hasLockedRevealVote =
+    state?.state === "reveal" &&
+    phaseSkipVote?.phase === "reveal" &&
+    phaseSkipVote.round === state.round;
+  const skipGuessDisabled =
+    skipMutation.isPending ||
+    !session.playerId ||
+    Boolean(currentPlayer?.hasAnsweredCurrentRound) ||
+    hasLockedGuessVote;
+  const skipRevealDisabled =
+    skipMutation.isPending ||
+    !session.playerId ||
+    hasLockedRevealVote;
+
+  useEffect(() => {
+    if (!phaseSkipVote) return;
+    if (!state) {
+      setPhaseSkipVote(null);
+      return;
+    }
+    if (
+      state.state !== phaseSkipVote.phase ||
+      state.round !== phaseSkipVote.round ||
+      (state.state !== "playing" && state.state !== "reveal")
+    ) {
+      setPhaseSkipVote(null);
+    }
+  }, [phaseSkipVote, state]);
 
   useEffect(() => {
     const iframe = youtubeIframeRef.current;
@@ -1221,20 +1272,48 @@ export function RoomPlayPage() {
                 <strong>Manche {roundLabel}</strong>
               </div>
 
-              <div className={`sound-visual${revealVideoActive ? " reveal-active" : ""}`}>
-                <div className="wave-bars" aria-hidden="true">
-                  {WAVE_BARS.map((bar) => (
-                    <span
-                      key={bar.key}
-                      style={{
-                        height: `${bar.heightPercent}%`,
-                        animationDelay: `${bar.delaySec}s`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <div className="sound-timeline">
-                  <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
+              <div className={`sound-visual media-shell${revealVideoActive ? " reveal-active" : ""}`}>
+                {activeAnimeVideoSource && (
+                  <video
+                    ref={animeVideoRef}
+                    key={stableAnimeVideoPlayback?.key ?? "none"}
+                    className="media-video-layer anime-video-layer"
+                    src={activeAnimeVideoSource}
+                    preload="auto"
+                    playsInline
+                    onError={() => {
+                      setAudioError(true);
+                    }}
+                  />
+                )}
+                {activeYoutubeEmbed && (
+                  <iframe
+                    ref={youtubeIframeRef}
+                    key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
+                    className="media-video-layer youtube-video-layer"
+                    src={activeYoutubeEmbed}
+                    title="Blindtest playback"
+                    allow="autoplay; encrypted-media"
+                    onError={() => {
+                      setAudioError(true);
+                    }}
+                  />
+                )}
+                <div className="media-wave-layer" aria-hidden="true">
+                  <div className="wave-bars">
+                    {WAVE_BARS.map((bar) => (
+                      <span
+                        key={bar.key}
+                        style={{
+                          height: `${bar.heightPercent}%`,
+                          animationDelay: `${bar.delaySec}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <div className="sound-timeline">
+                    <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
+                  </div>
                 </div>
               </div>
             </>
@@ -1456,6 +1535,22 @@ export function RoomPlayPage() {
             </form>
           )}
 
+          {state?.state === "playing" && (
+            <div className="phase-skip-panel">
+              <button
+                className="ghost-btn"
+                type="button"
+                disabled={skipGuessDisabled}
+                onClick={() => skipMutation.mutate()}
+              >
+                {hasLockedGuessVote ? "En attente des autres..." : "Skip"}
+              </button>
+              <p className="status">
+                Validation: <strong>{state.guessDoneCount}/{state.guessTotalCount}</strong>
+              </p>
+            </div>
+          )}
+
           {(state?.state === "reveal" || state?.state === "leaderboard") &&
             state?.reveal && (
               <div className="reveal-box large reveal-glass">
@@ -1477,6 +1572,22 @@ export function RoomPlayPage() {
                 </div>
               </div>
             )}
+
+          {state?.state === "reveal" && (
+            <div className="phase-skip-panel">
+              <button
+                className="ghost-btn"
+                type="button"
+                disabled={skipRevealDisabled}
+                onClick={() => skipMutation.mutate()}
+              >
+                {hasLockedRevealVote ? "En attente des autres..." : "Next"}
+              </button>
+              <p className="status">
+                Votes Next: <strong>{state.revealSkipCount}/{state.revealSkipTotalCount}</strong>
+              </p>
+            </div>
+          )}
 
           {state?.state === "results" && (
             <div className="podium-panel">
@@ -1508,44 +1619,6 @@ export function RoomPlayPage() {
               </div>
             </div>
           )}
-
-          {!isResults && activeAnimeVideoSource && (
-            <div className="blindtest-video-shell">
-              <video
-                ref={animeVideoRef}
-                key={stableAnimeVideoPlayback?.key ?? "none"}
-                className={
-                  state?.state === "playing"
-                    ? "anime-video-hidden"
-                    : state?.state === "reveal" || state?.state === "leaderboard"
-                      ? "anime-video-reveal"
-                      : "anime-video-hidden"
-                }
-                src={activeAnimeVideoSource}
-                preload="auto"
-                playsInline
-                onError={() => {
-                  setAudioError(true);
-                }}
-              />
-            </div>
-          )}
-
-          {!isResults && activeYoutubeEmbed && (
-          <div className="blindtest-video-shell">
-            <iframe
-              ref={youtubeIframeRef}
-              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
-              className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
-              src={activeYoutubeEmbed}
-              title="Blindtest playback"
-              allow="autoplay; encrypted-media"
-              onError={() => {
-                setAudioError(true);
-              }}
-            />
-          </div>
-        )}
 
           <p
             className={
@@ -1592,8 +1665,7 @@ export function RoomPlayPage() {
             {readyErrorCode === "PLAYER_NOT_FOUND" && "Ta session joueur a expiré. Rejoins la room."}
             {kickErrorCode === "HOST_ONLY" && "Seul le host peut éjecter un joueur."}
             {replayErrorCode === "HOST_ONLY" && "Seul le host peut relancer une partie."}
-            {skipErrorCode === "HOST_ONLY" && "Seul le host peut passer automatiquement la manche."}
-            {skipErrorCode === "INVALID_STATE" && "La manche ne peut pas être passée dans cet état."}
+            {skipErrorCode === "INVALID_STATE" && "Le vote Skip/Next n'est pas disponible dans cet état."}
             {chatMutation.isError && "Impossible d'envoyer le message."}
             {!session.playerId && "Tu dois rejoindre la room pour répondre."}
             {snapshotQuery.isError && "Synchronisation impossible."}

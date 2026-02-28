@@ -7,6 +7,10 @@ export type LiveRoundState = {
   round: number;
   totalRounds: number;
   deadlineMs: number | null;
+  guessDoneCount: number;
+  guessTotalCount: number;
+  revealSkipCount: number;
+  revealSkipTotalCount: number;
   previewUrl: string | null;
   media: {
     provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";

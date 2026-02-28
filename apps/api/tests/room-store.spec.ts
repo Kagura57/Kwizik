@@ -281,9 +281,6 @@ describe("RoomStore gameplay progression", () => {
       host.value.playerId,
       `${round1Track?.title ?? ""} - ${round1Track?.artist ?? ""}`,
     );
-    nowMs = 40;
-    store.submitAnswer(created.roomCode, guest.value.playerId, "wrong title");
-
     nowMs = 110;
     const revealRound1 = store.roomState(created.roomCode);
     expect(revealRound1?.state).toBe("reveal");
@@ -299,8 +296,8 @@ describe("RoomStore gameplay progression", () => {
       {
         playerId: guest.value.playerId,
         displayName: "Guest",
-        answer: "wrong title",
-        submitted: true,
+        answer: null,
+        submitted: false,
         isCorrect: false,
       },
     ]);
@@ -364,6 +361,191 @@ describe("RoomStore gameplay progression", () => {
     expect((winner?.score ?? 0) > 0).toBe(true);
     expect(loser?.displayName).toBe("Guest");
     expect(loser?.score).toBe(0);
+  });
+
+  it("moves to reveal early when all players are done via answer or skip", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 2,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    const guest = store.joinRoom(roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.guessDoneCount).toBe(0);
+    expect(playing?.guessTotalCount).toBe(2);
+    const roundTrack = FIXTURE_TRACKS.find((track) => track.id === playing?.media?.trackId);
+    expect(roundTrack).toBeDefined();
+
+    nowMs = 10;
+    const hostAnswer = store.submitAnswer(
+      roomCode,
+      host.value.playerId,
+      `${roundTrack?.title ?? ""} - ${roundTrack?.artist ?? ""}`,
+    );
+    expect(hostAnswer.status).toBe("ok");
+    if (hostAnswer.status === "ok") {
+      expect(hostAnswer.accepted).toBe(true);
+    }
+
+    nowMs = 12;
+    const guestSkip = store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(guestSkip.status).toBe("ok");
+    if (guestSkip.status === "ok") {
+      expect(guestSkip.accepted).toBe(true);
+      expect(guestSkip.state).toBe("reveal");
+    }
+
+    const reveal = store.roomState(roomCode);
+    expect(reveal?.state).toBe("reveal");
+    expect(reveal?.reveal?.title).toBe(roundTrack?.title);
+  });
+
+  it("moves to next round after unanimous reveal next votes", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 2,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    const guest = store.joinRoom(roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    const roundTrack = FIXTURE_TRACKS.find((track) => track.id === playing?.media?.trackId);
+    expect(roundTrack).toBeDefined();
+
+    nowMs = 10;
+    store.submitAnswer(
+      roomCode,
+      host.value.playerId,
+      `${roundTrack?.title ?? ""} - ${roundTrack?.artist ?? ""}`,
+    );
+
+    nowMs = 11;
+    store.skipCurrentRound(roomCode, guest.value.playerId);
+    const reveal = store.roomState(roomCode);
+    expect(reveal?.state).toBe("reveal");
+    expect(reveal?.revealSkipCount).toBe(0);
+    expect(reveal?.revealSkipTotalCount).toBe(2);
+
+    nowMs = 12;
+    const firstVote = store.skipCurrentRound(roomCode, host.value.playerId);
+    expect(firstVote.status).toBe("ok");
+    if (firstVote.status === "ok") {
+      expect(firstVote.accepted).toBe(true);
+      expect(firstVote.state).toBe("reveal");
+    }
+
+    nowMs = 13;
+    const secondVote = store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(secondVote.status).toBe("ok");
+    if (secondVote.status === "ok") {
+      expect(secondVote.accepted).toBe(true);
+      expect(secondVote.state).toBe("playing");
+      expect(secondVote.round).toBe(2);
+    }
+  });
+
+  it("ends game when reveal next votes are unanimous on final round", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS.slice(0, 1),
+      config: {
+        countdownMs: 5,
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    const guest = store.joinRoom(roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    const roundTrack = FIXTURE_TRACKS.find((track) => track.id === playing?.media?.trackId);
+    expect(roundTrack).toBeDefined();
+
+    nowMs = 10;
+    store.submitAnswer(
+      roomCode,
+      host.value.playerId,
+      `${roundTrack?.title ?? ""} - ${roundTrack?.artist ?? ""}`,
+    );
+    nowMs = 11;
+    store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(store.roomState(roomCode)?.state).toBe("reveal");
+
+    nowMs = 12;
+    store.skipCurrentRound(roomCode, host.value.playerId);
+    nowMs = 13;
+    const finalVote = store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(finalVote.status).toBe("ok");
+    if (finalVote.status === "ok") {
+      expect(finalVote.state).toBe("results");
+    }
+
+    expect(store.roomState(roomCode)?.state).toBe("results");
   });
 
   it("auto-validates latest draft answer when text round ends", async () => {

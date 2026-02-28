@@ -49,6 +49,9 @@ function syncErrorMessage(code: string | null | undefined) {
   if (normalized === "ANILIST_COLLECTION_GRAPHQL_ERROR") {
     return "AniList a retourne une erreur GraphQL. Reessaie dans quelques secondes.";
   }
+  if (normalized === "ANIME_CATALOG_EMPTY") {
+    return "Le catalogue anime local est vide. Laisse l'API finir son rafraichissement AnimeThemes puis relance.";
+  }
   if (normalized.startsWith("ANILIST_COLLECTION_HTTP_")) {
     return `AniList a retourne ${normalized.replace("ANILIST_COLLECTION_HTTP_", "HTTP ")}. Reessaie dans quelques secondes.`;
   }

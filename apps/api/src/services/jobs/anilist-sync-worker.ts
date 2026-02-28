@@ -138,6 +138,12 @@ async function mapTitlesToAnimeIds(normalizedTitles: string[]) {
   return mapped;
 }
 
+async function countAnimeCatalogAliases() {
+  const result = await pool.query<{ total: string }>("select count(*)::text as total from anime_catalog_alias");
+  const value = Number.parseInt(result.rows[0]?.total ?? "0", 10);
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
 async function syncAniListLibrary(input: { userId: string; runId: number }) {
   const link = await getAniListLinkForUser(input.userId);
   const username = link?.anilistUsername?.trim() ?? "";
@@ -167,6 +173,12 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
   }
 
   const normalizedTitles = [...normalizedToStatus.keys()];
+  if (process.env.DATABASE_URL && normalizedTitles.length > 0) {
+    const aliasCount = await countAnimeCatalogAliases();
+    if (aliasCount <= 0) {
+      throw new Error("ANIME_CATALOG_EMPTY");
+    }
+  }
   const titleMap = process.env.DATABASE_URL ? await mapTitlesToAnimeIds(normalizedTitles) : new Map<string, number>();
 
   for (const [normalizedTitle, status] of normalizedToStatus.entries()) {

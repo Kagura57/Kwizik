@@ -1192,22 +1192,74 @@ select option {
 
 .sound-visual {
   border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 14px;
-  padding: 14px 14px 10px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 14% 16%, rgba(255, 140, 55, 0.26), transparent 42%),
+    radial-gradient(circle at 86% 78%, rgba(54, 214, 180, 0.22), transparent 48%),
+    rgba(255, 255, 255, 0.03);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.3);
 }
 
 .sound-visual.reveal-active {
   border-color: rgba(255, 232, 111, 0.65);
-  box-shadow: 0 0 0 2px rgba(255, 232, 111, 0.15);
+  box-shadow:
+    0 0 0 2px rgba(255, 232, 111, 0.15),
+    0 18px 44px rgba(0, 0, 0, 0.34);
 }
 
 .sound-visual.large {
-  min-height: 240px;
+  min-height: 260px;
+}
+
+.media-shell {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  isolation: isolate;
+  display: grid;
+  align-content: end;
+  padding: clamp(10px, 1.6vw, 16px);
+}
+
+.media-video-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+  background: #000;
+}
+
+.anime-video-layer {
+  object-fit: cover;
+}
+
+.media-shell.reveal-active .media-video-layer {
+  opacity: 1;
+}
+
+.media-wave-layer {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  align-content: end;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.media-shell.reveal-active .media-wave-layer {
+  opacity: 0;
+  transform: translateY(10px);
 }
 
 .wave-bars {
-  height: 150px;
+  height: clamp(90px, 28vw, 170px);
   display: grid;
   grid-template-columns: repeat(48, minmax(0, 1fr));
   gap: 5px;
@@ -1216,14 +1268,14 @@ select option {
 
 .projection-stage .wave-bars {
   grid-template-columns: repeat(64, minmax(0, 1fr));
-  height: 180px;
+  height: clamp(110px, 22vw, 190px);
 }
 
 .wave-bars span {
   width: 100%;
   border-radius: 6px 6px 2px 2px;
   background: linear-gradient(180deg, #6ee5c6 0%, #2fae8f 100%);
-  opacity: 0.82;
+  opacity: 0.88;
   animation: pulse-bar 1.15s ease-in-out infinite alternate;
 }
 
@@ -1254,6 +1306,26 @@ select option {
   background: linear-gradient(90deg, var(--accent-a), var(--accent-b));
   transition: width 120ms linear;
   will-change: width;
+}
+
+.phase-skip-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.phase-skip-panel .ghost-btn {
+  min-width: 120px;
+}
+
+.phase-skip-panel .status {
+  min-height: 0;
+  text-align: right;
 }
 
 .waiting-box {
@@ -1747,24 +1819,6 @@ select option {
   border: 0;
 }
 
-.blindtest-video-shell {
-  width: 100%;
-  display: block;
-  pointer-events: none;
-  user-select: none;
-}
-
-.blindtest-video-reveal {
-  width: 100%;
-  max-width: 100%;
-  aspect-ratio: 16 / 9;
-  border: 1px solid rgba(255, 232, 111, 0.4);
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.45);
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
-}
-
 .anime-video-hidden {
   position: fixed;
   width: 320px;
@@ -1774,17 +1828,6 @@ select option {
   visibility: hidden;
   pointer-events: none;
   border: 0;
-}
-
-.anime-video-reveal {
-  width: 100%;
-  max-width: 100%;
-  aspect-ratio: 16 / 9;
-  border: 1px solid rgba(255, 232, 111, 0.4);
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.45);
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.35);
-  pointer-events: none;
 }
 
 .projection-audio-status {
@@ -1865,5 +1908,14 @@ select option {
     grid-template-columns: 1fr;
     justify-items: center;
     text-align: center;
+  }
+
+  .phase-skip-panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .phase-skip-panel .status {
+    text-align: left;
   }
 }
