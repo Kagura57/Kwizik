@@ -48,8 +48,25 @@ create table if not exists verification (
 create table if not exists profiles (
   user_id text primary key references "user"(id) on delete cascade,
   display_name text not null,
+  title_preference text not null default 'mixed' check (title_preference in ('romaji', 'english', 'mixed')),
   created_at timestamptz not null default now()
 );
+
+alter table profiles
+  add column if not exists title_preference text not null default 'mixed';
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_title_preference_check'
+  ) then
+    alter table profiles
+      add constraint profiles_title_preference_check
+      check (title_preference in ('romaji', 'english', 'mixed'));
+  end if;
+end $$;
 
 create table if not exists matches (
   id bigserial primary key,
@@ -319,11 +336,18 @@ create table if not exists anime_theme_videos (
   theme_number integer,
   video_key text not null unique,
   webm_url text not null,
+  song_title text,
+  song_artists text[] not null default '{}',
   resolution integer,
   is_creditless boolean not null default false,
   is_playable boolean not null default true,
   updated_at timestamptz not null default now()
 );
+
+alter table anime_theme_videos
+  add column if not exists song_title text;
+alter table anime_theme_videos
+  add column if not exists song_artists text[] not null default '{}';
 
 create table if not exists anilist_account_links (
   user_id text primary key references "user"(id) on delete cascade,

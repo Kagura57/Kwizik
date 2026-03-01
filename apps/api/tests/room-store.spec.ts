@@ -241,6 +241,10 @@ function makeAniListThemeRows(count: number, offset = 0) {
       theme_type: "OP",
       theme_number: 1,
       title_romaji: `Anime ${value}`,
+      title_english: `Anime EN ${value}`,
+      song_title: `Song ${value}`,
+      song_artists: [`Artist ${value}`],
+      aliases: [`Alias ${value}`],
     };
   });
 }
@@ -827,7 +831,7 @@ describe("RoomStore gameplay progression", () => {
     const round3Playing = store.roomState(roomCode);
     expect(round3Playing?.state).toBe("playing");
     expect(round3Playing?.mode).toBe("mcq");
-    expect(round3Playing?.choices?.includes(round1Label)).toBe(false);
+    expect((round3Playing?.choices ?? []).some((choice) => choice.value === round1Label)).toBe(false);
   });
 
   it("downgrades MCQ to text when coherent distractors are insufficient", async () => {
@@ -907,7 +911,7 @@ describe("RoomStore gameplay progression", () => {
     const correct = activeTrack ? `${activeTrack.title} - ${activeTrack.artist}` : "";
     const hasJapaneseScript = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u;
     const correctIsJapanese = hasJapaneseScript.test(correct);
-    const sameLanguageCount = choices.filter((choice) => hasJapaneseScript.test(choice) === correctIsJapanese).length;
+    const sameLanguageCount = choices.filter((choice) => hasJapaneseScript.test(choice.value) === correctIsJapanese).length;
 
     expect(sameLanguageCount >= 3).toBe(true);
   });
@@ -1171,6 +1175,9 @@ describe("RoomStore gameplay progression", () => {
       const queryParams = querySpy.mock.calls[0]?.[1] as unknown[] | undefined;
       expect(Array.isArray(queryParams)).toBe(true);
       expect(queryParams ?? []).toHaveLength(2);
+      const state = store.roomState(created.roomCode);
+      expect(state?.answerSuggestions.includes("Anime EN 1")).toBe(true);
+      expect(state?.answerSuggestions.includes("Alias 1")).toBe(true);
     } finally {
       if (previousDatabaseUrl === undefined) {
         delete process.env.DATABASE_URL;
@@ -1228,7 +1235,7 @@ describe("RoomStore gameplay progression", () => {
     expect(playing?.state).toBe("playing");
     expect(playing?.mode).toBe("mcq");
     expect(playing?.choices).toHaveLength(4);
-    expect((playing?.choices ?? []).some((choice) => choice.startsWith("Choix alternatif"))).toBe(false);
+    expect((playing?.choices ?? []).some((choice) => choice.value.startsWith("Choix alternatif"))).toBe(false);
   });
 
   it("refuses to start when fetched track pool is below configured max rounds", async () => {

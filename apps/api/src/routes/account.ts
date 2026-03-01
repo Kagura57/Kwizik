@@ -3,7 +3,7 @@ import { readSessionFromHeaders } from "../auth/client";
 import { aniListSyncRunRepository } from "../repositories/AniListSyncRunRepository";
 import { musicAccountRepository, type MusicProvider } from "../repositories/MusicAccountRepository";
 import { matchRepository } from "../repositories/MatchRepository";
-import { profileRepository } from "../repositories/ProfileRepository";
+import { profileRepository, type TitlePreference } from "../repositories/ProfileRepository";
 import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLibrarySyncRepository } from "../repositories/UserLibrarySyncRepository";
 import {
@@ -37,6 +37,11 @@ function parseLimit(raw: string | undefined, fallback: number) {
   return Math.max(1, Math.min(parsed, 200));
 }
 
+function parseTitlePreference(raw: string): TitlePreference | null {
+  if (raw === "romaji" || raw === "english" || raw === "mixed") return raw;
+  return null;
+}
+
 function parseAniListLibraryLimit(raw: string | undefined, fallback: number) {
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
@@ -65,6 +70,43 @@ export const accountRoutes = new Elysia({ prefix: "/account" })
       session: authContext.session,
       user: authContext.user,
       profile,
+    };
+  })
+  .get("/preferences/title", async ({ headers, set }) => {
+    const authContext = await requireSession(headers as unknown, set);
+    if (!authContext) {
+      return { ok: false, error: "UNAUTHORIZED" };
+    }
+    const profile = await profileRepository.getProfile(authContext.user.id);
+    return {
+      ok: true as const,
+      titlePreference: profile?.titlePreference ?? ("mixed" as const),
+    };
+  })
+  .post("/preferences/title", async ({ headers, body, set }) => {
+    const authContext = await requireSession(headers as unknown, set);
+    if (!authContext) {
+      return { ok: false, error: "UNAUTHORIZED" };
+    }
+    const rawPreference = readStringField(body, "titlePreference");
+    const titlePreference = parseTitlePreference(rawPreference);
+    if (!titlePreference) {
+      set.status = 400;
+      return { ok: false as const, error: "INVALID_TITLE_PREFERENCE" as const };
+    }
+
+    const existing = await profileRepository.getProfile(authContext.user.id);
+    if (!existing) {
+      await profileRepository.upsertProfile({
+        userId: authContext.user.id,
+        displayName: authContext.user.name,
+      });
+    }
+    const updated = await profileRepository.updateTitlePreference(authContext.user.id, titlePreference);
+
+    return {
+      ok: true as const,
+      titlePreference: updated?.titlePreference ?? titlePreference,
     };
   })
   .get("/history", async ({ headers, set }) => {

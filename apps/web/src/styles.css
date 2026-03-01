@@ -773,6 +773,18 @@ select option {
   font-weight: 700;
 }
 
+.reveal-song-title {
+  margin-top: 6px;
+  color: rgba(255, 245, 204, 0.95);
+  font-weight: 700;
+}
+
+.reveal-song-artists {
+  margin-top: 2px;
+  color: rgba(232, 240, 255, 0.78);
+  font-size: 0.9rem;
+}
+
 .leaderboard-list {
   margin: 0;
   padding: 0;
@@ -1256,6 +1268,31 @@ select option {
 .media-shell.reveal-active .media-wave-layer {
   opacity: 0;
   transform: translateY(10px);
+}
+
+.media-loading-overlay {
+  position: absolute;
+  inset: auto 16px 16px 16px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 12px;
+  background: rgba(8, 10, 18, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.media-loading-overlay p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.media-loading-overlay small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .wave-bars {

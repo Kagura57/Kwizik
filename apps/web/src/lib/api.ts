@@ -49,12 +49,20 @@ export class HttpStatusError extends Error {
   }
 }
 
+export type TitlePreference = "romaji" | "english" | "mixed";
+export type RoundChoice = {
+  value: string;
+  titleRomaji: string;
+  titleEnglish: string | null;
+  themeLabel: string;
+};
+
 export type RoomState = {
   roomCode: string;
-  state: "waiting" | "countdown" | "playing" | "reveal" | "leaderboard" | "results";
+  state: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
   round: number;
   mode: "mcq" | "text" | null;
-  choices: string[] | null;
+  choices: RoundChoice[] | null;
   serverNowMs: number;
   playerCount: number;
   hostPlayerId: string | null;
@@ -117,6 +125,8 @@ export type RoomState = {
   deadlineMs: number | null;
   guessDoneCount: number;
   guessTotalCount: number;
+  mediaReadyCount: number;
+  mediaReadyTotalCount: number;
   revealSkipCount: number;
   revealSkipTotalCount: number;
   previewUrl: string | null;
@@ -134,6 +144,8 @@ export type RoomState = {
     titleRomaji: string | null;
     artist: string;
     artistRomaji: string | null;
+    songTitle: string | null;
+    songArtists: string[];
     acceptedAnswer: string;
     mode: "mcq" | "text";
     previewUrl: string | null;
@@ -170,7 +182,7 @@ export type RoomState = {
 export type RoomResults = {
   roomCode: string;
   categoryQuery: string;
-  state: "waiting" | "countdown" | "playing" | "reveal" | "leaderboard" | "results";
+  state: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
   round: number;
   ranking: Array<{
     rank: number;
@@ -193,7 +205,7 @@ export type RealtimeRoomSnapshot = {
 export type PublicRoomSummary = {
   roomCode: string;
   isPublic: boolean;
-  state: "waiting" | "countdown" | "playing" | "reveal" | "leaderboard" | "results";
+  state: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
   round: number;
   totalRounds: number;
   playerCount: number;
@@ -607,6 +619,23 @@ export async function reportRoomMediaUnavailable(input: {
   });
 }
 
+export async function markRoomMediaReady(input: {
+  roomCode: string;
+  playerId: string;
+  trackId: string;
+}) {
+  return requestJson<{
+    ok: true;
+    accepted: boolean;
+    state: string;
+    round: number;
+    deadlineMs: number | null;
+  }>("/quiz/media/ready", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function submitRoomAnswer(input: {
   roomCode: string;
   playerId: string;
@@ -862,6 +891,23 @@ export async function getAniListRecoveredLibrary(input?: { limit?: number }) {
       syncedAtMs: number;
     }>;
   }>(path);
+}
+
+export async function getAccountTitlePreference() {
+  return requestJson<{
+    ok: true;
+    titlePreference: TitlePreference;
+  }>("/account/preferences/title");
+}
+
+export async function updateAccountTitlePreference(input: { titlePreference: TitlePreference }) {
+  return requestJson<{
+    ok: true;
+    titlePreference: TitlePreference;
+  }>("/account/preferences/title", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function getMusicProviderLinks() {

@@ -16,6 +16,12 @@ type AnimeThemesEntry = {
 type AnimeTheme = {
   type?: string;
   sequence?: number;
+  song?: {
+    title?: string | null;
+    artists?: Array<{
+      name?: string | null;
+    } | null> | null;
+  } | null;
   animethemeentries?: AnimeThemesEntry[];
 };
 
@@ -128,21 +134,25 @@ async function upsertThemeVideo(input: {
   themeType: "OP" | "ED";
   themeNumber: number | null;
   webmUrl: string;
+  songTitle: string | null;
+  songArtists: string[];
   resolution: number | null;
   isCreditless: boolean;
 }) {
   await pool.query(
     `
       insert into anime_theme_videos
-        (anime_id, theme_type, theme_number, video_key, webm_url, resolution, is_creditless, is_playable, updated_at)
+        (anime_id, theme_type, theme_number, video_key, webm_url, song_title, song_artists, resolution, is_creditless, is_playable, updated_at)
       values
-        ($1, $2, $3, $4, $5, $6, $7, true, now())
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, now())
       on conflict (video_key)
       do update set
         anime_id = excluded.anime_id,
         theme_type = excluded.theme_type,
         theme_number = excluded.theme_number,
         webm_url = excluded.webm_url,
+        song_title = excluded.song_title,
+        song_artists = excluded.song_artists,
         resolution = excluded.resolution,
         is_creditless = excluded.is_creditless,
         is_playable = true,
@@ -154,6 +164,8 @@ async function upsertThemeVideo(input: {
       input.themeNumber,
       input.videoKey,
       input.webmUrl,
+      input.songTitle,
+      input.songArtists,
       input.resolution,
       input.isCreditless,
     ],
@@ -200,7 +212,7 @@ export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
   }
 
   let pageUrl: string | null =
-    "https://api.animethemes.moe/anime?include=animethemes.animethemeentries.videos&page[size]=100";
+    "https://api.animethemes.moe/anime?include=animethemes.animethemeentries.videos,animethemes.song.artists&page[size]=100";
   let pageCount = 0;
   let animeCount = 0;
   let aliasCount = 0;
@@ -233,6 +245,14 @@ export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
       for (const theme of themes) {
         const themeType = toThemeType(theme.type);
         if (!themeType) continue;
+        const songTitle = theme.song?.title?.trim() ?? null;
+        const songArtists = Array.from(
+          new Set(
+            (theme.song?.artists ?? [])
+              .map((artist) => artist?.name?.trim() ?? "")
+              .filter((name) => name.length > 0),
+          ),
+        );
         const themeNumber =
           typeof theme.sequence === "number" && Number.isFinite(theme.sequence)
             ? Math.max(1, Math.round(theme.sequence))
@@ -260,6 +280,8 @@ export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
               themeNumber,
               videoKey: key,
               webmUrl,
+              songTitle,
+              songArtists,
               resolution: clampResolution(video.resolution),
               isCreditless: Boolean(video.nc),
             });

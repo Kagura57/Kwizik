@@ -27,6 +27,7 @@ type AniListCollectionPayload = {
               english?: string | null;
               native?: string | null;
             } | null;
+            synonyms?: string[] | null;
           } | null;
         }>;
       }>;
@@ -49,6 +50,7 @@ query ($userName: String) {
             english
             native
           }
+          synonyms
         }
       }
     }
@@ -66,26 +68,77 @@ function normalizeAnimeAlias(value: string) {
     .trim();
 }
 
+export function buildAnimeAcronym(value: string) {
+  const normalized = normalizeAnimeAlias(value);
+  if (normalized.length <= 0) return "";
+  const tokens = normalized
+    .split(" ")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (tokens.length <= 1) return "";
+  const letters = tokens
+    .map((part) => part[0])
+    .filter((char): char is string => typeof char === "string" && char.length > 0);
+  const acronym = letters.join("");
+  return acronym.length >= 2 ? acronym.toUpperCase() : "";
+}
+
 export function normalizeAniListListStatus(input: string | null | undefined): "WATCHING" | "COMPLETED" | null {
   if (input === "CURRENT") return "WATCHING";
   if (input === "COMPLETED") return "COMPLETED";
   return null;
 }
 
-function extractTitles(entry: {
+export function collectAniListAliasCandidates(entry: {
   media?: {
     title?: {
       romaji?: string | null;
       english?: string | null;
       native?: string | null;
     } | null;
+    synonyms?: string[] | null;
   } | null;
 }) {
   const title = entry.media?.title;
-  const values = [title?.romaji, title?.english, title?.native]
+  const values = [title?.romaji, title?.english, title?.native, ...(entry.media?.synonyms ?? [])]
     .map((value) => value?.trim() ?? "")
     .filter((value) => value.length > 0);
   return Array.from(new Set(values));
+}
+
+type AliasUpsertRow = {
+  animeId: number;
+  alias: string;
+  normalizedAlias: string;
+  aliasType: "synonym" | "acronym";
+};
+
+async function upsertAnimeAliases(rows: AliasUpsertRow[]) {
+  if (rows.length <= 0) return;
+
+  const values: unknown[] = [];
+  const placeholders: string[] = [];
+  let index = 1;
+  for (const row of rows) {
+    placeholders.push(`($${index}, $${index + 1}, $${index + 2}, $${index + 3})`);
+    values.push(row.animeId, row.alias, row.normalizedAlias, row.aliasType);
+    index += 4;
+  }
+
+  await pool.query(
+    `
+      insert into anime_catalog_alias (anime_id, alias, normalized_alias, alias_type)
+      values ${placeholders.join(", ")}
+      on conflict (anime_id, normalized_alias)
+      do update set
+        alias = excluded.alias,
+        alias_type = case
+          when anime_catalog_alias.alias_type = 'canonical' then anime_catalog_alias.alias_type
+          else excluded.alias_type
+        end
+    `,
+    values,
+  );
 }
 
 async function fetchAniListCollection(username: string) {
@@ -157,13 +210,20 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
   const staged: Array<{ animeId: number; listStatus: "WATCHING" | "COMPLETED" }> = [];
   const seen = new Set<number>();
 
+  const collectedEntries: Array<{
+    status: "WATCHING" | "COMPLETED";
+    aliases: string[];
+  }> = [];
   const normalizedToStatus = new Map<string, "WATCHING" | "COMPLETED">();
   for (const list of lists) {
     for (const entry of list.entries ?? []) {
       const status = normalizeAniListListStatus(entry.status ?? null);
       if (!status) continue;
-      for (const title of extractTitles(entry)) {
-        const normalized = normalizeAnimeAlias(title);
+      const aliases = collectAniListAliasCandidates(entry);
+      if (aliases.length <= 0) continue;
+      collectedEntries.push({ status, aliases });
+      for (const value of aliases) {
+        const normalized = normalizeAnimeAlias(value);
         if (!normalized) continue;
         if (!normalizedToStatus.has(normalized)) {
           normalizedToStatus.set(normalized, status);
@@ -181,14 +241,47 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
   }
   const titleMap = process.env.DATABASE_URL ? await mapTitlesToAnimeIds(normalizedTitles) : new Map<string, number>();
 
-  for (const [normalizedTitle, status] of normalizedToStatus.entries()) {
-    const animeId = titleMap.get(normalizedTitle);
-    if (!animeId || seen.has(animeId)) continue;
-    seen.add(animeId);
-    staged.push({
+  const aliasRowsByKey = new Map<string, AliasUpsertRow>();
+  const pushAlias = (animeId: number, alias: string, aliasType: "synonym" | "acronym") => {
+    const normalizedAlias = normalizeAnimeAlias(alias);
+    if (normalizedAlias.length < 2) return;
+    const key = `${animeId}:${normalizedAlias}`;
+    const existing = aliasRowsByKey.get(key);
+    if (existing && existing.aliasType === "acronym") return;
+    aliasRowsByKey.set(key, {
       animeId,
-      listStatus: status,
+      alias,
+      normalizedAlias,
+      aliasType,
     });
+  };
+
+  for (const entry of collectedEntries) {
+    const normalizedAliases = entry.aliases
+      .map((value) => normalizeAnimeAlias(value))
+      .filter((value) => value.length > 0);
+    const animeId = normalizedAliases.map((value) => titleMap.get(value)).find((value) => typeof value === "number");
+    if (!animeId) continue;
+
+    if (!seen.has(animeId)) {
+      seen.add(animeId);
+      staged.push({
+        animeId,
+        listStatus: entry.status,
+      });
+    }
+
+    for (const alias of entry.aliases) {
+      pushAlias(animeId, alias, "synonym");
+      const acronym = buildAnimeAcronym(alias);
+      if (acronym.length >= 2) {
+        pushAlias(animeId, acronym, "acronym");
+      }
+    }
+  }
+
+  if (process.env.DATABASE_URL && aliasRowsByKey.size > 0) {
+    await upsertAnimeAliases([...aliasRowsByKey.values()]);
   }
 
   await userAnimeLibraryRepository.setStagingForRun({

@@ -13,8 +13,15 @@ import { fetchUserLikedTracksForProviders as fetchSyncedUserLikedTracksForProvid
 import { pool } from "../db/client";
 import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLikedTrackRepository } from "../repositories/UserLikedTrackRepository";
+import { normalizeAnimeText } from "./AnimeTextNormalization";
 
 type RoundMode = "mcq" | "text";
+type RoundChoice = {
+  value: string;
+  titleRomaji: string;
+  titleEnglish: string | null;
+  themeLabel: string;
+};
 type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union";
 type RoomThemeMode = "op_only" | "ed_only" | "mix";
 type LibraryProvider = "spotify" | "deezer";
@@ -90,7 +97,7 @@ type RoomSession = {
   categoryQuery: string;
   totalRounds: number;
   roundModes: RoundMode[];
-  roundChoices: Map<number, string[]>;
+  roundChoices: Map<number, RoundChoice[]>;
   latestReveal: {
     round: number;
     trackId: string;
@@ -98,13 +105,15 @@ type RoomSession = {
     titleRomaji: string | null;
     artist: string;
     artistRomaji: string | null;
+    songTitle: string | null;
+    songArtists: string[];
     provider: MusicTrack["provider"];
     mode: RoundMode;
     acceptedAnswer: string;
     previewUrl: string | null;
     sourceUrl: string | null;
     embedUrl: string | null;
-    choices: string[] | null;
+    choices: RoundChoice[] | null;
     playerAnswers: Array<{
       playerId: string;
       displayName: string;
@@ -119,6 +128,7 @@ type RoomSession = {
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_ROUND_CONFIG = {
   countdownMs: 3_000,
+  loadingMs: 6_000,
   playingMs: 20_000,
   revealMs: 20_000,
   leaderboardMs: 0,
@@ -175,13 +185,7 @@ function randomRoomCode(length = 6): string {
 }
 
 function normalizeAnswer(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeAnimeText(value);
 }
 
 function collectAnswerVariants(track: MusicTrack) {
@@ -197,6 +201,9 @@ function collectAnswerVariants(track: MusicTrack) {
   push(track.artist);
   push(`${track.title} ${track.artist}`);
   push(asChoiceLabel(track));
+  for (const alias of track.answer?.aliases ?? []) {
+    push(alias);
+  }
 
   const titleRomaji = getRomanizedJapaneseCached(track.title);
   const artistRomaji = getRomanizedJapaneseCached(track.artist);
@@ -235,8 +242,24 @@ function asChoiceLabel(track: MusicTrack) {
   return `${track.title} - ${track.artist}`;
 }
 
+function englishTitleForTrack(track: MusicTrack) {
+  const raw = track.answer?.englishTitle?.trim() ?? "";
+  if (raw.length <= 0) return null;
+  if (normalizeAnswer(raw) === normalizeAnswer(track.title)) return null;
+  return raw;
+}
+
+function buildRoundChoice(track: MusicTrack): RoundChoice {
+  return {
+    value: asChoiceLabel(track),
+    titleRomaji: track.title,
+    titleEnglish: englishTitleForTrack(track),
+    themeLabel: track.artist,
+  };
+}
+
 function collectRoomAnswerSuggestions(
-  tracks: Array<Pick<MusicTrack, "title" | "artist">>,
+  tracks: Array<Pick<MusicTrack, "title" | "artist" | "answer">>,
   limit = ROOM_ANSWER_SUGGESTION_LIMIT,
 ) {
   const values: string[] = [];
@@ -261,6 +284,9 @@ function collectRoomAnswerSuggestions(
     push(artist);
     push(titleRomaji);
     push(artistRomaji);
+    for (const alias of track.answer?.aliases ?? []) {
+      push(alias);
+    }
 
     if (values.length >= limit) break;
   }
@@ -773,13 +799,13 @@ export class RoomStore {
     const track = session.trackPool[round - 1];
     if (!track) return [];
 
-    const correct = asChoiceLabel(track);
+    const correct = buildRoundChoice(track);
     const sourceProfile = buildChoiceProfile(track);
     const futureRoundTracks = session.trackPool.slice(round);
     const distractorCandidates = [...futureRoundTracks, ...session.distractorTrackPool]
-      .filter((candidate) => asChoiceLabel(candidate) !== correct)
+      .filter((candidate) => asChoiceLabel(candidate) !== correct.value)
       .map((candidate) => ({
-        label: asChoiceLabel(candidate),
+        choice: buildRoundChoice(candidate),
         track: candidate,
         profile: buildChoiceProfile(candidate),
       }));
@@ -790,8 +816,8 @@ export class RoomStore {
       }));
     const minimumScore = minChoiceCoherenceScore(sourceProfile.language);
 
-    const uniqueOptions = [correct];
-    const seen = new Set(uniqueOptions);
+    const uniqueOptions: RoundChoice[] = [correct];
+    const seen = new Set([correct.value]);
     const weightedPool = rankedDistractors.filter((entry) => entry.score >= minimumScore);
     while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
       const weights = weightedPool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
@@ -807,16 +833,16 @@ export class RoomStore {
         }
       }
       const selected = weightedPool.splice(selectedIndex, 1)[0];
-      if (!selected || seen.has(selected.label)) continue;
-      uniqueOptions.push(selected.label);
-      seen.add(selected.label);
+      if (!selected || seen.has(selected.choice.value)) continue;
+      uniqueOptions.push(selected.choice);
+      seen.add(selected.choice.value);
     }
 
     if (uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
       for (const distractor of rankedDistractors.sort((left, right) => right.score - left.score)) {
-        if (seen.has(distractor.label)) continue;
-        uniqueOptions.push(distractor.label);
-        seen.add(distractor.label);
+        if (seen.has(distractor.choice.value)) continue;
+        uniqueOptions.push(distractor.choice);
+        seen.add(distractor.choice.value);
         if (uniqueOptions.length >= MCQ_REQUIRED_CHOICES) break;
       }
     }
@@ -958,6 +984,10 @@ export class RoomStore {
       theme_type: string;
       theme_number: number | null;
       title_romaji: string;
+      title_english: string | null;
+      song_title: string | null;
+      song_artists: string[] | null;
+      aliases: string[] | null;
     }>(
       `
         with best_theme_video as (
@@ -966,7 +996,15 @@ export class RoomStore {
             tv.webm_url,
             tv.theme_type,
             tv.theme_number,
-            aa.title_romaji
+            aa.title_romaji,
+            aa.title_english,
+            tv.song_title,
+            tv.song_artists,
+            (
+              select array_agg(distinct al.alias)
+              from anime_catalog_alias al
+              where al.anime_id = tv.anime_id
+            ) as aliases
           from anime_theme_videos tv
           join anime_catalog_anime aa on aa.id = tv.anime_id
           where tv.is_playable = true
@@ -982,7 +1020,7 @@ export class RoomStore {
             coalesce(tv.resolution, 0) desc,
             tv.video_key desc
         )
-        select video_key, webm_url, theme_type, theme_number, title_romaji
+        select video_key, webm_url, theme_type, theme_number, title_romaji, title_english, song_title, song_artists, aliases
         from best_theme_video
         order by random()
         limit $2
@@ -992,17 +1030,28 @@ export class RoomStore {
 
     const tracks: MusicTrack[] = randomShuffle(selected.rows).map((row) => {
       const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
+      const answerAliases = Array.from(
+        new Set(
+          [row.title_english, ...(row.aliases ?? [])]
+            .map((value) => value?.trim() ?? "")
+            .filter((value) => value.length > 0),
+        ),
+      );
       return {
         provider: "animethemes",
         id: row.video_key,
         title: row.title_romaji,
         artist: themeLabel.length > 0 ? themeLabel : row.theme_type,
+        songTitle: row.song_title,
+        songArtists: row.song_artists ?? [],
         previewUrl: row.webm_url,
         sourceUrl: row.webm_url,
         audioUrl: row.webm_url,
         videoUrl: row.webm_url,
         answer: {
           canonical: row.title_romaji,
+          englishTitle: row.title_english,
+          aliases: answerAliases,
         },
       } satisfies MusicTrack;
     });
@@ -1264,10 +1313,36 @@ export class RoomStore {
     return this.sortedPlayers(session).map((player) => player.id);
   }
 
+  private loadingMsForCurrentTransition(session: RoomSession) {
+    const configured = Math.max(0, this.config.loadingMs);
+    if (configured <= 0) return 0;
+
+    const state = session.manager.state();
+    let round = 0;
+    if (state === "countdown") {
+      round = 1;
+    } else if (state === "leaderboard") {
+      round = session.manager.round() + 1;
+    } else if (state === "loading" || state === "playing" || state === "reveal") {
+      round = session.manager.round();
+    }
+    if (round <= 0) return 0;
+
+    const track = session.trackPool[round - 1] ?? null;
+    if (!track || track.provider !== "animethemes") return 0;
+    return configured;
+  }
+
   private isGuessPhaseDoneForAll(session: RoomSession) {
     const ids = this.activePlayerIds(session);
     if (ids.length <= 0) return false;
     return ids.every((playerId) => session.manager.hasGuessDone(playerId));
+  }
+
+  private isLoadingMediaReadyForAll(session: RoomSession) {
+    const ids = this.activePlayerIds(session);
+    if (ids.length <= 0) return false;
+    return ids.every((playerId) => session.manager.hasMediaReady(playerId));
   }
 
   private isRevealSkipDoneForAll(session: RoomSession) {
@@ -1278,6 +1353,12 @@ export class RoomStore {
 
   private maybeAdvanceOnUnanimousPhaseCompletion(session: RoomSession, nowMs: number) {
     const state = session.manager.state();
+    if (state === "loading" && this.isLoadingMediaReadyForAll(session)) {
+      if (session.manager.expireCurrentPhase(nowMs)) {
+        this.progressSession(session, nowMs);
+      }
+      return true;
+    }
     if (state === "playing" && this.isGuessPhaseDoneForAll(session)) {
       if (session.manager.expireCurrentPhase(nowMs)) {
         this.progressSession(session, nowMs);
@@ -1315,8 +1396,10 @@ export class RoomStore {
   }
 
   private progressSession(session: RoomSession, nowMs: number) {
+    const loadingMs = this.loadingMsForCurrentTransition(session);
     const tick = session.manager.tick({
       nowMs,
+      loadingMs,
       roundMs: this.config.playingMs,
       revealMs: this.config.revealMs,
       leaderboardMs: this.config.leaderboardMs,
@@ -1393,6 +1476,8 @@ export class RoomStore {
           titleRomaji: getRomanizedJapaneseCached(track.title),
           artist: track.artist,
           artistRomaji: getRomanizedJapaneseCached(track.artist),
+          songTitle: track.songTitle ?? null,
+          songArtists: track.songArtists ?? [],
           provider: track.provider,
           mode: roundMode,
           acceptedAnswer: asChoiceLabel(track),
@@ -2323,14 +2408,14 @@ export class RoomStore {
     const nowMs = this.now();
     this.progressSession(session, nowMs);
     const state = session.manager.state();
-    if (state !== "playing" && state !== "reveal" && state !== "leaderboard") {
+    if (state !== "loading" && state !== "playing" && state !== "reveal" && state !== "leaderboard") {
       return { status: "invalid_state" as const };
     }
 
     const currentRound = session.manager.round();
     const playingTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
     const revealTrack = session.latestReveal;
-    const activeTrack = state === "playing" ? playingTrack : revealTrack;
+    const activeTrack = state === "playing" || state === "loading" ? playingTrack : revealTrack;
     if (!activeTrack || activeTrack.provider !== "animethemes") {
       return { status: "invalid_payload" as const };
     }
@@ -2340,7 +2425,7 @@ export class RoomStore {
 
     await this.markAnimeThemeVideoUnavailable(trackId);
 
-    if (state === "playing") {
+    if (state === "loading" || state === "playing") {
       session.manager.skipPlayingRound({
         nowMs,
         roundMs: this.config.playingMs,
@@ -2352,6 +2437,37 @@ export class RoomStore {
     return {
       status: "ok" as const,
       accepted: true,
+      state: session.manager.state(),
+      round: session.manager.round(),
+      deadlineMs: session.manager.deadlineMs(),
+    };
+  }
+
+  markMediaReady(roomCode: string, playerId: string, trackId: string) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+
+    const nowMs = this.now();
+    this.progressSession(session, nowMs);
+    if (session.manager.state() !== "loading") {
+      return { status: "invalid_state" as const };
+    }
+
+    const currentRound = session.manager.round();
+    const activeTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
+    if (!activeTrack || activeTrack.provider !== "animethemes" || activeTrack.id !== trackId) {
+      return { status: "invalid_payload" as const };
+    }
+
+    const marked = session.manager.markMediaReady(playerId, nowMs);
+    if (marked.accepted) {
+      this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+    }
+
+    return {
+      status: "ok" as const,
+      accepted: marked.accepted,
       state: session.manager.state(),
       round: session.manager.round(),
       deadlineMs: session.manager.deadlineMs(),
@@ -2476,6 +2592,9 @@ export class RoomStore {
     const guessTotalCount = state === "playing" ? activePlayerIds.length : 0;
     const guessDoneCount =
       state === "playing" ? activePlayerIds.filter((playerId) => session.manager.hasGuessDone(playerId)).length : 0;
+    const mediaReadyTotalCount = state === "loading" ? activePlayerIds.length : 0;
+    const mediaReadyCount =
+      state === "loading" ? activePlayerIds.filter((playerId) => session.manager.hasMediaReady(playerId)).length : 0;
     const revealSkipTotalCount = state === "reveal" ? activePlayerIds.length : 0;
     const revealSkipCount =
       state === "reveal"
@@ -2499,7 +2618,7 @@ export class RoomStore {
         ? session.latestReveal
         : null;
     const media =
-      state === "playing" && activeTrack
+      (state === "playing" || state === "loading") && activeTrack
         ? {
             provider: activeTrack.provider,
             trackId: activeTrack.id,
@@ -2567,6 +2686,8 @@ export class RoomStore {
       deadlineMs: session.manager.deadlineMs(),
       guessDoneCount,
       guessTotalCount,
+      mediaReadyCount,
+      mediaReadyTotalCount,
       revealSkipCount,
       revealSkipTotalCount,
       previewUrl:

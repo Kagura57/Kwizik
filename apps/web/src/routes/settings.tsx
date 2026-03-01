@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
+  getAccountTitlePreference,
   getAniListRecoveredLibrary,
   getAniListLibrarySyncStatus,
   getAniListLinkStatus,
@@ -9,6 +10,8 @@ import {
   HttpStatusError,
   queueAniListLibrarySync,
   signOutAccount,
+  type TitlePreference,
+  updateAccountTitlePreference,
   updateAniListUsername,
 } from "../lib/api";
 import { useGameStore } from "../stores/gameStore";
@@ -136,6 +139,20 @@ export function SettingsPage() {
     },
   });
 
+  const titlePreferenceQuery = useQuery({
+    queryKey: ["account-title-preference"],
+    queryFn: getAccountTitlePreference,
+    enabled: Boolean(sessionQuery.data?.user),
+  });
+
+  useEffect(() => {
+    if (!sessionQuery.data?.user) return;
+    if (!titlePreferenceQuery.isSuccess) return;
+    setAccount({
+      titlePreference: titlePreferenceQuery.data.titlePreference,
+    });
+  }, [sessionQuery.data?.user, setAccount, titlePreferenceQuery.data?.titlePreference, titlePreferenceQuery.isSuccess]);
+
   useEffect(() => {
     if (usernameDirty) return;
     const username = anilistLinkQuery.data?.link?.anilistUsername ?? "";
@@ -163,6 +180,21 @@ export function SettingsPage() {
     },
   });
 
+  const updateTitlePreferenceMutation = useMutation({
+    mutationFn: (titlePreference: TitlePreference) =>
+      updateAccountTitlePreference({
+        titlePreference,
+      }),
+    onSuccess: (payload) => {
+      setAccount({
+        titlePreference: payload.titlePreference,
+      });
+    },
+    onSettled: async () => {
+      await titlePreferenceQuery.refetch();
+    },
+  });
+
   const signOutMutation = useMutation({
     mutationFn: signOutAccount,
     onSuccess: async () => {
@@ -170,6 +202,7 @@ export function SettingsPage() {
       await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
       await queryClient.invalidateQueries({ queryKey: ["anilist-link-status"] });
       await queryClient.invalidateQueries({ queryKey: ["anilist-sync-status"] });
+      await queryClient.invalidateQueries({ queryKey: ["account-title-preference"] });
       navigate({ to: "/" });
     },
   });
@@ -182,6 +215,7 @@ export function SettingsPage() {
   const lastCompletedAtMs = activeRun?.finishedAtMs ?? null;
   const recoveredAnimeItems = anilistRecoveredLibraryQuery.data?.items ?? [];
   const recoveredAnimeCount = anilistRecoveredLibraryQuery.data?.total ?? 0;
+  const titlePreference = titlePreferenceQuery.data?.titlePreference ?? "mixed";
 
   return (
     <section className="single-panel">
@@ -247,6 +281,36 @@ export function SettingsPage() {
               <p className="status">
                 Derniere sync: <strong>{formatSyncTimestamp(lastCompletedAtMs)}</strong>
               </p>
+            </div>
+
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">Anime Quiz</p>
+                  <h3>Preference de titre</h3>
+                </div>
+                <span className="provider-badge connected">{titlePreference}</span>
+              </div>
+              <p className="status">Choisis le format affiche pour les choix QCM anime.</p>
+              <div className="waiting-actions">
+                {([
+                  { value: "mixed", label: "Mixte" },
+                  { value: "romaji", label: "Romaji" },
+                  { value: "english", label: "Anglais" },
+                ] as Array<{ value: TitlePreference; label: string }>).map((entry) => (
+                  <button
+                    key={entry.value}
+                    className={titlePreference === entry.value ? "solid-btn" : "ghost-btn"}
+                    type="button"
+                    disabled={updateTitlePreferenceMutation.isPending || signOutMutation.isPending}
+                    onClick={() => updateTitlePreferenceMutation.mutate(entry.value)}
+                  >
+                    {titlePreference === entry.value && updateTitlePreferenceMutation.isPending
+                      ? "Mise a jour..."
+                      : entry.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="provider-link-card">
@@ -328,6 +392,7 @@ export function SettingsPage() {
         <p
           className={
             updateAndSyncMutation.isError ||
+            updateTitlePreferenceMutation.isError ||
             signOutMutation.isError ||
             activeRun?.status === "error"
               ? "status error"
@@ -335,6 +400,7 @@ export function SettingsPage() {
           }
         >
           {updateAndSyncMutation.isError && updateMutationErrorMessage(updateAndSyncMutation.error)}
+          {updateTitlePreferenceMutation.isError && "Impossible de mettre a jour la preference de titre."}
           {signOutMutation.isError && "Deconnexion impossible pour le moment."}
           {!updateAndSyncMutation.isError && activeRun?.status === "error" && syncErrorMessage(activeRun.message)}
         </p>

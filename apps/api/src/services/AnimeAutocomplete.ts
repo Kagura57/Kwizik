@@ -1,4 +1,5 @@
 import { pool } from "../db/client";
+import { normalizeAnimeText } from "./AnimeTextNormalization";
 
 export type SuggestionRow = {
   animeId: number;
@@ -20,22 +21,12 @@ function isDbEnabled() {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function normalize(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 export function rankAnimeSuggestions(rows: SuggestionRow[], query: string) {
-  const q = normalize(query);
+  const q = normalizeAnimeText(query);
   return rows
     .map((row) => {
-      const alias = normalize(row.alias);
-      const canonical = normalize(row.canonical);
+      const alias = normalizeAnimeText(row.alias);
+      const canonical = normalizeAnimeText(row.canonical);
       const rank = alias === q
         ? row.aliasType === "acronym" ? 0 : 1
         : canonical === q
@@ -54,7 +45,7 @@ export function rankAnimeSuggestions(rows: SuggestionRow[], query: string) {
 }
 
 export async function searchAnimeSuggestions(query: string, limit = 12): Promise<AnimeSuggestion[]> {
-  const normalizedQuery = normalize(query);
+  const normalizedQuery = normalizeAnimeText(query);
   const safeLimit = Math.max(1, Math.min(limit, 40));
   if (normalizedQuery.length < 1) return [];
 
@@ -93,7 +84,7 @@ export async function searchAnimeSuggestions(query: string, limit = 12): Promise
     } satisfies SuggestionRow));
   }
 
-  const ranked = rankAnimeSuggestions(rows, normalizedQuery);
+  const ranked = rankAnimeSuggestions(rows, query);
   const deduped = new Map<number, AnimeSuggestion>();
 
   for (const row of ranked) {

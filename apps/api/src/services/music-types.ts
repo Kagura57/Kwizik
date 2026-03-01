@@ -5,6 +5,8 @@ export type MusicTrack = {
   id: string;
   title: string;
   artist: string;
+  songTitle?: string | null;
+  songArtists?: string[] | null;
   durationSec?: number | null;
   previewUrl: string | null;
   sourceUrl: string | null;
@@ -12,6 +14,8 @@ export type MusicTrack = {
   videoUrl?: string | null;
   answer?: {
     canonical: string;
+    englishTitle?: string | null;
+    aliases?: string[];
   };
 };
 

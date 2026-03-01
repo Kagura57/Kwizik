@@ -12,6 +12,8 @@ describe("live gameplay store", () => {
       deadlineMs: 123,
       guessDoneCount: 1,
       guessTotalCount: 2,
+      mediaReadyCount: 0,
+      mediaReadyTotalCount: 2,
       revealSkipCount: 0,
       revealSkipTotalCount: 2,
       previewUrl: null,
@@ -21,7 +23,12 @@ describe("live gameplay store", () => {
         sourceUrl: "https://v.animethemes.moe/demo.webm",
         embedUrl: null,
       },
-      choices: ["A", "B", "C", "D"],
+      choices: [
+        { value: "A", titleRomaji: "A", titleEnglish: null, themeLabel: "OP1" },
+        { value: "B", titleRomaji: "B", titleEnglish: null, themeLabel: "OP1" },
+        { value: "C", titleRomaji: "C", titleEnglish: null, themeLabel: "OP1" },
+        { value: "D", titleRomaji: "D", titleEnglish: null, themeLabel: "OP1" },
+      ],
       reveal: null,
       leaderboard: null,
     });
