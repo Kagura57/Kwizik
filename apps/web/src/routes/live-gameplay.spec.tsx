@@ -6,6 +6,7 @@ describe("live gameplay store", () => {
     const store = createGameStore();
     store.getState().setLiveRound({
       phase: "playing",
+      isLoadingMedia: false,
       mode: "mcq",
       round: 1,
       totalRounds: 10,
@@ -23,6 +24,7 @@ describe("live gameplay store", () => {
         sourceUrl: "https://v.animethemes.moe/demo.webm",
         embedUrl: null,
       },
+      nextMedia: null,
       choices: [
         { value: "A", titleRomaji: "A", titleEnglish: null, themeLabel: "OP1" },
         { value: "B", titleRomaji: "B", titleEnglish: null, themeLabel: "OP1" },

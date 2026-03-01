@@ -567,6 +567,133 @@ describe("RoomStore gameplay progression", () => {
     expect(store.roomState(roomCode)?.state).toBe("results");
   });
 
+  it("keeps animethemes rounds in loading until media reports onPlaying readiness", async () => {
+    let nowMs = 0;
+    const animeTrack: MusicTrack = {
+      provider: "animethemes",
+      id: "buffering-track",
+      title: "Buffering Anime",
+      artist: "OP1",
+      previewUrl: "https://v.animethemes.moe/buffering-track.webm",
+      sourceUrl: "https://v.animethemes.moe/buffering-track.webm",
+      audioUrl: "https://v.animethemes.moe/buffering-track.webm",
+      videoUrl: "https://v.animethemes.moe/buffering-track.webm",
+    };
+
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => [animeTrack],
+      config: {
+        countdownMs: 10,
+        loadingMs: 100,
+        loadingTimeoutMs: 10_000,
+        playingMs: 200,
+        revealMs: 10,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(created.roomCode) as {
+      manager: {
+        startGame: (input: { nowMs: number; countdownMs: number; totalRounds: number }) => boolean;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+    session.trackPool = [animeTrack];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    expect(session.manager.startGame({ nowMs: 0, countdownMs: 10, totalRounds: 1 })).toBe(true);
+
+    nowMs = 10;
+    const loading = store.roomState(created.roomCode);
+    expect(loading?.state).toBe("loading");
+    expect(loading?.deadlineMs).toBeNull();
+
+    nowMs = 350;
+    const stillLoading = store.roomState(created.roomCode);
+    expect(stillLoading?.state).toBe("loading");
+    expect(stillLoading?.mediaReadyCount).toBe(0);
+
+    const mediaReady = store.markMediaReady(created.roomCode, host.value.playerId, animeTrack.id);
+    expect(mediaReady.status).toBe("ok");
+    if (mediaReady.status === "ok") {
+      expect(mediaReady.accepted).toBe(true);
+      expect(mediaReady.state).toBe("playing");
+      expect(mediaReady.deadlineMs).toBe(550);
+    }
+
+    const playing = store.roomState(created.roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.deadlineMs).toBe(550);
+  });
+
+  it("skips stalled animethemes loading rounds instead of starting the playing timer", async () => {
+    let nowMs = 0;
+    const animeTrack: MusicTrack = {
+      provider: "animethemes",
+      id: "timeout-track",
+      title: "Timeout Anime",
+      artist: "OP1",
+      previewUrl: "https://v.animethemes.moe/timeout-track.webm",
+      sourceUrl: "https://v.animethemes.moe/timeout-track.webm",
+      audioUrl: "https://v.animethemes.moe/timeout-track.webm",
+      videoUrl: "https://v.animethemes.moe/timeout-track.webm",
+    };
+
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => [animeTrack],
+      config: {
+        countdownMs: 10,
+        loadingMs: 100,
+        loadingTimeoutMs: 150,
+        playingMs: 200,
+        revealMs: 10,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(created.roomCode) as {
+      manager: {
+        startGame: (input: { nowMs: number; countdownMs: number; totalRounds: number }) => boolean;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+    session.trackPool = [animeTrack];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    expect(session.manager.startGame({ nowMs: 0, countdownMs: 10, totalRounds: 1 })).toBe(true);
+
+    nowMs = 10;
+    expect(store.roomState(created.roomCode)?.state).toBe("loading");
+
+    nowMs = 170;
+    const skipped = store.roomState(created.roomCode);
+    expect(skipped?.state).toBe("results");
+  });
+
   it("reports unavailable animethemes media and skips the current round", async () => {
     let nowMs = 0;
     const store = new RoomStore({

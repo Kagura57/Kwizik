@@ -222,6 +222,7 @@ export function RoomPlayPage() {
   const [progress, setProgress] = useState(0);
   const [audioError, setAudioError] = useState(false);
   const [iframeEpoch, setIframeEpoch] = useState(0);
+  const [animePlaybackStatus, setAnimePlaybackStatus] = useState<"idle" | "buffering" | "playing">("idle");
   const [stableYoutubePlayback, setStableYoutubePlayback] = useState<{
     key: string;
     embedUrl: string;
@@ -248,6 +249,7 @@ export function RoomPlayPage() {
   const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
   const animeVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const nextAnimePreloadRef = useRef<HTMLVideoElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
   const autoStartRoundRef = useRef<number>(0);
   const leaveSentRef = useRef(false);
@@ -508,6 +510,7 @@ export function RoomPlayPage() {
 
     setLiveRound({
       phase: state.state,
+      isLoadingMedia: state.state === "loading",
       mode: state.mode,
       round: state.round,
       totalRounds: state.totalRounds,
@@ -520,6 +523,7 @@ export function RoomPlayPage() {
       revealSkipTotalCount: state.revealSkipTotalCount,
       previewUrl: state.previewUrl,
       media: state.media,
+      nextMedia: state.nextMedia,
       choices: state.choices,
       reveal: state.reveal
         ? {
@@ -915,6 +919,8 @@ export function RoomPlayPage() {
 
   const activeYoutubeEmbed = stableYoutubePlayback?.embedUrl ?? null;
   const activeAnimeVideoSource = stableAnimeVideoPlayback?.sourceUrl ?? null;
+  const nextAnimeVideoSource =
+    state?.nextMedia?.provider === "animethemes" ? (state.nextMedia.sourceUrl ?? null) : null;
   const usingYouTubePlayback = Boolean(activeYoutubeEmbed);
   const usingAnimeVideoPlayback = Boolean(activeAnimeVideoSource);
   const revealVideoActive =
@@ -1006,15 +1012,24 @@ export function RoomPlayPage() {
   function handleAnimeLoadedMetadata() {
     const video = animeVideoRef.current;
     if (!video) return;
+    setAnimePlaybackStatus("buffering");
     applyAnimeRandomStart(video);
     video.play().catch(() => undefined);
   }
 
-  function handleAnimePlayable() {
+  function handleAnimeCanPlayThrough() {
     const video = animeVideoRef.current;
     if (video) {
       applyAnimeRandomStart(video);
     }
+  }
+
+  function handleAnimePlaying() {
+    const video = animeVideoRef.current;
+    if (video) {
+      applyAnimeRandomStart(video);
+    }
+    setAnimePlaybackStatus("playing");
     signalAnimeMediaReady();
   }
 
@@ -1037,6 +1052,11 @@ export function RoomPlayPage() {
     reportedUnavailableMediaRef.current = null;
     reportedMediaReadyRef.current = null;
     appliedAnimeStartRef.current = null;
+    if (state?.state === "loading" && state.media?.provider === "animethemes") {
+      setAnimePlaybackStatus("buffering");
+    } else {
+      setAnimePlaybackStatus("idle");
+    }
   }, [state?.state, state?.round, state?.media?.trackId]);
 
   useEffect(() => {
@@ -1109,6 +1129,46 @@ export function RoomPlayPage() {
       playPromise.catch(() => undefined);
     }
   }, [activeAnimeVideoSource, stableAnimeVideoPlayback?.key]);
+
+  useEffect(() => {
+    const selector = "link[data-kwizik-next-anime-preload='true']";
+    const head = document.head;
+    const existing = head.querySelector(selector) as HTMLLinkElement | null;
+
+    if (!nextAnimeVideoSource) {
+      existing?.remove();
+      const preloadVideo = nextAnimePreloadRef.current;
+      if (preloadVideo) {
+        preloadVideo.pause();
+        preloadVideo.removeAttribute("src");
+      }
+      return;
+    }
+
+    const link = existing ?? document.createElement("link");
+    link.setAttribute("data-kwizik-next-anime-preload", "true");
+    link.setAttribute("rel", "preload");
+    link.setAttribute("as", "video");
+    link.setAttribute("href", nextAnimeVideoSource);
+    if (!existing) {
+      head.appendChild(link);
+    }
+
+    const preloadVideo = nextAnimePreloadRef.current;
+    if (preloadVideo && preloadVideo.getAttribute("src") !== nextAnimeVideoSource) {
+      preloadVideo.setAttribute("src", nextAnimeVideoSource);
+      preloadVideo.load();
+    }
+  }, [nextAnimeVideoSource]);
+
+  useEffect(() => {
+    return () => {
+      const link = document.head.querySelector(
+        "link[data-kwizik-next-anime-preload='true']",
+      );
+      link?.remove();
+    };
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -1451,8 +1511,8 @@ export function RoomPlayPage() {
                     preload="auto"
                     playsInline
                     onLoadedMetadata={handleAnimeLoadedMetadata}
-                    onCanPlayThrough={handleAnimePlayable}
-                    onPlaying={handleAnimePlayable}
+                    onCanPlayThrough={handleAnimeCanPlayThrough}
+                    onPlaying={handleAnimePlaying}
                     onError={handleAnimeMediaUnavailable}
                   />
                 )}
@@ -1488,7 +1548,10 @@ export function RoomPlayPage() {
                 {state?.state === "loading" && usingAnimeVideoPlayback && (
                   <div className="media-loading-overlay" role="status" aria-live="polite">
                     <span className="resolving-tracks-spinner" aria-hidden="true" />
-                    <p>Chargement du media anime...</p>
+                    <p>Chargement de la video...</p>
+                    <small>
+                      {animePlaybackStatus === "playing" ? "Lecture demarree" : "Buffering en cours"}
+                    </small>
                     <small>
                       {state.mediaReadyCount}/{state.mediaReadyTotalCount} pret{state.mediaReadyTotalCount > 1 ? "s" : ""}
                     </small>
@@ -1903,6 +1966,17 @@ export function RoomPlayPage() {
           </aside>
         )}
       </article>
+
+      <video
+        ref={nextAnimePreloadRef}
+        className="blindtest-preload-video"
+        preload="auto"
+        muted
+        playsInline
+        aria-hidden="true"
+      >
+        <track kind="captions" />
+      </video>
 
       <audio
         ref={audioRef}

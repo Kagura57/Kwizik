@@ -129,6 +129,7 @@ const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_ROUND_CONFIG = {
   countdownMs: 3_000,
   loadingMs: 6_000,
+  loadingTimeoutMs: 30_000,
   playingMs: 20_000,
   revealMs: 20_000,
   leaderboardMs: 0,
@@ -1017,6 +1018,14 @@ export class RoomStore {
             coalesce(tv.theme_number, 0),
             tv.updated_at desc,
             tv.is_creditless desc,
+            case
+              when coalesce(tv.resolution, 0) = 1080 then 0
+              when coalesce(tv.resolution, 0) > 1080 then 1
+              when coalesce(tv.resolution, 0) = 720 then 2
+              when coalesce(tv.resolution, 0) = 480 then 3
+              when coalesce(tv.resolution, 0) > 0 then 4
+              else 5
+            end asc,
             coalesce(tv.resolution, 0) desc,
             tv.video_key desc
         )
@@ -1313,10 +1322,20 @@ export class RoomStore {
     return this.sortedPlayers(session).map((player) => player.id);
   }
 
-  private loadingMsForCurrentTransition(session: RoomSession) {
-    const configured = Math.max(0, this.config.loadingMs);
-    if (configured <= 0) return 0;
+  private trackForRound(session: RoomSession, round: number) {
+    if (round <= 0) return null;
+    return session.trackPool[round - 1] ?? null;
+  }
 
+  private loadingMsForRound(session: RoomSession, round: number) {
+    const configured = Math.max(0, this.config.loadingMs);
+    if (configured <= 0 || round <= 0) return 0;
+    const track = this.trackForRound(session, round);
+    if (!track || track.provider !== "animethemes") return 0;
+    return configured;
+  }
+
+  private loadingMsForCurrentTransition(session: RoomSession) {
     const state = session.manager.state();
     let round = 0;
     if (state === "countdown") {
@@ -1326,11 +1345,50 @@ export class RoomStore {
     } else if (state === "loading" || state === "playing" || state === "reveal") {
       round = session.manager.round();
     }
-    if (round <= 0) return 0;
+    return this.loadingMsForRound(session, round);
+  }
 
-    const track = session.trackPool[round - 1] ?? null;
+  private loadingTimeoutMsForCurrentRound(session: RoomSession) {
+    const configured = Math.max(this.config.loadingMs, this.config.loadingTimeoutMs);
+    if (configured <= 0) return 0;
+    const round = session.manager.round();
+    if (round <= 0) return 0;
+    const track = this.trackForRound(session, round);
     if (!track || track.provider !== "animethemes") return 0;
     return configured;
+  }
+
+  private maybeSkipStalledLoadingRound(session: RoomSession, nowMs: number) {
+    if (session.manager.state() !== "loading") return false;
+
+    const timeoutMs = this.loadingTimeoutMsForCurrentRound(session);
+    if (timeoutMs <= 0) return false;
+
+    const loadingStartedAtMs = session.manager.startedAtMs();
+    if (loadingStartedAtMs === null) return false;
+
+    const elapsedMs = Math.max(0, nowMs - loadingStartedAtMs);
+    if (elapsedMs < timeoutMs) return false;
+
+    const currentRound = session.manager.round();
+    const activeTrack = this.trackForRound(session, currentRound);
+    if (!activeTrack || activeTrack.provider !== "animethemes") return false;
+
+    void this.markAnimeThemeVideoUnavailable(activeTrack.id);
+    logEvent("warn", "room_loading_timeout_skip_round", {
+      roomCode: session.roomCode,
+      round: currentRound,
+      trackId: activeTrack.id,
+      timeoutMs,
+      elapsedMs,
+    });
+
+    session.manager.skipPlayingRound({
+      nowMs,
+      loadingMs: this.loadingMsForRound(session, currentRound + 1),
+      roundMs: this.config.playingMs,
+    });
+    return true;
   }
 
   private isGuessPhaseDoneForAll(session: RoomSession) {
@@ -1396,6 +1454,10 @@ export class RoomStore {
   }
 
   private progressSession(session: RoomSession, nowMs: number) {
+    if (this.maybeSkipStalledLoadingRound(session, nowMs)) {
+      return;
+    }
+
     const loadingMs = this.loadingMsForCurrentTransition(session);
     const tick = session.manager.tick({
       nowMs,
@@ -2428,6 +2490,7 @@ export class RoomStore {
     if (state === "loading" || state === "playing") {
       session.manager.skipPlayingRound({
         nowMs,
+        loadingMs: this.loadingMsForRound(session, currentRound + 1),
         roundMs: this.config.playingMs,
       });
     } else if (session.manager.expireCurrentPhase(nowMs)) {
@@ -2544,7 +2607,7 @@ export class RoomStore {
     this.progressSession(session, this.now());
     const state = session.manager.state() as GameState;
     const currentRound = session.manager.round();
-    const activeTrack = currentRound > 0 ? (session.trackPool[currentRound - 1] ?? null) : null;
+    const activeTrack = this.trackForRound(session, currentRound);
     if (activeTrack) {
       scheduleRomanizeJapanese(activeTrack.title);
       scheduleRomanizeJapanese(activeTrack.artist);
@@ -2617,6 +2680,16 @@ export class RoomStore {
       state === "reveal" || state === "leaderboard" || state === "results"
         ? session.latestReveal
         : null;
+    const nextRound =
+      state === "countdown"
+        ? 1
+        : state === "loading" ||
+            state === "playing" ||
+            state === "reveal" ||
+            state === "leaderboard"
+          ? currentRound + 1
+          : 0;
+    const nextTrack = this.trackForRound(session, nextRound);
     const media =
       (state === "playing" || state === "loading") && activeTrack
         ? {
@@ -2633,6 +2706,14 @@ export class RoomStore {
               embedUrl: revealMedia.embedUrl,
             }
           : null;
+    const nextMedia = nextTrack
+      ? {
+          provider: nextTrack.provider,
+          trackId: nextTrack.id,
+          sourceUrl: nextTrack.sourceUrl,
+          embedUrl: embedUrlForTrack(nextTrack, { roomCode: session.roomCode, round: nextRound }),
+        }
+      : null;
     const suggestionTracks =
       session.trackPool.length > 0
         ? [...session.trackPool, ...session.distractorTrackPool]
@@ -2695,6 +2776,7 @@ export class RoomStore {
           ? activeTrack?.previewUrl ?? null
           : revealMedia?.previewUrl ?? null,
       media,
+      nextMedia,
       reveal: revealMedia,
       leaderboard,
       chatMessages: session.chatMessages.slice(-80),

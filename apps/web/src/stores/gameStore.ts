@@ -3,6 +3,7 @@ import { createStore } from "zustand/vanilla";
 
 export type LiveRoundState = {
   phase: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
+  isLoadingMedia: boolean;
   mode: "mcq" | "text" | null;
   round: number;
   totalRounds: number;
@@ -15,6 +16,12 @@ export type LiveRoundState = {
   revealSkipTotalCount: number;
   previewUrl: string | null;
   media: {
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
+    trackId: string;
+    sourceUrl: string | null;
+    embedUrl: string | null;
+  } | null;
+  nextMedia: {
     provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
     trackId: string;
     sourceUrl: string | null;

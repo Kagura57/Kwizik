@@ -136,6 +136,12 @@ export type RoomState = {
     sourceUrl: string | null;
     embedUrl: string | null;
   } | null;
+  nextMedia: {
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
+    trackId: string;
+    sourceUrl: string | null;
+    embedUrl: string | null;
+  } | null;
   reveal: {
     round: number;
     trackId: string;

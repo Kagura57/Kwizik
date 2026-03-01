@@ -1894,6 +1894,14 @@ select option {
   pointer-events: none;
 }
 
+.blindtest-preload-video {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .blindtest-video-hidden {
   position: fixed;
   width: 320px;

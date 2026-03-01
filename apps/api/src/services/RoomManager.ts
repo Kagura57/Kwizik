@@ -40,6 +40,7 @@ type TickResult = {
 
 type SkipPlayingRoundInput = {
   nowMs: number;
+  loadingMs: number;
   roundMs: number;
 };
 
@@ -109,6 +110,7 @@ export class RoomManager {
       return { skipped: false, closedRound: null };
     }
 
+    const safeLoadingMs = Math.max(0, input.loadingMs);
     const safeRoundMs = Math.max(1, input.roundMs);
     const closedRound: ClosedRound = {
       round: this.currentRound,
@@ -131,9 +133,15 @@ export class RoomManager {
     }
 
     this.currentRound += 1;
-    this.gameState = "playing";
-    this.roundStartedAtMs = input.nowMs;
-    this.roundDeadlineMs = input.nowMs + safeRoundMs;
+    if (safeLoadingMs > 0) {
+      this.gameState = "loading";
+      this.roundStartedAtMs = input.nowMs;
+      this.roundDeadlineMs = null;
+    } else {
+      this.gameState = "playing";
+      this.roundStartedAtMs = input.nowMs;
+      this.roundDeadlineMs = input.nowMs + safeRoundMs;
+    }
     return { skipped: true, closedRound };
   }
 
@@ -192,8 +200,8 @@ export class RoomManager {
         this.guessedSkipPlayerIds.clear();
         this.revealSkipPlayerIds.clear();
         if (safeLoadingMs > 0) {
-          this.roundStartedAtMs = null;
-          this.roundDeadlineMs = transitionAtMs + safeLoadingMs;
+          this.roundStartedAtMs = transitionAtMs;
+          this.roundDeadlineMs = null;
           this.gameState = "loading";
         } else {
           this.roundStartedAtMs = transitionAtMs;
@@ -258,8 +266,8 @@ export class RoomManager {
         this.guessedSkipPlayerIds.clear();
         this.revealSkipPlayerIds.clear();
         if (safeLoadingMs > 0) {
-          this.roundStartedAtMs = null;
-          this.roundDeadlineMs = transitionAtMs + safeLoadingMs;
+          this.roundStartedAtMs = transitionAtMs;
+          this.roundDeadlineMs = null;
           this.gameState = "loading";
         } else {
           this.roundStartedAtMs = transitionAtMs;
