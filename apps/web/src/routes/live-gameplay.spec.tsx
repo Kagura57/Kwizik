@@ -6,17 +6,36 @@ describe("live gameplay store", () => {
     const store = createGameStore();
     store.getState().setLiveRound({
       phase: "playing",
+      isLoadingMedia: false,
       mode: "mcq",
       round: 1,
       totalRounds: 10,
       deadlineMs: 123,
+      guessDoneCount: 1,
+      guessTotalCount: 2,
+      mediaReadyCount: 0,
+      mediaReadyTotalCount: 2,
+      revealSkipCount: 0,
+      revealSkipTotalCount: 2,
       previewUrl: null,
-      media: null,
-      choices: ["A", "B", "C", "D"],
+      media: {
+        provider: "animethemes",
+        trackId: "demo-track",
+        sourceUrl: "https://v.animethemes.moe/demo.webm",
+        embedUrl: null,
+      },
+      nextMedia: null,
+      choices: [
+        { value: "A", titleRomaji: "A", titleEnglish: null, themeLabel: "OP1" },
+        { value: "B", titleRomaji: "B", titleEnglish: null, themeLabel: "OP1" },
+        { value: "C", titleRomaji: "C", titleEnglish: null, themeLabel: "OP1" },
+        { value: "D", titleRomaji: "D", titleEnglish: null, themeLabel: "OP1" },
+      ],
       reveal: null,
       leaderboard: null,
     });
     expect(store.getState().liveRound?.phase).toBe("playing");
     expect(store.getState().liveRound?.mode).toBe("mcq");
+    expect(store.getState().liveRound?.media?.provider).toBe("animethemes");
   });
 });

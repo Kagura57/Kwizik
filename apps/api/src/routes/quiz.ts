@@ -184,11 +184,42 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       set.status = 400;
       return { ok: false, error: "INVALID_PAYLOAD" };
     }
-    if (mode !== "public_playlist" && mode !== "players_liked") {
+    if (mode !== "public_playlist" && mode !== "players_liked" && mode !== "anilist_union") {
       set.status = 400;
       return { ok: false, error: "INVALID_MODE" };
     }
     const result = roomStore.setRoomSourceMode(roomCode, playerId, mode);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    return { ok: true as const, mode: result.mode };
+  })
+  .post("/source/theme-mode", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const mode = readStringField(body, "mode");
+    if (!roomCode || !playerId || !mode) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+    if (mode !== "op_only" && mode !== "ed_only" && mode !== "mix") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_MODE" };
+    }
+    const result = roomStore.setRoomThemeMode(roomCode, playerId, mode);
     if (result.status === "room_not_found") {
       set.status = 404;
       return { ok: false, error: "ROOM_NOT_FOUND" };
@@ -464,10 +495,6 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       set.status = 404;
       return { ok: false, error: "PLAYER_NOT_FOUND" };
     }
-    if (result.status === "forbidden") {
-      set.status = 403;
-      return { ok: false, error: "HOST_ONLY" };
-    }
     if (result.status === "invalid_state") {
       set.status = 409;
       return { ok: false, error: "INVALID_STATE" };
@@ -475,6 +502,77 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
 
     return {
       ok: true as const,
+      accepted: result.accepted,
+      state: result.state,
+      round: result.round,
+      deadlineMs: result.deadlineMs,
+    };
+  })
+  .post("/media/unavailable", async ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const trackId = readStringField(body, "trackId");
+    if (!roomCode || !playerId || !trackId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = await roomStore.reportMediaUnavailable(roomCode, playerId, trackId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    if (result.status === "invalid_payload") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    return {
+      ok: true as const,
+      accepted: result.accepted,
+      state: result.state,
+      round: result.round,
+      deadlineMs: result.deadlineMs,
+    };
+  })
+  .post("/media/ready", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const trackId = readStringField(body, "trackId");
+    if (!roomCode || !playerId || !trackId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.markMediaReady(roomCode, playerId, trackId);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    if (result.status === "invalid_payload") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    return {
+      ok: true as const,
+      accepted: result.accepted,
       state: result.state,
       round: result.round,
       deadlineMs: result.deadlineMs,

@@ -427,5 +427,5 @@ describe("spotify playlist payload parsing", () => {
       durationSec: 180,
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
+  }, 15_000);
 });

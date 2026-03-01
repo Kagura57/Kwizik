@@ -83,19 +83,25 @@ describe("RoomStore romaji answer matching", () => {
     const started = await store.startGame(created.roomCode, player.value.playerId);
     expect(started?.ok).toBe(true);
 
+    const nextState = () => store.roomState(created.roomCode);
+    const advanceTo = (predicate: (state: ReturnType<typeof store.roomState>) => boolean, maxSteps = 20) => {
+      for (let step = 0; step < maxSteps; step += 1) {
+        const current = nextState();
+        if (predicate(current)) return current;
+        const deadline = current?.deadlineMs ?? null;
+        nowMs = deadline !== null ? deadline + 1 : nowMs + 50;
+      }
+      return nextState();
+    };
+
     nowMs = 5;
-    const round1 = store.roomState(created.roomCode);
+    const round1 = advanceTo((state) => state?.state === "playing" && state.round === 1);
     expect(round1?.state).toBe("playing");
     expect(round1?.mode).toBe("mcq");
-    const firstChoice = round1?.choices?.[0] ?? "";
+    const firstChoice = round1?.choices?.[0]?.value ?? "";
     store.submitAnswer(created.roomCode, player.value.playerId, firstChoice);
 
-    nowMs = 45;
-    store.roomState(created.roomCode); // reveal round 1
-    nowMs = 50;
-    store.roomState(created.roomCode); // leaderboard round 1
-    nowMs = 55;
-    const round2 = store.roomState(created.roomCode);
+    const round2 = advanceTo((state) => state?.state === "playing" && state.round === 2);
     expect(round2?.state).toBe("playing");
     expect(round2?.mode).toBe("text");
 
@@ -112,11 +118,8 @@ describe("RoomStore romaji answer matching", () => {
     if (!romajiArtist) return;
     store.submitAnswer(created.roomCode, player.value.playerId, romajiArtist);
 
-    nowMs = 95;
-    store.roomState(created.roomCode); // reveal round 2, scoring done
-    nowMs = 100;
-    store.roomState(created.roomCode); // leaderboard round 2
-    nowMs = 105;
+    const resultsState = advanceTo((state) => state?.state === "results");
+    expect(resultsState?.state).toBe("results");
     const results = store.roomResults(created.roomCode);
 
     expect(results?.state).toBe("results");

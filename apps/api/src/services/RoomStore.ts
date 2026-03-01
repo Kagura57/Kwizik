@@ -10,10 +10,20 @@ import type { MusicTrack } from "./music-types";
 import { getRomanizedJapaneseCached, scheduleRomanizeJapanese } from "./JapaneseRomanizer";
 import { SPOTIFY_RATE_LIMITED_ERROR, spotifyPlaylistRateLimitRetryAfterMs } from "../routes/music/spotify";
 import { fetchUserLikedTracksForProviders as fetchSyncedUserLikedTracksForProviders } from "./UserMusicLibrary";
+import { pool } from "../db/client";
+import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLikedTrackRepository } from "../repositories/UserLikedTrackRepository";
+import { normalizeAnimeText } from "./AnimeTextNormalization";
 
 type RoundMode = "mcq" | "text";
-type RoomSourceMode = "public_playlist" | "players_liked";
+type RoundChoice = {
+  value: string;
+  titleRomaji: string;
+  titleEnglish: string | null;
+  themeLabel: string;
+};
+type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type RoomThemeMode = "op_only" | "ed_only" | "mix";
 type LibraryProvider = "spotify" | "deezer";
 type ProviderLinkStatus = "linked" | "not_linked" | "expired";
 type PoolBuildStatus = "idle" | "building" | "ready" | "failed";
@@ -60,6 +70,7 @@ type RoomSession = {
   trackPool: MusicTrack[];
   distractorTrackPool: MusicTrack[];
   sourceMode: RoomSourceMode;
+  themeMode: RoomThemeMode;
   publicPlaylistSelection: {
     provider: "deezer";
     id: string;
@@ -86,7 +97,7 @@ type RoomSession = {
   categoryQuery: string;
   totalRounds: number;
   roundModes: RoundMode[];
-  roundChoices: Map<number, string[]>;
+  roundChoices: Map<number, RoundChoice[]>;
   latestReveal: {
     round: number;
     trackId: string;
@@ -94,13 +105,15 @@ type RoomSession = {
     titleRomaji: string | null;
     artist: string;
     artistRomaji: string | null;
+    songTitle: string | null;
+    songArtists: string[];
     provider: MusicTrack["provider"];
     mode: RoundMode;
     acceptedAnswer: string;
     previewUrl: string | null;
     sourceUrl: string | null;
     embedUrl: string | null;
-    choices: string[] | null;
+    choices: RoundChoice[] | null;
     playerAnswers: Array<{
       playerId: string;
       displayName: string;
@@ -115,9 +128,11 @@ type RoomSession = {
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DEFAULT_ROUND_CONFIG = {
   countdownMs: 3_000,
-  playingMs: 12_000,
-  revealMs: 4_000,
-  leaderboardMs: 3_000,
+  loadingMs: 6_000,
+  loadingTimeoutMs: 30_000,
+  playingMs: 20_000,
+  revealMs: 20_000,
+  leaderboardMs: 0,
   baseScore: 1_000,
   maxRounds: 10,
 } as const;
@@ -137,6 +152,14 @@ const ROOM_BULK_ANSWER_TRACK_LIMIT = 16_000;
 const ROOM_BULK_ANSWER_SUGGESTION_LIMIT = 24_000;
 
 type RoundConfig = typeof DEFAULT_ROUND_CONFIG;
+
+function isLegacyPlayersLikedSource(mode: RoomSourceMode) {
+  return mode === "players_liked";
+}
+
+function isAniListUnionSource(mode: RoomSourceMode) {
+  return mode === "anilist_union";
+}
 
 type RoomStoreDependencies = {
   now?: () => number;
@@ -163,13 +186,7 @@ function randomRoomCode(length = 6): string {
 }
 
 function normalizeAnswer(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeAnimeText(value);
 }
 
 function collectAnswerVariants(track: MusicTrack) {
@@ -185,6 +202,9 @@ function collectAnswerVariants(track: MusicTrack) {
   push(track.artist);
   push(`${track.title} ${track.artist}`);
   push(asChoiceLabel(track));
+  for (const alias of track.answer?.aliases ?? []) {
+    push(alias);
+  }
 
   const titleRomaji = getRomanizedJapaneseCached(track.title);
   const artistRomaji = getRomanizedJapaneseCached(track.artist);
@@ -223,8 +243,24 @@ function asChoiceLabel(track: MusicTrack) {
   return `${track.title} - ${track.artist}`;
 }
 
+function englishTitleForTrack(track: MusicTrack) {
+  const raw = track.answer?.englishTitle?.trim() ?? "";
+  if (raw.length <= 0) return null;
+  if (normalizeAnswer(raw) === normalizeAnswer(track.title)) return null;
+  return raw;
+}
+
+function buildRoundChoice(track: MusicTrack): RoundChoice {
+  return {
+    value: asChoiceLabel(track),
+    titleRomaji: track.title,
+    titleEnglish: englishTitleForTrack(track),
+    themeLabel: track.artist,
+  };
+}
+
 function collectRoomAnswerSuggestions(
-  tracks: Array<Pick<MusicTrack, "title" | "artist">>,
+  tracks: Array<Pick<MusicTrack, "title" | "artist" | "answer">>,
   limit = ROOM_ANSWER_SUGGESTION_LIMIT,
 ) {
   const values: string[] = [];
@@ -249,6 +285,9 @@ function collectRoomAnswerSuggestions(
     push(artist);
     push(titleRomaji);
     push(artistRomaji);
+    for (const alias of track.answer?.aliases ?? []) {
+      push(alias);
+    }
 
     if (values.length >= limit) break;
   }
@@ -651,6 +690,9 @@ export class RoomStore {
     if (session.sourceMode === "public_playlist") {
       return session.publicPlaylistSelection?.sourceQuery?.trim() || session.categoryQuery.trim();
     }
+    if (isAniListUnionSource(session.sourceMode)) {
+      return "anilist:linked:union";
+    }
     return "players:liked";
   }
 
@@ -681,6 +723,9 @@ export class RoomStore {
 
     if (session.sourceMode === "public_playlist") {
       return this.sourceQueryForSession(session).length > 0;
+    }
+    if (isAniListUnionSource(session.sourceMode)) {
+      return [...session.players.values()].some((player) => player.userId !== null);
     }
 
     const contributors = this.playersLikedContributors(session);
@@ -755,13 +800,13 @@ export class RoomStore {
     const track = session.trackPool[round - 1];
     if (!track) return [];
 
-    const correct = asChoiceLabel(track);
+    const correct = buildRoundChoice(track);
     const sourceProfile = buildChoiceProfile(track);
     const futureRoundTracks = session.trackPool.slice(round);
     const distractorCandidates = [...futureRoundTracks, ...session.distractorTrackPool]
-      .filter((candidate) => asChoiceLabel(candidate) !== correct)
+      .filter((candidate) => asChoiceLabel(candidate) !== correct.value)
       .map((candidate) => ({
-        label: asChoiceLabel(candidate),
+        choice: buildRoundChoice(candidate),
         track: candidate,
         profile: buildChoiceProfile(candidate),
       }));
@@ -769,18 +814,38 @@ export class RoomStore {
       .map((entry) => ({
         ...entry,
         score: choiceCoherenceScore(sourceProfile, entry.profile, track, entry.track),
-      }))
-      .sort((left, right) => right.score - left.score);
+      }));
     const minimumScore = minChoiceCoherenceScore(sourceProfile.language);
 
-    const uniqueOptions = [correct];
-    const seen = new Set(uniqueOptions);
-    for (const distractor of rankedDistractors) {
-      if (seen.has(distractor.label)) continue;
-      if (distractor.score < minimumScore) continue;
-      uniqueOptions.push(distractor.label);
-      seen.add(distractor.label);
-      if (uniqueOptions.length >= MCQ_REQUIRED_CHOICES) break;
+    const uniqueOptions: RoundChoice[] = [correct];
+    const seen = new Set([correct.value]);
+    const weightedPool = rankedDistractors.filter((entry) => entry.score >= minimumScore);
+    while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
+      const weights = weightedPool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
+      const totalWeight = weights.reduce((sum, current) => sum + current, 0);
+      const ticket = Math.random() * totalWeight;
+      let cumulative = 0;
+      let selectedIndex = weightedPool.length - 1;
+      for (let index = 0; index < weightedPool.length; index += 1) {
+        cumulative += weights[index] ?? 0;
+        if (ticket <= cumulative) {
+          selectedIndex = index;
+          break;
+        }
+      }
+      const selected = weightedPool.splice(selectedIndex, 1)[0];
+      if (!selected || seen.has(selected.choice.value)) continue;
+      uniqueOptions.push(selected.choice);
+      seen.add(selected.choice.value);
+    }
+
+    if (uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
+      for (const distractor of rankedDistractors.sort((left, right) => right.score - left.score)) {
+        if (seen.has(distractor.choice.value)) continue;
+        uniqueOptions.push(distractor.choice);
+        seen.add(distractor.choice.value);
+        if (uniqueOptions.length >= MCQ_REQUIRED_CHOICES) break;
+      }
     }
 
     const options = randomShuffle(uniqueOptions);
@@ -863,6 +928,151 @@ export class RoomStore {
       rawTotal,
       playableTotal,
       cleanTotal,
+    };
+  }
+
+  private async buildAniListUnionTrackPool(session: RoomSession, requestedRounds: number) {
+    const safeRounds = Math.max(1, requestedRounds);
+    const targetCandidateSize = this.targetCandidatePoolSize(safeRounds);
+    const userIds = [...session.players.values()]
+      .map((player) => player.userId)
+      .filter((userId): userId is string => typeof userId === "string" && userId.length > 0);
+    if (userIds.length <= 0) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+    if (!(typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0)) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    const animeLookupLimit = Math.min(20_000, Math.max(targetCandidateSize * 30, 2_000));
+    const animeIds = await userAnimeLibraryRepository.unionAnimeIdsForUsers(userIds, animeLookupLimit);
+    if (animeIds.length <= 0) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    const themeCondition =
+      session.themeMode === "op_only"
+        ? "and tv.theme_type = 'OP'"
+        : session.themeMode === "ed_only"
+          ? "and tv.theme_type = 'ED'"
+          : "";
+
+    const rowLimit = Math.max(targetCandidateSize * 2, safeRounds + 8);
+    const selected = await pool.query<{
+      video_key: string;
+      webm_url: string;
+      theme_type: string;
+      theme_number: number | null;
+      title_romaji: string;
+      title_english: string | null;
+      song_title: string | null;
+      song_artists: string[] | null;
+      aliases: string[] | null;
+    }>(
+      `
+        with best_theme_video as (
+          select distinct on (tv.anime_id, tv.theme_type, coalesce(tv.theme_number, 0))
+            tv.video_key,
+            tv.webm_url,
+            tv.theme_type,
+            tv.theme_number,
+            aa.title_romaji,
+            aa.title_english,
+            tv.song_title,
+            tv.song_artists,
+            (
+              select array_agg(distinct al.alias)
+              from anime_catalog_alias al
+              where al.anime_id = tv.anime_id
+            ) as aliases
+          from anime_theme_videos tv
+          join anime_catalog_anime aa on aa.id = tv.anime_id
+          where tv.is_playable = true
+            and tv.webm_url like 'https://v.animethemes.moe/%'
+            and tv.anime_id = any($1::bigint[])
+            ${themeCondition}
+          order by
+            tv.anime_id,
+            tv.theme_type,
+            coalesce(tv.theme_number, 0),
+            tv.updated_at desc,
+            tv.is_creditless desc,
+            case
+              when coalesce(tv.resolution, 0) = 1080 then 0
+              when coalesce(tv.resolution, 0) > 1080 then 1
+              when coalesce(tv.resolution, 0) = 720 then 2
+              when coalesce(tv.resolution, 0) = 480 then 3
+              when coalesce(tv.resolution, 0) > 0 then 4
+              else 5
+            end asc,
+            coalesce(tv.resolution, 0) desc,
+            tv.video_key desc
+        )
+        select video_key, webm_url, theme_type, theme_number, title_romaji, title_english, song_title, song_artists, aliases
+        from best_theme_video
+        order by random()
+        limit $2
+      `,
+      [animeIds, rowLimit],
+    );
+
+    const tracks: MusicTrack[] = randomShuffle(selected.rows).map((row) => {
+      const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
+      const answerAliases = Array.from(
+        new Set(
+          [row.title_english, ...(row.aliases ?? [])]
+            .map((value) => value?.trim() ?? "")
+            .filter((value) => value.length > 0),
+        ),
+      );
+      return {
+        provider: "animethemes",
+        id: row.video_key,
+        title: row.title_romaji,
+        artist: themeLabel.length > 0 ? themeLabel : row.theme_type,
+        songTitle: row.song_title,
+        songArtists: row.song_artists ?? [],
+        previewUrl: row.webm_url,
+        sourceUrl: row.webm_url,
+        audioUrl: row.webm_url,
+        videoUrl: row.webm_url,
+        answer: {
+          canonical: row.title_romaji,
+          englishTitle: row.title_english,
+          aliases: answerAliases,
+        },
+      } satisfies MusicTrack;
+    });
+
+    const split = this.splitAnswerAndDistractorPools(tracks, safeRounds);
+    return {
+      tracks: split.tracks,
+      distractorTracks: split.distractorTracks,
+      candidateCount: split.candidateCount,
+      rawTotal: selected.rows.length,
+      playableTotal: tracks.length,
+      cleanTotal: tracks.length,
     };
   }
 
@@ -1108,9 +1318,150 @@ export class RoomStore {
     return Date.now() - lastSeenAtMs <= 30_000;
   }
 
+  private activePlayerIds(session: RoomSession) {
+    return this.sortedPlayers(session).map((player) => player.id);
+  }
+
+  private trackForRound(session: RoomSession, round: number) {
+    if (round <= 0) return null;
+    return session.trackPool[round - 1] ?? null;
+  }
+
+  private loadingMsForRound(session: RoomSession, round: number) {
+    const configured = Math.max(0, this.config.loadingMs);
+    if (configured <= 0 || round <= 0) return 0;
+    const track = this.trackForRound(session, round);
+    if (!track || track.provider !== "animethemes") return 0;
+    return configured;
+  }
+
+  private loadingMsForCurrentTransition(session: RoomSession) {
+    const state = session.manager.state();
+    let round = 0;
+    if (state === "countdown") {
+      round = 1;
+    } else if (state === "leaderboard") {
+      round = session.manager.round() + 1;
+    } else if (state === "loading" || state === "playing" || state === "reveal") {
+      round = session.manager.round();
+    }
+    return this.loadingMsForRound(session, round);
+  }
+
+  private loadingTimeoutMsForCurrentRound(session: RoomSession) {
+    const configured = Math.max(this.config.loadingMs, this.config.loadingTimeoutMs);
+    if (configured <= 0) return 0;
+    const round = session.manager.round();
+    if (round <= 0) return 0;
+    const track = this.trackForRound(session, round);
+    if (!track || track.provider !== "animethemes") return 0;
+    return configured;
+  }
+
+  private maybeSkipStalledLoadingRound(session: RoomSession, nowMs: number) {
+    if (session.manager.state() !== "loading") return false;
+
+    const timeoutMs = this.loadingTimeoutMsForCurrentRound(session);
+    if (timeoutMs <= 0) return false;
+
+    const loadingStartedAtMs = session.manager.startedAtMs();
+    if (loadingStartedAtMs === null) return false;
+
+    const elapsedMs = Math.max(0, nowMs - loadingStartedAtMs);
+    if (elapsedMs < timeoutMs) return false;
+
+    const currentRound = session.manager.round();
+    const activeTrack = this.trackForRound(session, currentRound);
+    if (!activeTrack || activeTrack.provider !== "animethemes") return false;
+
+    void this.markAnimeThemeVideoUnavailable(activeTrack.id);
+    logEvent("warn", "room_loading_timeout_skip_round", {
+      roomCode: session.roomCode,
+      round: currentRound,
+      trackId: activeTrack.id,
+      timeoutMs,
+      elapsedMs,
+    });
+
+    session.manager.skipPlayingRound({
+      nowMs,
+      loadingMs: this.loadingMsForRound(session, currentRound + 1),
+      roundMs: this.config.playingMs,
+    });
+    return true;
+  }
+
+  private isGuessPhaseDoneForAll(session: RoomSession) {
+    const ids = this.activePlayerIds(session);
+    if (ids.length <= 0) return false;
+    return ids.every((playerId) => session.manager.hasGuessDone(playerId));
+  }
+
+  private isLoadingMediaReadyForAll(session: RoomSession) {
+    const ids = this.activePlayerIds(session);
+    if (ids.length <= 0) return false;
+    return ids.every((playerId) => session.manager.hasMediaReady(playerId));
+  }
+
+  private isRevealSkipDoneForAll(session: RoomSession) {
+    const ids = this.activePlayerIds(session);
+    if (ids.length <= 0) return false;
+    return ids.every((playerId) => session.manager.hasRevealSkipped(playerId));
+  }
+
+  private maybeAdvanceOnUnanimousPhaseCompletion(session: RoomSession, nowMs: number) {
+    const state = session.manager.state();
+    if (state === "loading" && this.isLoadingMediaReadyForAll(session)) {
+      if (session.manager.expireCurrentPhase(nowMs)) {
+        this.progressSession(session, nowMs);
+      }
+      return true;
+    }
+    if (state === "playing" && this.isGuessPhaseDoneForAll(session)) {
+      if (session.manager.expireCurrentPhase(nowMs)) {
+        this.progressSession(session, nowMs);
+      }
+      return true;
+    }
+    if (state === "reveal" && this.isRevealSkipDoneForAll(session)) {
+      if (session.manager.expireCurrentPhase(nowMs)) {
+        this.progressSession(session, nowMs);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private async markAnimeThemeVideoUnavailable(videoKey: string) {
+    if (!(typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0)) {
+      return;
+    }
+    try {
+      await pool.query(
+        `
+          update anime_theme_videos
+          set is_playable = false, updated_at = now()
+          where video_key = $1
+        `,
+        [videoKey],
+      );
+    } catch (error) {
+      logEvent("warn", "animethemes_mark_unavailable_failed", {
+        videoKey,
+        error: error instanceof Error ? error.message : "UNKNOWN_ERROR",
+      });
+    }
+  }
+
   private progressSession(session: RoomSession, nowMs: number) {
+    if (this.maybeSkipStalledLoadingRound(session, nowMs)) {
+      return;
+    }
+
+    const loadingMs = this.loadingMsForCurrentTransition(session);
     const tick = session.manager.tick({
       nowMs,
+      loadingMs,
       roundMs: this.config.playingMs,
       revealMs: this.config.revealMs,
       leaderboardMs: this.config.leaderboardMs,
@@ -1187,6 +1538,8 @@ export class RoomStore {
           titleRomaji: getRomanizedJapaneseCached(track.title),
           artist: track.artist,
           artistRomaji: getRomanizedJapaneseCached(track.artist),
+          songTitle: track.songTitle ?? null,
+          songArtists: track.songArtists ?? [],
           provider: track.provider,
           mode: roundMode,
           acceptedAnswer: asChoiceLabel(track),
@@ -1206,6 +1559,19 @@ export class RoomStore {
       roomCode = randomRoomCode();
     }
 
+    const requestedCategory = options.categoryQuery?.trim() ?? "";
+    const lowerCategory = requestedCategory.toLowerCase();
+    const initialSourceMode: RoomSourceMode =
+      lowerCategory.startsWith("deezer:playlist:")
+        ? "public_playlist"
+        : lowerCategory === "players:liked"
+          ? "players_liked"
+          : "anilist_union";
+    const initialCategoryQuery =
+      initialSourceMode === "anilist_union"
+        ? "anilist:linked:union"
+        : requestedCategory;
+
     const session: RoomSession = {
       roomCode,
       createdAtMs: nowMs,
@@ -1216,7 +1582,8 @@ export class RoomStore {
       nextPlayerNumber: 1,
       trackPool: [],
       distractorTrackPool: [],
-      sourceMode: "public_playlist",
+      sourceMode: initialSourceMode,
+      themeMode: "mix",
       publicPlaylistSelection: null,
       playersLikedRules: {
         minContributors: 1,
@@ -1233,14 +1600,14 @@ export class RoomStore {
       },
       isResolvingTracks: false,
       trackResolutionJobsInFlight: 0,
-      categoryQuery: options.categoryQuery?.trim() ?? "",
+      categoryQuery: initialCategoryQuery,
       totalRounds: 0,
       roundModes: [],
       roundChoices: new Map(),
       latestReveal: null,
       chatMessages: [],
     };
-    if (session.categoryQuery.toLowerCase().startsWith("deezer:playlist:")) {
+    if (session.sourceMode === "public_playlist" && session.categoryQuery.toLowerCase().startsWith("deezer:playlist:")) {
       session.publicPlaylistSelection = {
         provider: "deezer",
         id: session.categoryQuery.slice("deezer:playlist:".length),
@@ -1397,7 +1764,7 @@ export class RoomStore {
       } else if (session.categoryQuery === "players:liked") {
         session.categoryQuery = "";
       }
-    } else {
+    } else if (isLegacyPlayersLikedSource(mode)) {
       session.publicPlaylistSelection = null;
       session.categoryQuery = "players:liked";
       for (const player of session.players.values()) {
@@ -1407,9 +1774,38 @@ export class RoomStore {
           }
         }
       }
+    } else {
+      session.publicPlaylistSelection = null;
+      session.playersLikedPool = [];
+      session.distractorTrackPool = [];
+      this.roomLikedPoolRebuildRequested.delete(roomCode);
+      session.poolBuild = {
+        status: "idle",
+        contributorsCount: 0,
+        mergedTracksCount: 0,
+        playableTracksCount: 0,
+        lastBuiltAtMs: null,
+        errorCode: null,
+      };
+      session.isResolvingTracks = false;
+      session.trackResolutionJobsInFlight = 0;
+      session.categoryQuery = "anilist:linked:union";
     }
     this.resetReadyStates(session);
     return { status: "ok" as const, mode: session.sourceMode };
+  }
+
+  setRoomThemeMode(roomCode: string, playerId: string, mode: RoomThemeMode) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.themeMode = mode;
+    this.resetReadyStates(session);
+    return { status: "ok" as const, mode: session.themeMode };
   }
 
   setRoomPublicPlaylist(
@@ -1572,6 +1968,10 @@ export class RoomStore {
     this.ensureHost(session);
     if (session.manager.state() === "waiting") {
       this.resetReadyStates(session);
+    } else {
+      const nowMs = this.now();
+      this.progressSession(session, nowMs);
+      this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
     }
 
     return { status: "ok" as const, playerCount: session.players.size, hostPlayerId: session.hostPlayerId };
@@ -1596,7 +1996,8 @@ export class RoomStore {
     session.roundChoices.clear();
     session.latestReveal = null;
     session.chatMessages = [];
-    session.sourceMode = "public_playlist";
+    session.sourceMode = "anilist_union";
+    session.themeMode = "mix";
     session.publicPlaylistSelection = null;
     session.playersLikedPool = [];
     session.poolBuild = {
@@ -1609,7 +2010,7 @@ export class RoomStore {
     };
     session.isResolvingTracks = false;
     session.trackResolutionJobsInFlight = 0;
-    session.categoryQuery = "";
+    session.categoryQuery = "anilist:linked:union";
     this.resetReadyStates(session);
 
     for (const player of session.players.values()) {
@@ -1672,6 +2073,14 @@ export class RoomStore {
           error: "SOURCE_NOT_SET" as const,
         };
       }
+    } else if (isAniListUnionSource(session.sourceMode)) {
+      const hasLinkedUser = [...session.players.values()].some((player) => player.userId !== null);
+      if (!hasLinkedUser) {
+        return {
+          ok: false as const,
+          error: "PLAYERS_LIBRARY_NOT_READY" as const,
+        };
+      }
     } else {
       const contributors = this.playersLikedContributors(session);
       if (contributors.length < session.playersLikedRules.minContributors) {
@@ -1726,10 +2135,10 @@ export class RoomStore {
       playableTotal: number;
       cleanTotal: number;
     };
-    const reusablePlayersLikedPlayablePool = session.sourceMode === "players_liked"
+    const reusablePlayersLikedPlayablePool = isLegacyPlayersLikedSource(session.sourceMode)
       ? session.playersLikedPool.filter((track) => isTrackPlayable(track))
       : [];
-    const canReusePlayersLikedPool = session.sourceMode === "players_liked"
+    const canReusePlayersLikedPool = isLegacyPlayersLikedSource(session.sourceMode)
       && session.poolBuild.status === "ready"
       && reusablePlayersLikedPlayablePool.length >= poolSize;
 
@@ -1755,7 +2164,7 @@ export class RoomStore {
         candidatePoolSize: session.playersLikedPool.length,
         playablePoolSize: split.candidateCount,
       });
-    } else if (session.sourceMode === "players_liked") {
+    } else if (isLegacyPlayersLikedSource(session.sourceMode)) {
       if (session.manager.state() === "waiting" && session.poolBuild.status !== "building") {
         this.startPlayersLikedPoolBuild(session);
       }
@@ -1764,6 +2173,11 @@ export class RoomStore {
         error: "PLAYERS_LIBRARY_SYNCING" as const,
         retryAfterMs: 1_500,
       };
+    } else if (isAniListUnionSource(session.sourceMode)) {
+      startPoolStats = await this.resolveTracksWithFlag(
+        session,
+        async () => await this.buildAniListUnionTrackPool(session, poolSize),
+      );
     } else {
       try {
         startPoolStats = await this.resolveTracksWithFlag(
@@ -2013,25 +2427,110 @@ export class RoomStore {
   skipCurrentRound(roomCode: string, playerId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    this.ensureHost(session);
     if (!session.players.has(playerId)) return { status: "player_not_found" as const };
-    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
 
     const nowMs = this.now();
     this.progressSession(session, nowMs);
-    if (session.manager.state() !== "playing") return { status: "invalid_state" as const };
+    const state = session.manager.state();
+    if (state === "playing") {
+      const result = session.manager.skipGuessForPlayer(playerId, nowMs);
+      if (result.accepted) {
+        this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+      }
+      return {
+        status: "ok" as const,
+        accepted: result.accepted,
+        state: session.manager.state(),
+        round: session.manager.round(),
+        deadlineMs: session.manager.deadlineMs(),
+      };
+    }
+    if (state === "reveal") {
+      const result = session.manager.skipRevealForPlayer(playerId, nowMs);
+      if (result.accepted) {
+        this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+      }
+      return {
+        status: "ok" as const,
+        accepted: result.accepted,
+        state: session.manager.state(),
+        round: session.manager.round(),
+        deadlineMs: session.manager.deadlineMs(),
+      };
+    }
 
-    const skipped = session.manager.skipPlayingRound({
-      nowMs,
-      roundMs: this.config.playingMs,
-    });
-    if (!skipped.skipped || !skipped.closedRound) {
+    return { status: "invalid_state" as const };
+  }
+
+  async reportMediaUnavailable(roomCode: string, playerId: string, trackId: string) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+
+    const nowMs = this.now();
+    this.progressSession(session, nowMs);
+    const state = session.manager.state();
+    if (state !== "loading" && state !== "playing" && state !== "reveal" && state !== "leaderboard") {
       return { status: "invalid_state" as const };
     }
 
-    this.applyRoundResults(session, skipped.closedRound);
+    const currentRound = session.manager.round();
+    const playingTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
+    const revealTrack = session.latestReveal;
+    const activeTrack = state === "playing" || state === "loading" ? playingTrack : revealTrack;
+    if (!activeTrack || activeTrack.provider !== "animethemes") {
+      return { status: "invalid_payload" as const };
+    }
+    if (activeTrack.id !== trackId) {
+      return { status: "invalid_payload" as const };
+    }
+
+    await this.markAnimeThemeVideoUnavailable(trackId);
+
+    if (state === "loading" || state === "playing") {
+      session.manager.skipPlayingRound({
+        nowMs,
+        loadingMs: this.loadingMsForRound(session, currentRound + 1),
+        roundMs: this.config.playingMs,
+      });
+    } else if (session.manager.expireCurrentPhase(nowMs)) {
+      this.progressSession(session, nowMs);
+    }
+
     return {
       status: "ok" as const,
+      accepted: true,
+      state: session.manager.state(),
+      round: session.manager.round(),
+      deadlineMs: session.manager.deadlineMs(),
+    };
+  }
+
+  markMediaReady(roomCode: string, playerId: string, trackId: string) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+
+    const nowMs = this.now();
+    this.progressSession(session, nowMs);
+    if (session.manager.state() !== "loading") {
+      return { status: "invalid_state" as const };
+    }
+
+    const currentRound = session.manager.round();
+    const activeTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
+    if (!activeTrack || activeTrack.provider !== "animethemes" || activeTrack.id !== trackId) {
+      return { status: "invalid_payload" as const };
+    }
+
+    const marked = session.manager.markMediaReady(playerId, nowMs);
+    if (marked.accepted) {
+      this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+    }
+
+    return {
+      status: "ok" as const,
+      accepted: marked.accepted,
       state: session.manager.state(),
       round: session.manager.round(),
       deadlineMs: session.manager.deadlineMs(),
@@ -2049,6 +2548,9 @@ export class RoomStore {
     if (!player) return { status: "player_not_found" as const };
 
     const result = session.manager.submitAnswer(playerId, answer, nowMs);
+    if (result.accepted) {
+      this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
+    }
     return { status: "ok" as const, accepted: result.accepted };
   }
 
@@ -2105,7 +2607,7 @@ export class RoomStore {
     this.progressSession(session, this.now());
     const state = session.manager.state() as GameState;
     const currentRound = session.manager.round();
-    const activeTrack = currentRound > 0 ? (session.trackPool[currentRound - 1] ?? null) : null;
+    const activeTrack = this.trackForRound(session, currentRound);
     if (activeTrack) {
       scheduleRomanizeJapanese(activeTrack.title);
       scheduleRomanizeJapanese(activeTrack.artist);
@@ -2120,7 +2622,7 @@ export class RoomStore {
       playerId: player.id,
       displayName: player.displayName,
       isReady: player.isReady,
-      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasSubmittedAnswer(player.id) : false,
+      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(player.id) : false,
       isHost: player.id === hostPlayerId,
       canContributeLibrary: Boolean(player.userId),
       libraryContribution: {
@@ -2147,8 +2649,20 @@ export class RoomStore {
       .slice(0, 10)
       .map((entry) => ({
         ...entry,
-        hasAnsweredCurrentRound: state === "playing" ? session.manager.hasSubmittedAnswer(entry.playerId) : false,
+        hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(entry.playerId) : false,
       }));
+    const activePlayerIds = players.map((player) => player.playerId);
+    const guessTotalCount = state === "playing" ? activePlayerIds.length : 0;
+    const guessDoneCount =
+      state === "playing" ? activePlayerIds.filter((playerId) => session.manager.hasGuessDone(playerId)).length : 0;
+    const mediaReadyTotalCount = state === "loading" ? activePlayerIds.length : 0;
+    const mediaReadyCount =
+      state === "loading" ? activePlayerIds.filter((playerId) => session.manager.hasMediaReady(playerId)).length : 0;
+    const revealSkipTotalCount = state === "reveal" ? activePlayerIds.length : 0;
+    const revealSkipCount =
+      state === "reveal"
+        ? activePlayerIds.filter((playerId) => session.manager.hasRevealSkipped(playerId)).length
+        : 0;
     if (session.latestReveal) {
       scheduleRomanizeJapanese(session.latestReveal.title);
       scheduleRomanizeJapanese(session.latestReveal.artist);
@@ -2166,8 +2680,18 @@ export class RoomStore {
       state === "reveal" || state === "leaderboard" || state === "results"
         ? session.latestReveal
         : null;
+    const nextRound =
+      state === "countdown"
+        ? 1
+        : state === "loading" ||
+            state === "playing" ||
+            state === "reveal" ||
+            state === "leaderboard"
+          ? currentRound + 1
+          : 0;
+    const nextTrack = this.trackForRound(session, nextRound);
     const media =
-      state === "playing" && activeTrack
+      (state === "playing" || state === "loading") && activeTrack
         ? {
             provider: activeTrack.provider,
             trackId: activeTrack.id,
@@ -2182,6 +2706,14 @@ export class RoomStore {
               embedUrl: revealMedia.embedUrl,
             }
           : null;
+    const nextMedia = nextTrack
+      ? {
+          provider: nextTrack.provider,
+          trackId: nextTrack.id,
+          sourceUrl: nextTrack.sourceUrl,
+          embedUrl: embedUrlForTrack(nextTrack, { roomCode: session.roomCode, round: nextRound }),
+        }
+      : null;
     const suggestionTracks =
       session.trackPool.length > 0
         ? [...session.trackPool, ...session.distractorTrackPool]
@@ -2207,6 +2739,7 @@ export class RoomStore {
       sourceMode: session.sourceMode,
       sourceConfig: {
         mode: session.sourceMode,
+        themeMode: session.themeMode,
         publicPlaylist: session.publicPlaylistSelection
           ? {
               provider: session.publicPlaylistSelection.provider,
@@ -2232,11 +2765,18 @@ export class RoomStore {
       },
       totalRounds: session.totalRounds,
       deadlineMs: session.manager.deadlineMs(),
+      guessDoneCount,
+      guessTotalCount,
+      mediaReadyCount,
+      mediaReadyTotalCount,
+      revealSkipCount,
+      revealSkipTotalCount,
       previewUrl:
         state === "playing"
           ? activeTrack?.previewUrl ?? null
           : revealMedia?.previewUrl ?? null,
       media,
+      nextMedia,
       reveal: revealMedia,
       leaderboard,
       chatMessages: session.chatMessages.slice(-80),

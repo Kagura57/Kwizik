@@ -8,27 +8,34 @@ import {
   HttpStatusError,
   kickPlayer,
   leaveRoom as leaveRoomApi,
+  markRoomMediaReady,
+  reportRoomMediaUnavailable,
   replayRoom,
+  searchAnimeAutocomplete,
   searchPlaylistsAcrossProviders,
   sendRoomChatMessage,
   setPlayerReady,
   setRoomPublicPlaylist,
   setRoomSourceMode,
+  setRoomThemeMode,
   skipRoomRound,
   startRoom,
   submitRoomAnswer,
   submitRoomAnswerDraft,
+  type RoundChoice,
+  type TitlePreference,
   type UnifiedPlaylistOption,
 } from "../../../lib/api";
 import { fetchLiveRoomState } from "../../../lib/realtime";
 import { useGameStore } from "../../../stores/gameStore";
 
-const ROUND_MS = 12_000;
+const ROUND_MS = 20_000;
 const COUNTDOWN_MS = 3_000;
-const REVEAL_MS = 4_000;
-const LEADERBOARD_MS = 3_000;
+const REVEAL_MS = 20_000;
+const LEADERBOARD_MS = 0;
 
-type SourceMode = "public_playlist" | "players_liked";
+type SourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type ThemeMode = "op_only" | "ed_only" | "mix";
 type AnswerSelectOption = {
   value: string;
   label: string;
@@ -41,10 +48,40 @@ function clamp01(value: number) {
 function phaseProgress(phase: string | undefined, remainingMs: number | null) {
   if (remainingMs === null) return 0;
   if (phase === "countdown") return clamp01((COUNTDOWN_MS - remainingMs) / COUNTDOWN_MS);
+  if (phase === "loading") return 0;
   if (phase === "playing") return clamp01((ROUND_MS - remainingMs) / ROUND_MS);
   if (phase === "reveal") return clamp01((REVEAL_MS - remainingMs) / REVEAL_MS);
-  if (phase === "leaderboard") return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  if (phase === "leaderboard") {
+    if (LEADERBOARD_MS <= 0) return 1;
+    return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  }
   return 0;
+}
+
+function stableHash(value: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
+function deterministicIntFromSeed(seed: string, min: number, max: number) {
+  const safeMin = Math.max(0, Math.floor(min));
+  const safeMax = Math.max(safeMin, Math.floor(max));
+  const size = safeMax - safeMin + 1;
+  if (size <= 1) return safeMin;
+  return safeMin + (stableHash(seed) % size);
+}
+
+function computeAnimeStartSec(input: { roomCode: string; round: number; trackId: string; durationSec: number }) {
+  const safeDuration = Math.max(0, Math.floor(input.durationSec));
+  const roundDurationSec = Math.max(1, Math.floor(ROUND_MS / 1000));
+  if (safeDuration <= roundDurationSec) return 0;
+  const maxStart = Math.max(0, safeDuration - roundDurationSec);
+  const seed = `${input.roomCode}:${input.round}:${input.trackId}`;
+  return deterministicIntFromSeed(seed, 0, maxStart);
 }
 
 const WAVE_BARS = Array.from({ length: 48 }, (_, index) => ({
@@ -53,40 +90,37 @@ const WAVE_BARS = Array.from({ length: 48 }, (_, index) => ({
   delaySec: (index % 8) * 0.08,
 }));
 
-function stripProviderMentions(value: string | null | undefined) {
-  if (!value) return "";
-  return value
-    .replace(/\bspotify\b/gi, "")
-    .replace(/\bdeezer\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function playlistSecondaryLabel(playlist: UnifiedPlaylistOption) {
-  const description = stripProviderMentions(playlist.description);
-  if (description.length > 0) return description;
-  const owner = stripProviderMentions(playlist.owner);
-  if (owner.length > 0) return owner;
-  return "Playlist musicale";
-}
-
-function playlistDisplayName(name: string) {
-  const sanitized = stripProviderMentions(name);
-  return sanitized.length > 0 ? sanitized : name;
-}
-
-function formatTrackCountLabel(value: number | null | undefined) {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return `${Math.floor(value)} titres`;
-  }
-  return "Nombre de titres indisponible";
-}
-
 function withRomajiLabel(value: string, providedRomaji?: string | null) {
   if (!value) return value;
   const romaji = providedRomaji?.trim().length ? providedRomaji.trim() : toRomaji(value).trim();
   if (!romaji || romaji.toLowerCase() === value.toLowerCase()) return value;
   return romaji;
+}
+
+function normalizeChoiceLabel(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/['’`´]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatRoundChoiceLabel(choice: RoundChoice, preference: TitlePreference) {
+  const romajiTitle = withRomajiLabel(choice.titleRomaji);
+  const englishTitle = choice.titleEnglish?.trim() ?? "";
+  const hasDistinctEnglish =
+    englishTitle.length > 0 && normalizeChoiceLabel(englishTitle) !== normalizeChoiceLabel(choice.titleRomaji);
+
+  if (preference === "english" && hasDistinctEnglish) {
+    return `${englishTitle} - ${choice.themeLabel}`;
+  }
+  if (preference === "mixed" && hasDistinctEnglish) {
+    return `${romajiTitle} (${englishTitle}) - ${choice.themeLabel}`;
+  }
+  return `${romajiTitle} - ${choice.themeLabel}`;
 }
 
 function revealArtworkUrl(reveal: {
@@ -107,7 +141,7 @@ function lobbyReadyStatusLabel(
     poolBuild: {
       status: "idle" | "building" | "ready" | "failed";
     };
-    sourceMode: "public_playlist" | "players_liked";
+    sourceMode: "public_playlist" | "players_liked" | "anilist_union";
     sourceConfig: {
       publicPlaylist: {
         sourceQuery: string;
@@ -126,14 +160,14 @@ function lobbyReadyStatusLabel(
         ? " · Choisis une playlist pour lancer."
         : " · En attente de la playlist du host.";
     }
-    if (state.sourceMode === "players_liked") {
+    if (state.sourceMode === "players_liked" || state.sourceMode === "anilist_union") {
       return isHost
-        ? " · Active un compte lié ou une bibliothèque déjà synchronisée pour lancer."
+        ? " · Configure un pseudo AniList puis synchronise pour lancer."
         : " · En attente de la configuration du host.";
     }
     return "";
   }
-  if (state.sourceMode === "players_liked" && state.poolBuild.status !== "ready") {
+  if ((state.sourceMode === "players_liked" || state.sourceMode === "anilist_union") && state.poolBuild.status !== "ready") {
     return " · Préparation de la playlist des joueurs en cours...";
   }
   return isHost ? " · Lancement auto en cours..." : " · En attente du host pour lancer.";
@@ -179,6 +213,7 @@ export function RoomPlayPage() {
   const { roomCode } = useParams({ from: "/room/$roomCode/play" });
   const navigate = useNavigate();
   const session = useGameStore((state) => state.session);
+  const account = useGameStore((state) => state.account);
   const clearSession = useGameStore((state) => state.clearSession);
   const setLiveRound = useGameStore((state) => state.setLiveRound);
   const [answer, setAnswer] = useState("");
@@ -187,14 +222,21 @@ export function RoomPlayPage() {
   const [progress, setProgress] = useState(0);
   const [audioError, setAudioError] = useState(false);
   const [iframeEpoch, setIframeEpoch] = useState(0);
+  const [animePlaybackStatus, setAnimePlaybackStatus] = useState<"idle" | "buffering" | "playing">("idle");
   const [stableYoutubePlayback, setStableYoutubePlayback] = useState<{
     key: string;
     embedUrl: string;
   } | null>(null);
+  const [stableAnimeVideoPlayback, setStableAnimeVideoPlayback] = useState<{
+    key: string;
+    sourceUrl: string;
+  } | null>(null);
   const [submittedMcq, setSubmittedMcq] = useState<{ round: number; choice: string } | null>(null);
   const [submittedText, setSubmittedText] = useState<{ round: number; value: string } | null>(null);
   const [answerSuggestionPool, setAnswerSuggestionPool] = useState<string[]>([]);
-  const [sourceMode, setSourceMode] = useState<SourceMode>("public_playlist");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("anilist_union");
+  const [themeMode, setThemeMode] = useState<ThemeMode>("mix");
+  const titlePreference = account.titlePreference;
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
   const [debouncedPlaylistQuery, setDebouncedPlaylistQuery] = useState("top hits");
   const [playlistOffset, setPlaylistOffset] = useState(0);
@@ -203,8 +245,11 @@ export function RoomPlayPage() {
   const [chatInput, setChatInput] = useState("");
   const [spotifyRateLimitUntilMs, setSpotifyRateLimitUntilMs] = useState<number | null>(null);
   const [startRetryNotBeforeMs, setStartRetryNotBeforeMs] = useState<number | null>(null);
+  const [phaseSkipVote, setPhaseSkipVote] = useState<{ phase: "playing" | "reveal"; round: number } | null>(null);
   const youtubeIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const animeVideoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const nextAnimePreloadRef = useRef<HTMLVideoElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
   const autoStartRoundRef = useRef<number>(0);
   const leaveSentRef = useRef(false);
@@ -213,6 +258,9 @@ export function RoomPlayPage() {
   const audioRetryTimeoutRef = useRef<number | null>(null);
   const autoSubmitSignatureRef = useRef<string | null>(null);
   const draftSignatureRef = useRef<string | null>(null);
+  const reportedUnavailableMediaRef = useRef<string | null>(null);
+  const reportedMediaReadyRef = useRef<string | null>(null);
+  const appliedAnimeStartRef = useRef<string | null>(null);
   const userInteractionUnlockedRef = useRef(false);
   const roomMissingRedirectedRef = useRef(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
@@ -257,7 +305,8 @@ export function RoomPlayPage() {
   const isWaitingLobby = state?.state === "waiting";
   const isResolvingTracks = Boolean(state?.isResolvingTracks);
   const isPlayersLikedPoolBuilding =
-    state?.sourceMode === "players_liked" && state.poolBuild.status === "building";
+    (state?.sourceMode === "players_liked" || state?.sourceMode === "anilist_union") &&
+    state.poolBuild.status === "building";
   const currentPlayer = state?.players.find((player) => player.playerId === session.playerId) ?? null;
   const hasActivePlayerSeat = Boolean(currentPlayer);
   const lobbyReadyStatus = lobbyReadyStatusLabel(state, isHost, hasActivePlayerSeat);
@@ -274,6 +323,11 @@ export function RoomPlayPage() {
     if (!state?.sourceMode) return;
     setSourceMode(state.sourceMode);
   }, [state?.sourceMode]);
+
+  useEffect(() => {
+    if (!state?.sourceConfig?.themeMode) return;
+    setThemeMode(state.sourceConfig.themeMode);
+  }, [state?.sourceConfig?.themeMode]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -323,6 +377,14 @@ export function RoomPlayPage() {
       }),
     enabled: Boolean(session.playerId),
     staleTime: 10 * 60_000,
+    retry: 1,
+  });
+
+  const animeAutocompleteQuery = useQuery({
+    queryKey: ["anime-autocomplete", typedAnswer],
+    queryFn: () => searchAnimeAutocomplete({ q: typedAnswer, limit: 12 }),
+    enabled: typedAnswer.length >= 1 && state?.state === "playing" && state.mode === "text",
+    staleTime: 30_000,
     retry: 1,
   });
 
@@ -377,9 +439,10 @@ export function RoomPlayPage() {
   }, [bulkAnswerSuggestionsQuery.data?.suggestions]);
 
   const answerSelectOptions = useMemo<AnswerSelectOption[]>(() => {
-    if (typedAnswer.length < 3) return [];
+    if (typedAnswer.length < 1) return [];
+    const fromApi = animeAutocompleteQuery.data?.suggestions ?? [];
     const rankedPool = rankAnswerSuggestions(answerSuggestionPool, typedAnswer);
-    const values = rankedPool;
+    const values = [...fromApi.map((item) => item.label), ...rankedPool];
     const deduped: AnswerSelectOption[] = [];
     const seen = new Set<string>();
     for (const value of values) {
@@ -391,7 +454,7 @@ export function RoomPlayPage() {
       deduped.push({ value: normalized, label: normalized });
     }
     return deduped;
-  }, [answerSuggestionPool, typedAnswer]);
+  }, [animeAutocompleteQuery.data?.suggestions, answerSuggestionPool, typedAnswer]);
   const selectedAnswerOption = useMemo<AnswerSelectOption | null>(() => {
     const normalized = answer.trim();
     if (normalized.length <= 0) return null;
@@ -403,7 +466,7 @@ export function RoomPlayPage() {
   const answerSeedIsLoading =
     state?.state === "playing" &&
     state.mode === "text" &&
-    (isResolvingTracks || bulkAnswerSuggestionsQuery.isFetching) &&
+    (isResolvingTracks || bulkAnswerSuggestionsQuery.isFetching || animeAutocompleteQuery.isFetching) &&
     answerSuggestionPool.length <= 0;
 
   const showRevealAnswersInLeaderboard = state?.state === "reveal" || state?.state === "leaderboard";
@@ -447,12 +510,20 @@ export function RoomPlayPage() {
 
     setLiveRound({
       phase: state.state,
+      isLoadingMedia: state.state === "loading",
       mode: state.mode,
       round: state.round,
       totalRounds: state.totalRounds,
       deadlineMs: state.deadlineMs,
+      guessDoneCount: state.guessDoneCount,
+      guessTotalCount: state.guessTotalCount,
+      mediaReadyCount: state.mediaReadyCount,
+      mediaReadyTotalCount: state.mediaReadyTotalCount,
+      revealSkipCount: state.revealSkipCount,
+      revealSkipTotalCount: state.revealSkipTotalCount,
       previewUrl: state.previewUrl,
       media: state.media,
+      nextMedia: state.nextMedia,
       choices: state.choices,
       reveal: state.reveal
         ? {
@@ -460,6 +531,8 @@ export function RoomPlayPage() {
             provider: state.reveal.provider,
             title: state.reveal.title,
             artist: state.reveal.artist,
+            songTitle: state.reveal.songTitle,
+            songArtists: state.reveal.songArtists,
             acceptedAnswer: state.reveal.acceptedAnswer,
             previewUrl: state.reveal.previewUrl,
             sourceUrl: state.reveal.sourceUrl,
@@ -563,6 +636,18 @@ export function RoomPlayPage() {
     onSuccess: () => snapshotQuery.refetch(),
   });
 
+  const themeModeMutation = useMutation({
+    mutationFn: (mode: ThemeMode) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomThemeMode({
+        roomCode,
+        playerId: session.playerId,
+        mode,
+      });
+    },
+    onSuccess: () => snapshotQuery.refetch(),
+  });
+
   const publicPlaylistMutation = useMutation({
     mutationFn: (playlist: UnifiedPlaylistOption) => {
       if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
@@ -621,7 +706,48 @@ export function RoomPlayPage() {
         playerId: session.playerId,
       });
     },
+    onMutate: () => {
+      if (!state) return;
+      if (state.state !== "playing" && state.state !== "reveal") return;
+      setPhaseSkipVote({
+        phase: state.state,
+        round: state.round,
+      });
+    },
+    onError: () => {
+      setPhaseSkipVote(null);
+    },
     onSuccess: () => snapshotQuery.refetch(),
+  });
+
+  const mediaUnavailableMutation = useMutation({
+    mutationFn: (trackId: string) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return reportRoomMediaUnavailable({
+        roomCode,
+        playerId: session.playerId,
+        trackId,
+      });
+    },
+    onSuccess: () => snapshotQuery.refetch(),
+    onError: () => {
+      reportedUnavailableMediaRef.current = null;
+    },
+  });
+
+  const mediaReadyMutation = useMutation({
+    mutationFn: (trackId: string) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return markRoomMediaReady({
+        roomCode,
+        playerId: session.playerId,
+        trackId,
+      });
+    },
+    onSuccess: () => snapshotQuery.refetch(),
+    onError: () => {
+      reportedMediaReadyRef.current = null;
+    },
   });
 
   const answerMutation = useMutation({
@@ -670,6 +796,7 @@ export function RoomPlayPage() {
   const isNonBlockingStartError =
     startErrorCode === "PLAYERS_LIBRARY_SYNCING" || startErrorCode === "PLAYLIST_TRACKS_RESOLVING";
   const sourceModeErrorCode = sourceModeMutation.error instanceof Error ? sourceModeMutation.error.message : null;
+  const themeModeErrorCode = themeModeMutation.error instanceof Error ? themeModeMutation.error.message : null;
   const publicPlaylistErrorCode =
     publicPlaylistMutation.error instanceof Error ? publicPlaylistMutation.error.message : null;
   const readyErrorCode = readyMutation.error instanceof Error ? readyMutation.error.message : null;
@@ -744,6 +871,15 @@ export function RoomPlayPage() {
     };
   }, [state?.media?.embedUrl, state?.media?.provider, state?.media?.trackId]);
 
+  const animeVideoPlayback = useMemo(() => {
+    if (!state?.media?.sourceUrl || !state.media.trackId) return null;
+    if (state.media.provider !== "animethemes") return null;
+    return {
+      key: `${state.media.provider}:${state.media.trackId}`,
+      sourceUrl: state.media.sourceUrl,
+    };
+  }, [state?.media?.sourceUrl, state?.media?.provider, state?.media?.trackId]);
+
   useEffect(() => {
     if (youtubePlayback) {
       setStableYoutubePlayback((previous) => {
@@ -763,11 +899,34 @@ export function RoomPlayPage() {
     }
   }, [state?.state, youtubePlayback]);
 
+  useEffect(() => {
+    if (animeVideoPlayback) {
+      setStableAnimeVideoPlayback((previous) => {
+        if (previous?.key === animeVideoPlayback.key) return previous;
+        return animeVideoPlayback;
+      });
+      return;
+    }
+
+    const shouldClear =
+      state?.state === "waiting" ||
+      state?.state === "results" ||
+      state?.state === undefined;
+    if (shouldClear) {
+      setStableAnimeVideoPlayback(null);
+    }
+  }, [animeVideoPlayback, state?.state]);
+
   const activeYoutubeEmbed = stableYoutubePlayback?.embedUrl ?? null;
+  const activeAnimeVideoSource = stableAnimeVideoPlayback?.sourceUrl ?? null;
+  const nextAnimeVideoSource =
+    state?.nextMedia?.provider === "animethemes" ? (state.nextMedia.sourceUrl ?? null) : null;
   const usingYouTubePlayback = Boolean(activeYoutubeEmbed);
+  const usingAnimeVideoPlayback = Boolean(activeAnimeVideoSource);
   const revealVideoActive =
-    usingYouTubePlayback &&
+    (usingYouTubePlayback || usingAnimeVideoPlayback) &&
     state?.state !== "waiting" &&
+    state?.state !== "loading" &&
     state?.state !== "playing" &&
     state?.state !== "results";
   const isResults = state?.state === "results";
@@ -783,6 +942,122 @@ export function RoomPlayPage() {
     submittedText.round === state.round;
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
+  const hasLockedGuessVote =
+    state?.state === "playing" &&
+    phaseSkipVote?.phase === "playing" &&
+    phaseSkipVote.round === state.round;
+  const hasLockedRevealVote =
+    state?.state === "reveal" &&
+    phaseSkipVote?.phase === "reveal" &&
+    phaseSkipVote.round === state.round;
+  const skipGuessDisabled =
+    skipMutation.isPending ||
+    !session.playerId ||
+    Boolean(currentPlayer?.hasAnsweredCurrentRound) ||
+    hasLockedGuessVote;
+  const skipRevealDisabled =
+    skipMutation.isPending ||
+    !session.playerId ||
+    hasLockedRevealVote;
+
+  function handleAnimeMediaUnavailable() {
+    setAudioError(true);
+    if (!session.playerId) return;
+    if (!state?.media || state.media.provider !== "animethemes") return;
+    if (state.state !== "loading" && state.state !== "playing" && state.state !== "reveal" && state.state !== "leaderboard") return;
+
+    const reportKey = `${state.state}:${state.round}:${state.media.trackId}`;
+    if (reportedUnavailableMediaRef.current === reportKey) return;
+    if (mediaUnavailableMutation.isPending) return;
+
+    reportedUnavailableMediaRef.current = reportKey;
+    mediaUnavailableMutation.mutate(state.media.trackId);
+  }
+
+  function applyAnimeRandomStart(video: HTMLVideoElement) {
+    if (!state?.media || state.media.provider !== "animethemes") return;
+    const duration = Number.isFinite(video.duration) ? Number(video.duration) : 0;
+    const startSec = computeAnimeStartSec({
+      roomCode,
+      round: state.round,
+      trackId: state.media.trackId,
+      durationSec: duration,
+    });
+    const startKey = `${state.round}:${state.media.trackId}`;
+    if (appliedAnimeStartRef.current === startKey) return;
+    appliedAnimeStartRef.current = startKey;
+
+    if (startSec <= 0) return;
+    try {
+      if (Math.abs(video.currentTime - startSec) > 0.35) {
+        video.currentTime = startSec;
+      }
+    } catch {
+      // Ignore seek errors while metadata/streaming pipeline settles.
+    }
+  }
+
+  function signalAnimeMediaReady() {
+    if (!state?.media || state.media.provider !== "animethemes") return;
+    if (state.state !== "loading") return;
+    if (!session.playerId) return;
+    if (mediaReadyMutation.isPending) return;
+
+    const readyKey = `${state.round}:${state.media.trackId}`;
+    if (reportedMediaReadyRef.current === readyKey) return;
+    reportedMediaReadyRef.current = readyKey;
+    mediaReadyMutation.mutate(state.media.trackId);
+  }
+
+  function handleAnimeLoadedMetadata() {
+    const video = animeVideoRef.current;
+    if (!video) return;
+    setAnimePlaybackStatus("buffering");
+    applyAnimeRandomStart(video);
+    video.play().catch(() => undefined);
+  }
+
+  function handleAnimeCanPlayThrough() {
+    const video = animeVideoRef.current;
+    if (video) {
+      applyAnimeRandomStart(video);
+    }
+  }
+
+  function handleAnimePlaying() {
+    const video = animeVideoRef.current;
+    if (video) {
+      applyAnimeRandomStart(video);
+    }
+    setAnimePlaybackStatus("playing");
+    signalAnimeMediaReady();
+  }
+
+  useEffect(() => {
+    if (!phaseSkipVote) return;
+    if (!state) {
+      setPhaseSkipVote(null);
+      return;
+    }
+    if (
+      state.state !== phaseSkipVote.phase ||
+      state.round !== phaseSkipVote.round ||
+      (state.state !== "playing" && state.state !== "reveal")
+    ) {
+      setPhaseSkipVote(null);
+    }
+  }, [phaseSkipVote, state]);
+
+  useEffect(() => {
+    reportedUnavailableMediaRef.current = null;
+    reportedMediaReadyRef.current = null;
+    appliedAnimeStartRef.current = null;
+    if (state?.state === "loading" && state.media?.provider === "animethemes") {
+      setAnimePlaybackStatus("buffering");
+    } else {
+      setAnimePlaybackStatus("idle");
+    }
+  }, [state?.state, state?.round, state?.media?.trackId]);
 
   useEffect(() => {
     const iframe = youtubeIframeRef.current;
@@ -832,6 +1107,70 @@ export function RoomPlayPage() {
   }, [activeYoutubeEmbed, stableYoutubePlayback?.key]);
 
   useEffect(() => {
+    const video = animeVideoRef.current;
+    if (!video) return;
+
+    if (!activeAnimeVideoSource) {
+      video.pause();
+      video.removeAttribute("src");
+      return;
+    }
+
+    const currentSrc = video.getAttribute("src");
+    if (currentSrc !== activeAnimeVideoSource) {
+      video.setAttribute("src", activeAnimeVideoSource);
+      video.load();
+      appliedAnimeStartRef.current = null;
+      reportedMediaReadyRef.current = null;
+    }
+
+    const playPromise = video.play();
+    if (playPromise) {
+      playPromise.catch(() => undefined);
+    }
+  }, [activeAnimeVideoSource, stableAnimeVideoPlayback?.key]);
+
+  useEffect(() => {
+    const selector = "link[data-kwizik-next-anime-preload='true']";
+    const head = document.head;
+    const existing = head.querySelector(selector) as HTMLLinkElement | null;
+
+    if (!nextAnimeVideoSource) {
+      existing?.remove();
+      const preloadVideo = nextAnimePreloadRef.current;
+      if (preloadVideo) {
+        preloadVideo.pause();
+        preloadVideo.removeAttribute("src");
+      }
+      return;
+    }
+
+    const link = existing ?? document.createElement("link");
+    link.setAttribute("data-kwizik-next-anime-preload", "true");
+    link.setAttribute("rel", "preload");
+    link.setAttribute("as", "video");
+    link.setAttribute("href", nextAnimeVideoSource);
+    if (!existing) {
+      head.appendChild(link);
+    }
+
+    const preloadVideo = nextAnimePreloadRef.current;
+    if (preloadVideo && preloadVideo.getAttribute("src") !== nextAnimeVideoSource) {
+      preloadVideo.setAttribute("src", nextAnimeVideoSource);
+      preloadVideo.load();
+    }
+  }, [nextAnimeVideoSource]);
+
+  useEffect(() => {
+    return () => {
+      const link = document.head.querySelector(
+        "link[data-kwizik-next-anime-preload='true']",
+      );
+      link?.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     if (audioRetryTimeoutRef.current !== null) {
@@ -839,7 +1178,7 @@ export function RoomPlayPage() {
       audioRetryTimeoutRef.current = null;
     }
 
-    if (activeYoutubeEmbed) {
+    if (activeYoutubeEmbed || activeAnimeVideoSource) {
       audio.pause();
       audio.removeAttribute("src");
       lastPreviewRef.current = null;
@@ -872,7 +1211,7 @@ export function RoomPlayPage() {
         }, 320);
       });
     }
-  }, [activeYoutubeEmbed, state?.previewUrl, state?.state]);
+  }, [activeAnimeVideoSource, activeYoutubeEmbed, state?.previewUrl, state?.state]);
 
   useEffect(() => {
     function unlockAudioPlayback() {
@@ -882,6 +1221,10 @@ export function RoomPlayPage() {
       const audio = audioRef.current;
       if (audio && audio.src) {
         audio.play().catch(() => undefined);
+      }
+      const video = animeVideoRef.current;
+      if (video && activeAnimeVideoSource) {
+        video.play().catch(() => undefined);
       }
       if (shouldKickIframe) {
         setIframeEpoch((value) => value + 1);
@@ -895,7 +1238,7 @@ export function RoomPlayPage() {
       window.removeEventListener("pointerdown", unlockAudioPlayback);
       window.removeEventListener("keydown", unlockAudioPlayback);
     };
-  }, [activeYoutubeEmbed]);
+  }, [activeAnimeVideoSource, activeYoutubeEmbed]);
 
   useEffect(() => {
     return () => {
@@ -1009,6 +1352,11 @@ export function RoomPlayPage() {
   function onSelectSourceMode(mode: SourceMode) {
     setSourceMode(mode);
     sourceModeMutation.mutate(mode);
+  }
+
+  function onSelectThemeMode(mode: ThemeMode) {
+    setThemeMode(mode);
+    themeModeMutation.mutate(mode);
   }
 
   function dispatchLeaveSignal() {
@@ -1153,21 +1501,62 @@ export function RoomPlayPage() {
                 <strong>Manche {roundLabel}</strong>
               </div>
 
-              <div className={`sound-visual${revealVideoActive ? " reveal-active" : ""}`}>
-                <div className="wave-bars" aria-hidden="true">
-                  {WAVE_BARS.map((bar) => (
-                    <span
-                      key={bar.key}
-                      style={{
-                        height: `${bar.heightPercent}%`,
-                        animationDelay: `${bar.delaySec}s`,
-                      }}
-                    />
-                  ))}
+              <div className={`sound-visual media-shell${revealVideoActive ? " reveal-active" : ""}`}>
+                {activeAnimeVideoSource && (
+                  <video
+                    ref={animeVideoRef}
+                    key={stableAnimeVideoPlayback?.key ?? "none"}
+                    className="media-video-layer anime-video-layer"
+                    src={activeAnimeVideoSource}
+                    preload="auto"
+                    playsInline
+                    onLoadedMetadata={handleAnimeLoadedMetadata}
+                    onCanPlayThrough={handleAnimeCanPlayThrough}
+                    onPlaying={handleAnimePlaying}
+                    onError={handleAnimeMediaUnavailable}
+                  />
+                )}
+                {activeYoutubeEmbed && (
+                  <iframe
+                    ref={youtubeIframeRef}
+                    key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
+                    className="media-video-layer youtube-video-layer"
+                    src={activeYoutubeEmbed}
+                    title="Blindtest playback"
+                    allow="autoplay; encrypted-media"
+                    onError={() => {
+                      setAudioError(true);
+                    }}
+                  />
+                )}
+                <div className="media-wave-layer" aria-hidden="true">
+                  <div className="wave-bars">
+                    {WAVE_BARS.map((bar) => (
+                      <span
+                        key={bar.key}
+                        style={{
+                          height: `${bar.heightPercent}%`,
+                          animationDelay: `${bar.delaySec}s`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <div className="sound-timeline">
+                    <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
+                  </div>
                 </div>
-                <div className="sound-timeline">
-                  <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
-                </div>
+                {state?.state === "loading" && usingAnimeVideoPlayback && (
+                  <div className="media-loading-overlay" role="status" aria-live="polite">
+                    <span className="resolving-tracks-spinner" aria-hidden="true" />
+                    <p>Chargement de la video...</p>
+                    <small>
+                      {animePlaybackStatus === "playing" ? "Lecture demarree" : "Buffering en cours"}
+                    </small>
+                    <small>
+                      {state.mediaReadyCount}/{state.mediaReadyTotalCount} pret{state.mediaReadyTotalCount > 1 ? "s" : ""}
+                    </small>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -1191,105 +1580,51 @@ export function RoomPlayPage() {
                   <div className="source-preset-grid">
                     <button
                       type="button"
-                      className={`source-preset-btn${sourceMode === "public_playlist" ? " active" : ""}`}
-                      onClick={() => onSelectSourceMode("public_playlist")}
+                      className={`source-preset-btn${sourceMode === "anilist_union" ? " active" : ""}`}
+                      onClick={() => onSelectSourceMode("anilist_union")}
                     >
-                      <strong>Playlist publique</strong>
-                      <span>Recherche publique Deezer</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`source-preset-btn${sourceMode === "players_liked" ? " active" : ""}`}
-                      onClick={() => onSelectSourceMode("players_liked")}
-                    >
-                      <strong>Liked Songs joueurs</strong>
-                      <span>Pool collaboratif des joueurs</span>
+                      <strong>AniList synchronise</strong>
+                      <span>Union des listes des joueurs connectés</span>
                     </button>
                   </div>
 
-                  {sourceMode === "public_playlist" && (
-                    <>
-                      <div className="playlist-search-shell">
-                        <p className="playlist-search-kicker">Recherche playlist Deezer</p>
-                        <div className="playlist-search-input-wrap">
-                          <input
-                            id="playlist-search-input"
-                            aria-label="Recherche playlist"
-                            value={playlistQuery}
-                            onChange={(event) => setPlaylistQuery(event.currentTarget.value)}
-                            maxLength={120}
-                            placeholder="Ex: top hits, rap 2000, anime openings"
-                          />
-                        </div>
-                      </div>
-                      {typedPlaylistQuery.length < 2 && (
-                        <p className="status">Tape au moins 2 caractères pour chercher une playlist.</p>
-                      )}
-                      {typedPlaylistQuery.length >= 2 &&
-                        typedPlaylistQuery !== normalizedPlaylistQuery && (
-                          <p className="status">Recherche en cours...</p>
-                        )}
-                      {typedPlaylistQuery.length >= 2 &&
-                        typedPlaylistQuery === normalizedPlaylistQuery &&
-                        playlistSearchQuery.isPending && (
-                        <p className="status">Recherche en cours...</p>
-                      )}
-                      {typedPlaylistQuery.length >= 2 &&
-                        typedPlaylistQuery === normalizedPlaylistQuery &&
-                        playlistSearchQuery.isError && (
-                        <p className="status">Recherche temporairement indisponible.</p>
-                      )}
-                      {typedPlaylistQuery.length >= 2 &&
-                        typedPlaylistQuery === normalizedPlaylistQuery &&
-                        !playlistSearchQuery.isPending &&
-                        !playlistSearchQuery.isError &&
-                        playlistOptions.length === 0 && (
-                          <p className="status">Aucun résultat pour cette recherche.</p>
-                        )}
-                      <div className="playlist-card-grid">
-                        {playlistOptions.map((playlist) => (
-                          <button
-                            key={`${playlist.provider}:${playlist.id}`}
-                            type="button"
-                            className={`playlist-card-btn${state.sourceConfig.publicPlaylist?.sourceQuery === playlist.sourceQuery ? " active" : ""}`}
-                            onClick={() => publicPlaylistMutation.mutate(playlist)}
-                            disabled={publicPlaylistMutation.isPending}
-                          >
-                            {playlist.imageUrl ? (
-                              <img src={playlist.imageUrl} alt={playlist.name} loading="lazy" />
-                            ) : (
-                              <div className="playlist-card-placeholder" aria-hidden="true" />
-                            )}
-                            <div>
-                              <strong>{withRomajiLabel(playlistDisplayName(playlist.name))}</strong>
-                              <p>{playlistSecondaryLabel(playlist)}</p>
-                              <small>{formatTrackCountLabel(playlist.trackCount)}</small>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                      {typedPlaylistQuery.length >= 2 &&
-                        !playlistSearchQuery.isPending &&
-                        hasMorePlaylists && (
-                          <button
-                            className="ghost-btn"
-                            type="button"
-                            onClick={() => setPlaylistOffset((current) => current + 24)}
-                            disabled={playlistSearchQuery.isFetching}
-                          >
-                            {playlistSearchQuery.isFetching ? "Chargement..." : "Load more"}
-                          </button>
-                        )}
-                    </>
-                  )}
-
-                  {sourceMode === "players_liked" && (
+                  {sourceMode === "anilist_union" && (
                     <div className="panel-form">
                       <p className="status">
-                        Les comptes Spotify / Deezer connectés des joueurs sont utilisés automatiquement.
+                        Les bibliotheques AniList synchronisees des joueurs sont utilisees automatiquement.
                       </p>
                     </div>
                   )}
+
+                  <div className="field-block">
+                    <span className="field-label">Mode thèmes</span>
+                    <div className="source-preset-grid">
+                      <button
+                        type="button"
+                        className={`source-preset-btn${themeMode === "op_only" ? " active" : ""}`}
+                        onClick={() => onSelectThemeMode("op_only")}
+                      >
+                        <strong>OP only</strong>
+                        <span>Openings uniquement</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${themeMode === "ed_only" ? " active" : ""}`}
+                        onClick={() => onSelectThemeMode("ed_only")}
+                      >
+                        <strong>ED only</strong>
+                        <span>Endings uniquement</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${themeMode === "mix" ? " active" : ""}`}
+                        onClick={() => onSelectThemeMode("mix")}
+                      >
+                        <strong>Mix</strong>
+                        <span>Openings + Endings</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <p className="status">Seul le host peut modifier la configuration source.</p>
@@ -1298,11 +1633,27 @@ export function RoomPlayPage() {
               <div className="room-meta-list">
                 <p>
                   <span>Mode source</span>
-                  <strong>{state.sourceMode === "players_liked" ? "Liked Songs joueurs" : "Playlist publique"}</strong>
+                  <strong>
+                    {state.sourceMode === "anilist_union"
+                      ? "AniList synchronise"
+                      : state.sourceMode === "players_liked"
+                        ? "Liked Songs joueurs"
+                        : "Playlist publique"}
+                  </strong>
                 </p>
                 <p>
                   <span>Playlist</span>
                   <strong>{withRomajiLabel(state.sourceConfig.publicPlaylist?.name ?? "Aucune playlist selectionnee")}</strong>
+                </p>
+                <p>
+                  <span>Mode thèmes</span>
+                  <strong>
+                    {state.sourceConfig.themeMode === "op_only"
+                      ? "OP only"
+                      : state.sourceConfig.themeMode === "ed_only"
+                        ? "ED only"
+                        : "Mix"}
+                  </strong>
                 </p>
               </div>
 
@@ -1368,12 +1719,12 @@ export function RoomPlayPage() {
             <div className="mcq-grid">
               {(state.choices ?? []).map((choice, index) => (
                 <button
-                  key={`${choice}-${index}`}
-                  className={`choice-btn${submittedMcq?.round === state.round && submittedMcq.choice === choice ? " selected" : ""}`}
+                  key={`${choice.value}-${index}`}
+                  className={`choice-btn${submittedMcq?.round === state.round && submittedMcq.choice === choice.value ? " selected" : ""}`}
                   disabled={answerMutation.isPending || !session.playerId || mcqLocked}
-                  onClick={() => onSelectChoice(choice)}
+                  onClick={() => onSelectChoice(choice.value)}
                 >
-                  {withRomajiLabel(choice)}
+                  {formatRoundChoiceLabel(choice, titlePreference)}
                 </button>
               ))}
             </div>
@@ -1382,7 +1733,7 @@ export function RoomPlayPage() {
           {state?.state === "playing" && state.mode === "text" && (
             <form className="panel-form answer-box" onSubmit={onSubmitText}>
               <label>
-                <span>Réponse (titre ou artiste)</span>
+                <span>Réponse (nom de l'anime)</span>
                 <Select<AnswerSelectOption, false>
                   classNamePrefix="answer-select"
                   inputId="answer-select-input"
@@ -1402,15 +1753,13 @@ export function RoomPlayPage() {
                     if (!option) return;
                     setAnswer(option.value.slice(0, 80));
                   }}
-                  placeholder="Ex: Daft Punk"
+                  placeholder="Nom de l'anime"
                   noOptionsMessage={() =>
                     typedAnswer.length <= 0
-                      ? "Tape un titre ou un artiste"
-                      : typedAnswer.length < 3
-                        ? "Tape au moins 3 caractères"
-                        : answerSeedIsLoading
-                          ? "Chargement de la playlist..."
-                          : "Aucune suggestion"
+                      ? "Tape un nom d'anime"
+                      : answerSeedIsLoading
+                        ? "Chargement des animes..."
+                        : "Aucune suggestion"
                   }
                   isLoading={typedAnswer.length >= 1 && answerSeedIsLoading && answerSelectOptions.length <= 0}
                   openMenuOnFocus
@@ -1428,6 +1777,22 @@ export function RoomPlayPage() {
             </form>
           )}
 
+          {state?.state === "playing" && (
+            <div className="phase-skip-panel">
+              <button
+                className="ghost-btn"
+                type="button"
+                disabled={skipGuessDisabled}
+                onClick={() => skipMutation.mutate()}
+              >
+                {hasLockedGuessVote ? "En attente des autres..." : "Skip"}
+              </button>
+              <p className="status">
+                Validation: <strong>{state.guessDoneCount}/{state.guessTotalCount}</strong>
+              </p>
+            </div>
+          )}
+
           {(state?.state === "reveal" || state?.state === "leaderboard") &&
             state?.reveal && (
               <div className="reveal-box large reveal-glass">
@@ -1443,12 +1808,34 @@ export function RoomPlayPage() {
                   <h3 className="reveal-title">
                     {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
                   </h3>
+                  {state.reveal.songTitle && (
+                    <p className="reveal-song-title">{state.reveal.songTitle}</p>
+                  )}
+                  {state.reveal.songArtists.length > 0 && (
+                    <p className="reveal-song-artists">{state.reveal.songArtists.join(", ")}</p>
+                  )}
                   <p className="reveal-artist">
                     {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
                   </p>
                 </div>
               </div>
             )}
+
+          {state?.state === "reveal" && (
+            <div className="phase-skip-panel">
+              <button
+                className="ghost-btn"
+                type="button"
+                disabled={skipRevealDisabled}
+                onClick={() => skipMutation.mutate()}
+              >
+                {hasLockedRevealVote ? "En attente des autres..." : "Next"}
+              </button>
+              <p className="status">
+                Votes Next: <strong>{state.revealSkipCount}/{state.revealSkipTotalCount}</strong>
+              </p>
+            </div>
+          )}
 
           {state?.state === "results" && (
             <div className="podium-panel">
@@ -1481,28 +1868,13 @@ export function RoomPlayPage() {
             </div>
           )}
 
-          {!isResults && activeYoutubeEmbed && (
-          <div className="blindtest-video-shell">
-            <iframe
-              ref={youtubeIframeRef}
-              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
-              className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
-              src={activeYoutubeEmbed}
-              title="Blindtest playback"
-              allow="autoplay; encrypted-media"
-              onError={() => {
-                setAudioError(true);
-              }}
-            />
-          </div>
-        )}
-
           <p
             className={
               snapshotQuery.isError ||
               answerMutation.isError ||
               (startMutation.isError && !isNonBlockingStartError) ||
               sourceModeMutation.isError ||
+              themeModeMutation.isError ||
               publicPlaylistMutation.isError ||
               chatMutation.isError ||
               readyMutation.isError ||
@@ -1520,13 +1892,13 @@ export function RoomPlayPage() {
             {startErrorCode === "SOURCE_NOT_SET" && "Le host doit choisir une playlist avant de lancer."}
             {startErrorCode === "PLAYER_NOT_FOUND" && "Ta session joueur a expiré. Rejoins la room."}
             {startErrorCode === "PLAYERS_LIBRARY_NOT_READY" &&
-              "Le mode Liked Songs nécessite au moins un joueur avec un compte musical connecté."}
+              "Le mode AniList nécessite au moins un joueur avec une bibliothèque AniList synchronisée."}
             {isWaitingLobby &&
-              state?.sourceMode === "players_liked" &&
+              (state?.sourceMode === "players_liked" || state?.sourceMode === "anilist_union") &&
               state.poolBuild.status === "building" &&
               "Préparation de la playlist des joueurs... lancement automatique dès que c'est prêt."}
             {isWaitingLobby &&
-              state?.sourceMode === "players_liked" &&
+              (state?.sourceMode === "players_liked" || state?.sourceMode === "anilist_union") &&
               startRetryRemainingMs > 0 &&
               "Préparation de la playlist des joueurs... lancement automatique dès que c'est prêt."}
             {isWaitingLobby &&
@@ -1535,18 +1907,23 @@ export function RoomPlayPage() {
               "Préparation de la playlist... lancement automatique dès que c'est prêt."}
             {startErrorCode === "HOST_ONLY" && "Seul le host peut lancer la partie."}
             {sourceModeErrorCode === "HOST_ONLY" && "Seul le host peut changer le mode source."}
+            {themeModeErrorCode === "HOST_ONLY" && "Seul le host peut changer le mode thèmes."}
             {publicPlaylistErrorCode === "HOST_ONLY" && "Seul le host peut choisir la playlist publique."}
             {readyErrorCode === "INVALID_STATE" && "Le statut prêt se gère uniquement dans le lobby."}
             {readyErrorCode === "PLAYER_NOT_FOUND" && "Ta session joueur a expiré. Rejoins la room."}
             {kickErrorCode === "HOST_ONLY" && "Seul le host peut éjecter un joueur."}
             {replayErrorCode === "HOST_ONLY" && "Seul le host peut relancer une partie."}
-            {skipErrorCode === "HOST_ONLY" && "Seul le host peut passer automatiquement la manche."}
-            {skipErrorCode === "INVALID_STATE" && "La manche ne peut pas être passée dans cet état."}
+            {skipErrorCode === "INVALID_STATE" && "Le vote Skip/Next n'est pas disponible dans cet état."}
             {chatMutation.isError && "Impossible d'envoyer le message."}
             {!session.playerId && "Tu dois rejoindre la room pour répondre."}
             {snapshotQuery.isError && "Synchronisation impossible."}
             {answerMutation.isError && "Réponse refusée."}
-            {audioError && !usingYouTubePlayback && "Erreur audio: extrait indisponible."}
+            {mediaUnavailableMutation.isPending &&
+              "Thème indisponible détecté, passage automatique au round suivant..."}
+            {mediaUnavailableMutation.isError &&
+              "Signalement du thème indisponible impossible. Utilise Skip pour continuer."}
+            {audioError && usingAnimeVideoPlayback && "Erreur média: thème indisponible."}
+            {audioError && !usingYouTubePlayback && !usingAnimeVideoPlayback && "Erreur audio: extrait indisponible."}
           </p>
         </div>
 
@@ -1589,6 +1966,17 @@ export function RoomPlayPage() {
           </aside>
         )}
       </article>
+
+      <video
+        ref={nextAnimePreloadRef}
+        className="blindtest-preload-video"
+        preload="auto"
+        muted
+        playsInline
+        aria-hidden="true"
+      >
+        <track kind="captions" />
+      </video>
 
       <audio
         ref={audioRef}

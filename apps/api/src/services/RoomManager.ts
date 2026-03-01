@@ -1,6 +1,7 @@
 export type GameState =
   | "waiting"
   | "countdown"
+  | "loading"
   | "playing"
   | "reveal"
   | "leaderboard"
@@ -26,6 +27,7 @@ type StartGameInput = {
 
 type TickInput = {
   nowMs: number;
+  loadingMs: number;
   roundMs: number;
   revealMs: number;
   leaderboardMs: number;
@@ -38,6 +40,7 @@ type TickResult = {
 
 type SkipPlayingRoundInput = {
   nowMs: number;
+  loadingMs: number;
   roundMs: number;
 };
 
@@ -54,6 +57,9 @@ export class RoomManager {
   private plannedTotalRounds = 0;
   private answers = new Map<string, RoundAnswer>();
   private drafts = new Map<string, string>();
+  private mediaReadyPlayerIds = new Set<string>();
+  private guessedSkipPlayerIds = new Set<string>();
+  private revealSkipPlayerIds = new Set<string>();
 
   constructor(public readonly roomCode: string) {}
 
@@ -90,6 +96,9 @@ export class RoomManager {
     this.roundStartedAtMs = null;
     this.answers.clear();
     this.drafts.clear();
+    this.mediaReadyPlayerIds.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
     this.plannedTotalRounds = Math.max(0, input.totalRounds);
     this.gameState = "countdown";
     this.roundDeadlineMs = input.nowMs + safeCountdownMs;
@@ -97,10 +106,11 @@ export class RoomManager {
   }
 
   skipPlayingRound(input: SkipPlayingRoundInput): SkipPlayingRoundResult {
-    if (this.gameState !== "playing") {
+    if (this.gameState !== "playing" && this.gameState !== "loading") {
       return { skipped: false, closedRound: null };
     }
 
+    const safeLoadingMs = Math.max(0, input.loadingMs);
     const safeRoundMs = Math.max(1, input.roundMs);
     const closedRound: ClosedRound = {
       round: this.currentRound,
@@ -111,6 +121,9 @@ export class RoomManager {
 
     this.answers.clear();
     this.drafts.clear();
+    this.mediaReadyPlayerIds.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
 
     if (this.currentRound >= this.plannedTotalRounds) {
       this.gameState = "results";
@@ -120,15 +133,24 @@ export class RoomManager {
     }
 
     this.currentRound += 1;
-    this.gameState = "playing";
-    this.roundStartedAtMs = input.nowMs;
-    this.roundDeadlineMs = input.nowMs + safeRoundMs;
+    if (safeLoadingMs > 0) {
+      this.gameState = "loading";
+      this.roundStartedAtMs = input.nowMs;
+      this.roundDeadlineMs = null;
+    } else {
+      this.gameState = "playing";
+      this.roundStartedAtMs = input.nowMs;
+      this.roundDeadlineMs = input.nowMs + safeRoundMs;
+    }
     return { skipped: true, closedRound };
   }
 
   forcePlayingRound(round: number, deadlineMs: number, startedAtMs?: number) {
     this.answers.clear();
     this.drafts.clear();
+    this.mediaReadyPlayerIds.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
     this.currentRound = Math.max(1, round);
     this.roundStartedAtMs =
       startedAtMs !== undefined ? startedAtMs : Math.max(0, deadlineMs - 15_000);
@@ -137,7 +159,22 @@ export class RoomManager {
     this.plannedTotalRounds = Math.max(this.plannedTotalRounds, this.currentRound);
   }
 
+  expireCurrentPhase(nowMs: number) {
+    if (
+      this.gameState !== "countdown" &&
+      this.gameState !== "loading" &&
+      this.gameState !== "playing" &&
+      this.gameState !== "reveal" &&
+      this.gameState !== "leaderboard"
+    ) {
+      return false;
+    }
+    this.roundDeadlineMs = nowMs;
+    return true;
+  }
+
   tick(input: TickInput): TickResult {
+    const safeLoadingMs = Math.max(0, input.loadingMs);
     const safeRoundMs = Math.max(1, input.roundMs);
     const safeRevealMs = Math.max(0, input.revealMs);
     const safeLeaderboardMs = Math.max(0, input.leaderboardMs);
@@ -157,10 +194,28 @@ export class RoomManager {
         }
 
         this.currentRound = 1;
-        this.roundStartedAtMs = transitionAtMs;
-        this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.answers.clear();
         this.drafts.clear();
+        this.mediaReadyPlayerIds.clear();
+        this.guessedSkipPlayerIds.clear();
+        this.revealSkipPlayerIds.clear();
+        if (safeLoadingMs > 0) {
+          this.roundStartedAtMs = transitionAtMs;
+          this.roundDeadlineMs = null;
+          this.gameState = "loading";
+        } else {
+          this.roundStartedAtMs = transitionAtMs;
+          this.roundDeadlineMs = transitionAtMs + safeRoundMs;
+          this.gameState = "playing";
+        }
+        transitioned = true;
+        continue;
+      }
+
+      if (this.gameState === "loading") {
+        this.mediaReadyPlayerIds.clear();
+        this.roundStartedAtMs = transitionAtMs;
+        this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.gameState = "playing";
         transitioned = true;
         continue;
@@ -176,6 +231,9 @@ export class RoomManager {
         });
         this.answers.clear();
         this.drafts.clear();
+        this.mediaReadyPlayerIds.clear();
+        this.guessedSkipPlayerIds.clear();
+        this.revealSkipPlayerIds.clear();
         this.roundStartedAtMs = null;
         this.roundDeadlineMs = transitionAtMs + safeRevealMs;
         this.gameState = "reveal";
@@ -184,6 +242,7 @@ export class RoomManager {
       }
 
       if (this.gameState === "reveal") {
+        this.revealSkipPlayerIds.clear();
         this.gameState = "leaderboard";
         this.roundDeadlineMs = transitionAtMs + safeLeaderboardMs;
         this.roundStartedAtMs = null;
@@ -201,11 +260,20 @@ export class RoomManager {
         }
 
         this.currentRound += 1;
-        this.roundStartedAtMs = transitionAtMs;
-        this.roundDeadlineMs = transitionAtMs + safeRoundMs;
         this.answers.clear();
         this.drafts.clear();
-        this.gameState = "playing";
+        this.mediaReadyPlayerIds.clear();
+        this.guessedSkipPlayerIds.clear();
+        this.revealSkipPlayerIds.clear();
+        if (safeLoadingMs > 0) {
+          this.roundStartedAtMs = transitionAtMs;
+          this.roundDeadlineMs = null;
+          this.gameState = "loading";
+        } else {
+          this.roundStartedAtMs = transitionAtMs;
+          this.roundDeadlineMs = transitionAtMs + safeRoundMs;
+          this.gameState = "playing";
+        }
         transitioned = true;
         continue;
       }
@@ -221,6 +289,7 @@ export class RoomManager {
     if (this.roundDeadlineMs !== null && submittedAtMs > this.roundDeadlineMs) {
       return { accepted: false as const };
     }
+    if (this.guessedSkipPlayerIds.has(playerId)) return { accepted: false as const };
     if (this.answers.has(playerId)) return { accepted: false as const };
     this.answers.set(playerId, { value, submittedAtMs });
     this.drafts.delete(playerId);
@@ -232,6 +301,7 @@ export class RoomManager {
     if (this.roundDeadlineMs !== null && submittedAtMs > this.roundDeadlineMs) {
       return { accepted: false as const };
     }
+    if (this.guessedSkipPlayerIds.has(playerId)) return { accepted: false as const };
     if (this.answers.has(playerId)) return { accepted: false as const };
     const trimmed = value.trim();
     if (trimmed.length <= 0) {
@@ -242,8 +312,56 @@ export class RoomManager {
     return { accepted: true as const };
   }
 
+  markMediaReady(playerId: string, nowMs: number) {
+    if (this.gameState !== "loading") return { accepted: false as const };
+    if (this.roundDeadlineMs !== null && nowMs > this.roundDeadlineMs) {
+      return { accepted: false as const };
+    }
+    if (this.mediaReadyPlayerIds.has(playerId)) return { accepted: false as const };
+    this.mediaReadyPlayerIds.add(playerId);
+    return { accepted: true as const };
+  }
+
+  hasMediaReady(playerId: string) {
+    return this.mediaReadyPlayerIds.has(playerId);
+  }
+
   hasSubmittedAnswer(playerId: string) {
     return this.answers.has(playerId);
+  }
+
+  skipGuessForPlayer(playerId: string, nowMs: number) {
+    if (this.gameState !== "playing") return { accepted: false as const };
+    if (this.roundDeadlineMs !== null && nowMs > this.roundDeadlineMs) {
+      return { accepted: false as const };
+    }
+    if (this.answers.has(playerId)) return { accepted: false as const };
+    if (this.guessedSkipPlayerIds.has(playerId)) return { accepted: false as const };
+    this.guessedSkipPlayerIds.add(playerId);
+    this.drafts.delete(playerId);
+    return { accepted: true as const };
+  }
+
+  skipRevealForPlayer(playerId: string, nowMs: number) {
+    if (this.gameState !== "reveal") return { accepted: false as const };
+    if (this.roundDeadlineMs !== null && nowMs > this.roundDeadlineMs) {
+      return { accepted: false as const };
+    }
+    if (this.revealSkipPlayerIds.has(playerId)) return { accepted: false as const };
+    this.revealSkipPlayerIds.add(playerId);
+    return { accepted: true as const };
+  }
+
+  hasGuessSkipped(playerId: string) {
+    return this.guessedSkipPlayerIds.has(playerId);
+  }
+
+  hasGuessDone(playerId: string) {
+    return this.answers.has(playerId) || this.guessedSkipPlayerIds.has(playerId);
+  }
+
+  hasRevealSkipped(playerId: string) {
+    return this.revealSkipPlayerIds.has(playerId);
   }
 
   answeredPlayerIds() {
@@ -258,12 +376,16 @@ export class RoomManager {
     this.plannedTotalRounds = 0;
     this.answers.clear();
     this.drafts.clear();
+    this.mediaReadyPlayerIds.clear();
+    this.guessedSkipPlayerIds.clear();
+    this.revealSkipPlayerIds.clear();
   }
 
   private finalizeCurrentRoundAnswers(deadlineMs: number) {
     const merged = new Map(this.answers);
     for (const [playerId, value] of this.drafts.entries()) {
       if (merged.has(playerId)) continue;
+      if (this.guessedSkipPlayerIds.has(playerId)) continue;
       const trimmed = value.trim();
       if (trimmed.length <= 0) continue;
       merged.set(playerId, {

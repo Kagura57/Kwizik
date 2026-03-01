@@ -48,8 +48,25 @@ create table if not exists verification (
 create table if not exists profiles (
   user_id text primary key references "user"(id) on delete cascade,
   display_name text not null,
+  title_preference text not null default 'mixed' check (title_preference in ('romaji', 'english', 'mixed')),
   created_at timestamptz not null default now()
 );
+
+alter table profiles
+  add column if not exists title_preference text not null default 'mixed';
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_title_preference_check'
+  ) then
+    alter table profiles
+      add constraint profiles_title_preference_check
+      check (title_preference in ('romaji', 'english', 'mixed'));
+  end if;
+end $$;
 
 create table if not exists matches (
   id bigserial primary key,
@@ -291,3 +308,93 @@ create index if not exists idx_user_liked_tracks_source_id
 create index if not exists idx_session_user_id on session("userId");
 create index if not exists idx_account_user_id on account("userId");
 create index if not exists idx_verification_identifier on verification(identifier);
+
+create table if not exists anime_catalog_anime (
+  id bigserial primary key,
+  animethemes_anime_id text not null unique,
+  title_romaji text not null,
+  title_english text,
+  title_native text,
+  searchable_romaji text not null,
+  is_active boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists anime_catalog_alias (
+  id bigserial primary key,
+  anime_id bigint not null references anime_catalog_anime(id) on delete cascade,
+  alias text not null,
+  normalized_alias text not null,
+  alias_type text not null check (alias_type in ('canonical', 'synonym', 'acronym')),
+  unique (anime_id, normalized_alias)
+);
+
+create table if not exists anime_theme_videos (
+  id bigserial primary key,
+  anime_id bigint not null references anime_catalog_anime(id) on delete cascade,
+  theme_type text not null check (theme_type in ('OP', 'ED')),
+  theme_number integer,
+  video_key text not null unique,
+  webm_url text not null,
+  song_title text,
+  song_artists text[] not null default '{}',
+  resolution integer,
+  is_creditless boolean not null default false,
+  is_playable boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
+alter table anime_theme_videos
+  add column if not exists song_title text;
+alter table anime_theme_videos
+  add column if not exists song_artists text[] not null default '{}';
+
+create table if not exists anilist_account_links (
+  user_id text primary key references "user"(id) on delete cascade,
+  anilist_user_id text,
+  anilist_username text,
+  access_token text,
+  refresh_token text,
+  expires_at timestamptz,
+  scope text,
+  updated_at timestamptz not null default now()
+);
+
+alter table anilist_account_links
+  alter column access_token drop not null;
+
+create table if not exists anilist_sync_runs (
+  id bigserial primary key,
+  user_id text not null references "user"(id) on delete cascade,
+  status text not null check (status in ('queued', 'running', 'success', 'error')),
+  progress integer not null default 0,
+  message text,
+  started_at timestamptz,
+  finished_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists anilist_sync_staging (
+  run_id bigint not null references anilist_sync_runs(id) on delete cascade,
+  user_id text not null references "user"(id) on delete cascade,
+  anime_id bigint not null references anime_catalog_anime(id) on delete cascade,
+  list_status text not null check (list_status in ('WATCHING', 'COMPLETED')),
+  primary key (run_id, anime_id)
+);
+
+create table if not exists user_anime_library_active (
+  user_id text not null references "user"(id) on delete cascade,
+  anime_id bigint not null references anime_catalog_anime(id) on delete cascade,
+  list_status text not null check (list_status in ('WATCHING', 'COMPLETED')),
+  synced_at timestamptz not null default now(),
+  primary key (user_id, anime_id)
+);
+
+create index if not exists idx_anime_alias_normalized
+  on anime_catalog_alias(normalized_alias);
+create index if not exists idx_anime_theme_playable
+  on anime_theme_videos(is_playable, theme_type);
+create index if not exists idx_user_anime_library_user
+  on user_anime_library_active(user_id);
+create index if not exists idx_anilist_sync_runs_user_created
+  on anilist_sync_runs(user_id, created_at desc);

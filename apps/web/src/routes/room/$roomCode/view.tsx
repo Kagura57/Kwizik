@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
+import type { RoundChoice } from "../../../lib/api";
 import { fetchLiveRoomState } from "../../../lib/realtime";
 
-const ROUND_MS = 12_000;
+const ROUND_MS = 20_000;
 const COUNTDOWN_MS = 3_000;
-const REVEAL_MS = 4_000;
-const LEADERBOARD_MS = 3_000;
+const REVEAL_MS = 20_000;
+const LEADERBOARD_MS = 0;
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -16,10 +17,40 @@ function clamp01(value: number) {
 function phaseProgress(phase: string | undefined, remainingMs: number | null) {
   if (remainingMs === null) return 0;
   if (phase === "countdown") return clamp01((COUNTDOWN_MS - remainingMs) / COUNTDOWN_MS);
+  if (phase === "loading") return 0;
   if (phase === "playing") return clamp01((ROUND_MS - remainingMs) / ROUND_MS);
   if (phase === "reveal") return clamp01((REVEAL_MS - remainingMs) / REVEAL_MS);
-  if (phase === "leaderboard") return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  if (phase === "leaderboard") {
+    if (LEADERBOARD_MS <= 0) return 1;
+    return clamp01((LEADERBOARD_MS - remainingMs) / LEADERBOARD_MS);
+  }
   return 0;
+}
+
+function stableHash(value: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
+}
+
+function deterministicIntFromSeed(seed: string, min: number, max: number) {
+  const safeMin = Math.max(0, Math.floor(min));
+  const safeMax = Math.max(safeMin, Math.floor(max));
+  const size = safeMax - safeMin + 1;
+  if (size <= 1) return safeMin;
+  return safeMin + (stableHash(seed) % size);
+}
+
+function computeAnimeStartSec(input: { roomCode: string; round: number; trackId: string; durationSec: number }) {
+  const safeDuration = Math.max(0, Math.floor(input.durationSec));
+  const roundDurationSec = Math.max(1, Math.floor(ROUND_MS / 1000));
+  if (safeDuration <= roundDurationSec) return 0;
+  const maxStart = Math.max(0, safeDuration - roundDurationSec);
+  const seed = `${input.roomCode}:${input.round}:${input.trackId}`;
+  return deterministicIntFromSeed(seed, 0, maxStart);
 }
 
 const WAVE_BARS = Array.from({ length: 64 }, (_, index) => ({
@@ -42,6 +73,26 @@ function withRomajiLabel(value: string, providedRomaji?: string | null) {
   return romaji;
 }
 
+function normalizeChoiceLabel(value: string) {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/['’`´]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatProjectionChoiceLabel(choice: RoundChoice) {
+  const romajiTitle = withRomajiLabel(choice.titleRomaji);
+  const englishTitle = choice.titleEnglish?.trim() ?? "";
+  const hasDistinctEnglish =
+    englishTitle.length > 0 && normalizeChoiceLabel(englishTitle) !== normalizeChoiceLabel(choice.titleRomaji);
+  const title = hasDistinctEnglish ? `${romajiTitle} (${englishTitle})` : romajiTitle;
+  return `${title} - ${choice.themeLabel}`;
+}
+
 export function RoomViewPage() {
   const { roomCode } = useParams({ from: "/room/$roomCode/view" });
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -53,11 +104,18 @@ export function RoomViewPage() {
     key: string;
     embedUrl: string;
   } | null>(null);
+  const [stableAnimeVideoPlayback, setStableAnimeVideoPlayback] = useState<{
+    key: string;
+    sourceUrl: string;
+  } | null>(null);
+  const animeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const nextAnimePreloadRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastPreviewRef = useRef<string | null>(null);
   const progressStateRef = useRef<{ key: string; value: number }>({ key: "", value: 0 });
   const postRoundProgressRef = useRef<{ key: string; startedAtMs: number } | null>(null);
   const audioRetryTimeoutRef = useRef<number | null>(null);
+  const appliedAnimeStartRef = useRef<string | null>(null);
   const userInteractionUnlockedRef = useRef(false);
 
   useEffect(() => {
@@ -142,6 +200,15 @@ export function RoomViewPage() {
     };
   }, [state?.media?.embedUrl, state?.media?.provider, state?.media?.trackId]);
 
+  const animeVideoPlayback = useMemo(() => {
+    if (!state?.media?.sourceUrl || !state.media.trackId) return null;
+    if (state.media.provider !== "animethemes") return null;
+    return {
+      key: `${state.media.provider}:${state.media.trackId}`,
+      sourceUrl: state.media.sourceUrl,
+    };
+  }, [state?.media?.sourceUrl, state?.media?.provider, state?.media?.trackId]);
+
   useEffect(() => {
     if (youtubePlayback) {
       setStableYoutubePlayback((previous) => {
@@ -161,12 +228,33 @@ export function RoomViewPage() {
     }
   }, [state?.state, youtubePlayback]);
 
+  useEffect(() => {
+    if (animeVideoPlayback) {
+      setStableAnimeVideoPlayback((previous) => {
+        if (previous?.key === animeVideoPlayback.key) return previous;
+        return animeVideoPlayback;
+      });
+      return;
+    }
+
+    const shouldClear =
+      state?.state === "waiting" ||
+      state?.state === "results" ||
+      state?.state === undefined;
+    if (shouldClear) {
+      setStableAnimeVideoPlayback(null);
+    }
+  }, [animeVideoPlayback, state?.state]);
+
   const activeYoutubeEmbed = stableYoutubePlayback?.embedUrl ?? null;
+  const activeAnimeVideoSource = stableAnimeVideoPlayback?.sourceUrl ?? null;
+  const nextAnimeVideoSource =
+    state?.nextMedia?.provider === "animethemes" ? (state.nextMedia.sourceUrl ?? null) : null;
   const usingYouTubePlayback = Boolean(activeYoutubeEmbed);
+  const usingAnimeVideoPlayback = Boolean(activeAnimeVideoSource);
   const revealVideoActive =
-    usingYouTubePlayback &&
+    (usingYouTubePlayback || usingAnimeVideoPlayback) &&
     (state?.state === "reveal" || state?.state === "leaderboard");
-  const isResults = state?.state === "results";
   const showRevealAnswersInLeaderboard = state?.state === "reveal" || state?.state === "leaderboard";
   const revealAnswerByPlayerId = useMemo(() => {
     const map = new Map<
@@ -186,6 +274,108 @@ export function RoomViewPage() {
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
 
+  function applyAnimeRandomStart(video: HTMLVideoElement) {
+    if (!state?.media || state.media.provider !== "animethemes") return;
+    const duration = Number.isFinite(video.duration) ? Number(video.duration) : 0;
+    const startSec = computeAnimeStartSec({
+      roomCode,
+      round: state.round,
+      trackId: state.media.trackId,
+      durationSec: duration,
+    });
+    const startKey = `${state.round}:${state.media.trackId}`;
+    if (appliedAnimeStartRef.current === startKey) return;
+    appliedAnimeStartRef.current = startKey;
+    if (startSec <= 0) return;
+    try {
+      if (Math.abs(video.currentTime - startSec) > 0.35) {
+        video.currentTime = startSec;
+      }
+    } catch {
+      // Ignore seek errors while the decoder pipeline initializes.
+    }
+  }
+
+  function handleAnimeLoadedMetadata() {
+    const video = animeVideoRef.current;
+    if (!video) return;
+    applyAnimeRandomStart(video);
+    video.play().catch(() => undefined);
+  }
+
+  function handleAnimePlayable() {
+    const video = animeVideoRef.current;
+    if (!video) return;
+    applyAnimeRandomStart(video);
+  }
+
+  useEffect(() => {
+    appliedAnimeStartRef.current = null;
+  }, [state?.state, state?.round, state?.media?.trackId]);
+
+  useEffect(() => {
+    const video = animeVideoRef.current;
+    if (!video) return;
+
+    if (!activeAnimeVideoSource) {
+      video.pause();
+      video.removeAttribute("src");
+      return;
+    }
+
+    const currentSrc = video.getAttribute("src");
+    if (currentSrc !== activeAnimeVideoSource) {
+      video.setAttribute("src", activeAnimeVideoSource);
+      video.load();
+      appliedAnimeStartRef.current = null;
+    }
+
+    const playPromise = video.play();
+    if (playPromise) {
+      playPromise.catch(() => undefined);
+    }
+  }, [activeAnimeVideoSource, stableAnimeVideoPlayback?.key]);
+
+  useEffect(() => {
+    const selector = "link[data-kwizik-next-anime-preload='true']";
+    const head = document.head;
+    const existing = head.querySelector(selector) as HTMLLinkElement | null;
+
+    if (!nextAnimeVideoSource) {
+      existing?.remove();
+      const preloadVideo = nextAnimePreloadRef.current;
+      if (preloadVideo) {
+        preloadVideo.pause();
+        preloadVideo.removeAttribute("src");
+      }
+      return;
+    }
+
+    const link = existing ?? document.createElement("link");
+    link.setAttribute("data-kwizik-next-anime-preload", "true");
+    link.setAttribute("rel", "preload");
+    link.setAttribute("as", "video");
+    link.setAttribute("href", nextAnimeVideoSource);
+    if (!existing) {
+      head.appendChild(link);
+    }
+
+    const preloadVideo = nextAnimePreloadRef.current;
+    if (preloadVideo && preloadVideo.getAttribute("src") !== nextAnimeVideoSource) {
+      preloadVideo.setAttribute("src", nextAnimeVideoSource);
+      preloadVideo.load();
+    }
+  }, [nextAnimeVideoSource]);
+
+  useEffect(() => {
+    return () => {
+      const link = document.head.querySelector(
+        "link[data-kwizik-next-anime-preload='true']",
+      );
+      link?.remove();
+    };
+  }, []);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -194,7 +384,7 @@ export function RoomViewPage() {
       audioRetryTimeoutRef.current = null;
     }
 
-    if (activeYoutubeEmbed) {
+    if (activeYoutubeEmbed || activeAnimeVideoSource) {
       audio.pause();
       audio.removeAttribute("src");
       lastPreviewRef.current = null;
@@ -227,7 +417,7 @@ export function RoomViewPage() {
         }, 320);
       });
     }
-  }, [activeYoutubeEmbed, state?.previewUrl, state?.state]);
+  }, [activeAnimeVideoSource, activeYoutubeEmbed, state?.previewUrl, state?.state]);
 
   useEffect(() => {
     function unlockAudioPlayback() {
@@ -237,6 +427,10 @@ export function RoomViewPage() {
       const audio = audioRef.current;
       if (audio && audio.src) {
         audio.play().catch(() => undefined);
+      }
+      const video = animeVideoRef.current;
+      if (video && activeAnimeVideoSource) {
+        video.play().catch(() => undefined);
       }
       if (shouldKickIframe) {
         setIframeEpoch((value) => value + 1);
@@ -249,7 +443,7 @@ export function RoomViewPage() {
       window.removeEventListener("pointerdown", unlockAudioPlayback);
       window.removeEventListener("keydown", unlockAudioPlayback);
     };
-  }, [activeYoutubeEmbed]);
+  }, [activeAnimeVideoSource, activeYoutubeEmbed]);
 
   useEffect(() => {
     return () => {
@@ -267,28 +461,68 @@ export function RoomViewPage() {
           <strong>Manche {roundLabel}</strong>
         </div>
 
-        <div className={`sound-visual large${revealVideoActive ? " reveal-active" : ""}`}>
-          <div className="wave-bars" aria-hidden="true">
-            {WAVE_BARS.map((bar) => (
-              <span
-                key={bar.key}
-                style={{
-                  height: `${bar.heightPercent}%`,
-                  animationDelay: `${bar.delaySec}s`,
-                }}
-              />
-            ))}
+        <div className={`sound-visual media-shell large${revealVideoActive ? " reveal-active" : ""}`}>
+          {activeAnimeVideoSource && (
+            <video
+              ref={animeVideoRef}
+              key={stableAnimeVideoPlayback?.key ?? "none"}
+              className="media-video-layer anime-video-layer"
+              src={activeAnimeVideoSource}
+              preload="auto"
+              playsInline
+              onLoadedMetadata={handleAnimeLoadedMetadata}
+              onCanPlayThrough={handleAnimePlayable}
+              onPlaying={handleAnimePlayable}
+              onError={() => {
+                setAudioError(true);
+              }}
+            />
+          )}
+          {activeYoutubeEmbed && (
+            <iframe
+              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
+              className="media-video-layer youtube-video-layer"
+              src={activeYoutubeEmbed}
+              title="Projection playback"
+              allow="autoplay; encrypted-media"
+              onError={() => {
+                setAudioError(true);
+                setIframeEpoch((value) => value + 1);
+              }}
+            />
+          )}
+          <div className="media-wave-layer" aria-hidden="true">
+            <div className="wave-bars">
+              {WAVE_BARS.map((bar) => (
+                <span
+                  key={bar.key}
+                  style={{
+                    height: `${bar.heightPercent}%`,
+                    animationDelay: `${bar.delaySec}s`,
+                  }}
+                />
+              ))}
+            </div>
+            <div className="sound-timeline">
+              <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
+            </div>
           </div>
-          <div className="sound-timeline">
-            <span style={{ width: `${(progress * 100).toFixed(3)}%` }} />
-          </div>
+          {state?.state === "loading" && usingAnimeVideoPlayback && (
+            <div className="media-loading-overlay" role="status" aria-live="polite">
+              <span className="resolving-tracks-spinner" aria-hidden="true" />
+              <p>Chargement de la video...</p>
+              <small>
+                {state.mediaReadyCount}/{state.mediaReadyTotalCount} pret{state.mediaReadyTotalCount > 1 ? "s" : ""}
+              </small>
+            </div>
+          )}
         </div>
 
         {state?.state === "playing" && state.mode === "mcq" && state.choices && (
           <div className="projection-choices">
             {state.choices.map((choice, index) => (
-              <div key={`${choice}-${index}`} className="projection-choice">
-                {withRomajiLabel(choice)}
+              <div key={`${choice.value}-${index}`} className="projection-choice">
+                {formatProjectionChoiceLabel(choice)}
               </div>
             ))}
           </div>
@@ -313,28 +547,18 @@ export function RoomViewPage() {
                   <h3 className="reveal-title">
                     {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
                   </h3>
+                  {state.reveal.songTitle && (
+                    <p className="reveal-song-title">{state.reveal.songTitle}</p>
+                  )}
+                  {state.reveal.songArtists.length > 0 && (
+                    <p className="reveal-song-artists">{state.reveal.songArtists.join(", ")}</p>
+                  )}
                   <p className="reveal-artist">
                     {withRomajiLabel(state.reveal.artist, state.reveal.artistRomaji)}
                   </p>
                 </div>
               </div>
             )}
-
-        {!isResults && activeYoutubeEmbed && (
-          <div className="blindtest-video-shell">
-            <iframe
-              key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
-              className={revealVideoActive ? "blindtest-video-reveal" : "blindtest-video-hidden"}
-              src={activeYoutubeEmbed}
-              title="Projection playback"
-              allow="autoplay; encrypted-media"
-              onError={() => {
-                setAudioError(true);
-                setIframeEpoch((value) => value + 1);
-              }}
-            />
-          </div>
-        )}
 
         <ol className="leaderboard-list compact">
           {(state?.leaderboard ?? []).map((entry) => (
@@ -381,6 +605,17 @@ export function RoomViewPage() {
         </ol>
       </article>
 
+      <video
+        ref={nextAnimePreloadRef}
+        className="blindtest-preload-video"
+        preload="auto"
+        muted
+        playsInline
+        aria-hidden="true"
+      >
+        <track kind="captions" />
+      </video>
+
       <audio
         ref={audioRef}
         className="blindtest-audio"
@@ -390,7 +625,7 @@ export function RoomViewPage() {
         <track kind="captions" />
       </audio>
 
-      {audioError && !usingYouTubePlayback && (
+      {audioError && !usingYouTubePlayback && !usingAnimeVideoPlayback && (
         <div className="projection-audio-status">
           <p className="status error">Erreur audio sur la piste en cours.</p>
         </div>

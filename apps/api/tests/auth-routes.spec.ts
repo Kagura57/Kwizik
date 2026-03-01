@@ -14,6 +14,13 @@ describe("auth routes", () => {
     expect(payload.error).toBe("UNAUTHORIZED");
   });
 
+  it("returns unauthorized on /account/anilist/library without session cookie", async () => {
+    const response = await app.handle(new Request("http://localhost/account/anilist/library"));
+    expect(response.status).toBe(401);
+    const payload = (await response.json()) as { error: string };
+    expect(payload.error).toBe("UNAUTHORIZED");
+  });
+
   it("mounts email auth endpoints for sign-up/sign-in/sign-out", async () => {
     const signUpResponse = await app.handle(
       new Request("http://localhost/auth/sign-up/email", {

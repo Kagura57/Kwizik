@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { pool } from "../src/db/client";
+import { userAnimeLibraryRepository } from "../src/repositories/UserAnimeLibraryRepository";
 import { RoomStore } from "../src/services/RoomStore";
 import type { MusicTrack } from "../src/services/music-types";
 
@@ -230,6 +232,23 @@ function youtubeStartFromEmbed(embedUrl: string | null | undefined) {
   }
 }
 
+function makeAniListThemeRows(count: number, offset = 0) {
+  return Array.from({ length: count }, (_, index) => {
+    const value = offset + index + 1;
+    return {
+      video_key: `theme-${value}`,
+      webm_url: `https://v.animethemes.moe/theme-${value}.webm`,
+      theme_type: "OP",
+      theme_number: 1,
+      title_romaji: `Anime ${value}`,
+      title_english: `Anime EN ${value}`,
+      song_title: `Song ${value}`,
+      song_artists: [`Artist ${value}`],
+      aliases: [`Alias ${value}`],
+    };
+  });
+}
+
 describe("RoomStore gameplay progression", () => {
   it("runs countdown -> playing -> reveal -> leaderboard -> results and applies streak scoring", async () => {
     let nowMs = 0;
@@ -281,9 +300,6 @@ describe("RoomStore gameplay progression", () => {
       host.value.playerId,
       `${round1Track?.title ?? ""} - ${round1Track?.artist ?? ""}`,
     );
-    nowMs = 40;
-    store.submitAnswer(created.roomCode, guest.value.playerId, "wrong title");
-
     nowMs = 110;
     const revealRound1 = store.roomState(created.roomCode);
     expect(revealRound1?.state).toBe("reveal");
@@ -299,8 +315,8 @@ describe("RoomStore gameplay progression", () => {
       {
         playerId: guest.value.playerId,
         displayName: "Guest",
-        answer: "wrong title",
-        submitted: true,
+        answer: null,
+        submitted: false,
         isCorrect: false,
       },
     ]);
@@ -364,6 +380,422 @@ describe("RoomStore gameplay progression", () => {
     expect((winner?.score ?? 0) > 0).toBe(true);
     expect(loser?.displayName).toBe("Guest");
     expect(loser?.score).toBe(0);
+  });
+
+  it("moves to reveal early when all players are done via answer or skip", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 2,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    const guest = store.joinRoom(roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.guessDoneCount).toBe(0);
+    expect(playing?.guessTotalCount).toBe(2);
+    const roundTrack = FIXTURE_TRACKS.find((track) => track.id === playing?.media?.trackId);
+    expect(roundTrack).toBeDefined();
+
+    nowMs = 10;
+    const hostAnswer = store.submitAnswer(
+      roomCode,
+      host.value.playerId,
+      `${roundTrack?.title ?? ""} - ${roundTrack?.artist ?? ""}`,
+    );
+    expect(hostAnswer.status).toBe("ok");
+    if (hostAnswer.status === "ok") {
+      expect(hostAnswer.accepted).toBe(true);
+    }
+
+    nowMs = 12;
+    const guestSkip = store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(guestSkip.status).toBe("ok");
+    if (guestSkip.status === "ok") {
+      expect(guestSkip.accepted).toBe(true);
+      expect(guestSkip.state).toBe("reveal");
+    }
+
+    const reveal = store.roomState(roomCode);
+    expect(reveal?.state).toBe("reveal");
+    expect(reveal?.reveal?.title).toBe(roundTrack?.title);
+  });
+
+  it("moves to next round after unanimous reveal next votes", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 2,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    const guest = store.joinRoom(roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    const roundTrack = FIXTURE_TRACKS.find((track) => track.id === playing?.media?.trackId);
+    expect(roundTrack).toBeDefined();
+
+    nowMs = 10;
+    store.submitAnswer(
+      roomCode,
+      host.value.playerId,
+      `${roundTrack?.title ?? ""} - ${roundTrack?.artist ?? ""}`,
+    );
+
+    nowMs = 11;
+    store.skipCurrentRound(roomCode, guest.value.playerId);
+    const reveal = store.roomState(roomCode);
+    expect(reveal?.state).toBe("reveal");
+    expect(reveal?.revealSkipCount).toBe(0);
+    expect(reveal?.revealSkipTotalCount).toBe(2);
+
+    nowMs = 12;
+    const firstVote = store.skipCurrentRound(roomCode, host.value.playerId);
+    expect(firstVote.status).toBe("ok");
+    if (firstVote.status === "ok") {
+      expect(firstVote.accepted).toBe(true);
+      expect(firstVote.state).toBe("reveal");
+    }
+
+    nowMs = 13;
+    const secondVote = store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(secondVote.status).toBe("ok");
+    if (secondVote.status === "ok") {
+      expect(secondVote.accepted).toBe(true);
+      expect(secondVote.state).toBe("playing");
+      expect(secondVote.round).toBe(2);
+    }
+  });
+
+  it("ends game when reveal next votes are unanimous on final round", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS.slice(0, 1),
+      config: {
+        countdownMs: 5,
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    const guest = store.joinRoom(roomCode, "Guest");
+    expect(host.status).toBe("ok");
+    expect(guest.status).toBe("ok");
+    if (host.status !== "ok" || guest.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, host.value.playerId, "popular hits");
+    expect(sourceSet.status).toBe("ok");
+    const hostReady = store.setPlayerReady(roomCode, host.value.playerId, true);
+    const guestReady = store.setPlayerReady(roomCode, guest.value.playerId, true);
+    expect(hostReady.status).toBe("ok");
+    expect(guestReady.status).toBe("ok");
+    await store.startGame(roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(roomCode);
+    expect(playing?.state).toBe("playing");
+    const roundTrack = FIXTURE_TRACKS.find((track) => track.id === playing?.media?.trackId);
+    expect(roundTrack).toBeDefined();
+
+    nowMs = 10;
+    store.submitAnswer(
+      roomCode,
+      host.value.playerId,
+      `${roundTrack?.title ?? ""} - ${roundTrack?.artist ?? ""}`,
+    );
+    nowMs = 11;
+    store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(store.roomState(roomCode)?.state).toBe("reveal");
+
+    nowMs = 12;
+    store.skipCurrentRound(roomCode, host.value.playerId);
+    nowMs = 13;
+    const finalVote = store.skipCurrentRound(roomCode, guest.value.playerId);
+    expect(finalVote.status).toBe("ok");
+    if (finalVote.status === "ok") {
+      expect(finalVote.state).toBe("results");
+    }
+
+    expect(store.roomState(roomCode)?.state).toBe("results");
+  });
+
+  it("keeps animethemes rounds in loading until media reports onPlaying readiness", async () => {
+    let nowMs = 0;
+    const animeTrack: MusicTrack = {
+      provider: "animethemes",
+      id: "buffering-track",
+      title: "Buffering Anime",
+      artist: "OP1",
+      previewUrl: "https://v.animethemes.moe/buffering-track.webm",
+      sourceUrl: "https://v.animethemes.moe/buffering-track.webm",
+      audioUrl: "https://v.animethemes.moe/buffering-track.webm",
+      videoUrl: "https://v.animethemes.moe/buffering-track.webm",
+    };
+
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => [animeTrack],
+      config: {
+        countdownMs: 10,
+        loadingMs: 100,
+        loadingTimeoutMs: 10_000,
+        playingMs: 200,
+        revealMs: 10,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(created.roomCode) as {
+      manager: {
+        startGame: (input: { nowMs: number; countdownMs: number; totalRounds: number }) => boolean;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+    session.trackPool = [animeTrack];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    expect(session.manager.startGame({ nowMs: 0, countdownMs: 10, totalRounds: 1 })).toBe(true);
+
+    nowMs = 10;
+    const loading = store.roomState(created.roomCode);
+    expect(loading?.state).toBe("loading");
+    expect(loading?.deadlineMs).toBeNull();
+
+    nowMs = 350;
+    const stillLoading = store.roomState(created.roomCode);
+    expect(stillLoading?.state).toBe("loading");
+    expect(stillLoading?.mediaReadyCount).toBe(0);
+
+    const mediaReady = store.markMediaReady(created.roomCode, host.value.playerId, animeTrack.id);
+    expect(mediaReady.status).toBe("ok");
+    if (mediaReady.status === "ok") {
+      expect(mediaReady.accepted).toBe(true);
+      expect(mediaReady.state).toBe("playing");
+      expect(mediaReady.deadlineMs).toBe(550);
+    }
+
+    const playing = store.roomState(created.roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.deadlineMs).toBe(550);
+  });
+
+  it("skips stalled animethemes loading rounds instead of starting the playing timer", async () => {
+    let nowMs = 0;
+    const animeTrack: MusicTrack = {
+      provider: "animethemes",
+      id: "timeout-track",
+      title: "Timeout Anime",
+      artist: "OP1",
+      previewUrl: "https://v.animethemes.moe/timeout-track.webm",
+      sourceUrl: "https://v.animethemes.moe/timeout-track.webm",
+      audioUrl: "https://v.animethemes.moe/timeout-track.webm",
+      videoUrl: "https://v.animethemes.moe/timeout-track.webm",
+    };
+
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => [animeTrack],
+      config: {
+        countdownMs: 10,
+        loadingMs: 100,
+        loadingTimeoutMs: 150,
+        playingMs: 200,
+        revealMs: 10,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(created.roomCode) as {
+      manager: {
+        startGame: (input: { nowMs: number; countdownMs: number; totalRounds: number }) => boolean;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+    session.trackPool = [animeTrack];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    expect(session.manager.startGame({ nowMs: 0, countdownMs: 10, totalRounds: 1 })).toBe(true);
+
+    nowMs = 10;
+    expect(store.roomState(created.roomCode)?.state).toBe("loading");
+
+    nowMs = 170;
+    const skipped = store.roomState(created.roomCode);
+    expect(skipped?.state).toBe("results");
+  });
+
+  it("reports unavailable animethemes media and skips the current round", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      config: {
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(roomCode) as {
+      manager: {
+        forcePlayingRound: (round: number, deadlineMs: number, startedAtMs?: number) => void;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+
+    session.trackPool = [
+      {
+        provider: "animethemes",
+        id: "AhiruNoSora-OP2-NCBD1080",
+        title: "Ahiru no Sora",
+        artist: "OP2",
+        previewUrl: "https://v.animethemes.moe/AhiruNoSora-OP2-NCBD1080.webm",
+        sourceUrl: "https://v.animethemes.moe/AhiruNoSora-OP2-NCBD1080.webm",
+      },
+    ];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    session.manager.forcePlayingRound(1, 100, 0);
+
+    const before = store.roomState(roomCode);
+    expect(before?.state).toBe("playing");
+    expect(before?.media?.provider).toBe("animethemes");
+    expect(before?.media?.trackId).toBe("AhiruNoSora-OP2-NCBD1080");
+
+    nowMs = 5;
+    const reported = await store.reportMediaUnavailable(roomCode, host.value.playerId, "AhiruNoSora-OP2-NCBD1080");
+    expect(reported.status).toBe("ok");
+    if (reported.status === "ok") {
+      expect(reported.accepted).toBe(true);
+      expect(reported.state).toBe("results");
+    }
+
+    expect(store.roomState(roomCode)?.state).toBe("results");
+  });
+
+  it("rejects animethemes unavailable reports for a non-active track", async () => {
+    const store = new RoomStore({
+      config: {
+        playingMs: 100,
+        revealMs: 100,
+        leaderboardMs: 0,
+        maxRounds: 1,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const host = store.joinRoom(roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(roomCode) as {
+      manager: {
+        forcePlayingRound: (round: number, deadlineMs: number, startedAtMs?: number) => void;
+      };
+      trackPool: MusicTrack[];
+      totalRounds: number;
+      roundModes: Array<"mcq" | "text">;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+
+    session.trackPool = [
+      {
+        provider: "animethemes",
+        id: "valid-track",
+        title: "Valid",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/Valid-OP1.webm",
+        sourceUrl: "https://v.animethemes.moe/Valid-OP1.webm",
+      },
+    ];
+    session.totalRounds = 1;
+    session.roundModes = ["text"];
+    session.manager.forcePlayingRound(1, Date.now() + 100, Date.now());
+
+    const reported = await store.reportMediaUnavailable(roomCode, host.value.playerId, "other-track");
+    expect(reported.status).toBe("invalid_payload");
   });
 
   it("auto-validates latest draft answer when text round ends", async () => {
@@ -526,7 +958,7 @@ describe("RoomStore gameplay progression", () => {
     const round3Playing = store.roomState(roomCode);
     expect(round3Playing?.state).toBe("playing");
     expect(round3Playing?.mode).toBe("mcq");
-    expect(round3Playing?.choices?.includes(round1Label)).toBe(false);
+    expect((round3Playing?.choices ?? []).some((choice) => choice.value === round1Label)).toBe(false);
   });
 
   it("downgrades MCQ to text when coherent distractors are insufficient", async () => {
@@ -606,7 +1038,7 @@ describe("RoomStore gameplay progression", () => {
     const correct = activeTrack ? `${activeTrack.title} - ${activeTrack.artist}` : "";
     const hasJapaneseScript = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/u;
     const correctIsJapanese = hasJapaneseScript.test(correct);
-    const sameLanguageCount = choices.filter((choice) => hasJapaneseScript.test(choice) === correctIsJapanese).length;
+    const sameLanguageCount = choices.filter((choice) => hasJapaneseScript.test(choice.value) === correctIsJapanese).length;
 
     expect(sameLanguageCount >= 3).toBe(true);
   });
@@ -827,8 +1259,61 @@ describe("RoomStore gameplay progression", () => {
     const lobby = store.roomState(created.roomCode);
     expect(lobby?.state).toBe("waiting");
     expect(lobby?.players).toHaveLength(2);
-    expect(lobby?.categoryQuery).toBe("");
+    expect(lobby?.categoryQuery).toBe("anilist:linked:union");
     expect(lobby?.readyCount).toBe(0);
+  });
+
+  it("uses an unbiased AniList random draw without recent-history exclusions", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    const animeIds = Array.from({ length: 741 }, (_, index) => index + 1);
+    const unionSpy = vi
+      .spyOn(userAnimeLibraryRepository, "unionAnimeIdsForUsers")
+      .mockResolvedValue(animeIds);
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(30),
+    } as never);
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 1,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({
+        ok: true,
+        sourceMode: "anilist_union",
+      });
+
+      expect(unionSpy).toHaveBeenCalledTimes(1);
+      const requestedLimit = unionSpy.mock.calls[0]?.[1] ?? 0;
+      expect(requestedLimit).toBeGreaterThanOrEqual(2_000);
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      const queryParams = querySpy.mock.calls[0]?.[1] as unknown[] | undefined;
+      expect(Array.isArray(queryParams)).toBe(true);
+      expect(queryParams ?? []).toHaveLength(2);
+      const state = store.roomState(created.roomCode);
+      expect(state?.answerSuggestions.includes("Anime EN 1")).toBe(true);
+      expect(state?.answerSuggestions.includes("Alias 1")).toBe(true);
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      unionSpy.mockRestore();
+      querySpy.mockRestore();
+    }
   });
 
   it("starts only when the full requested round pool is prepared", async () => {
@@ -877,7 +1362,7 @@ describe("RoomStore gameplay progression", () => {
     expect(playing?.state).toBe("playing");
     expect(playing?.mode).toBe("mcq");
     expect(playing?.choices).toHaveLength(4);
-    expect((playing?.choices ?? []).some((choice) => choice.startsWith("Choix alternatif"))).toBe(false);
+    expect((playing?.choices ?? []).some((choice) => choice.value.startsWith("Choix alternatif"))).toBe(false);
   });
 
   it("refuses to start when fetched track pool is below configured max rounds", async () => {

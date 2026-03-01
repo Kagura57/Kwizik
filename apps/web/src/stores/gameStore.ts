@@ -2,24 +2,44 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 
 export type LiveRoundState = {
-  phase: "waiting" | "countdown" | "playing" | "reveal" | "leaderboard" | "results";
+  phase: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
+  isLoadingMedia: boolean;
   mode: "mcq" | "text" | null;
   round: number;
   totalRounds: number;
   deadlineMs: number | null;
+  guessDoneCount: number;
+  guessTotalCount: number;
+  mediaReadyCount: number;
+  mediaReadyTotalCount: number;
+  revealSkipCount: number;
+  revealSkipTotalCount: number;
   previewUrl: string | null;
   media: {
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
     trackId: string;
     sourceUrl: string | null;
     embedUrl: string | null;
   } | null;
-  choices: string[] | null;
+  nextMedia: {
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
+    trackId: string;
+    sourceUrl: string | null;
+    embedUrl: string | null;
+  } | null;
+  choices: Array<{
+    value: string;
+    titleRomaji: string;
+    titleEnglish: string | null;
+    themeLabel: string;
+  }> | null;
   reveal: {
     trackId: string;
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube";
+    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
     title: string;
     artist: string;
+    songTitle: string | null;
+    songArtists: string[];
     acceptedAnswer: string;
     previewUrl: string | null;
     sourceUrl: string | null;
@@ -48,6 +68,7 @@ type AccountState = {
   userId: string | null;
   name: string | null;
   email: string | null;
+  titlePreference: "romaji" | "english" | "mixed";
 };
 
 type GameSession = {
@@ -81,6 +102,7 @@ const DEFAULT_ACCOUNT: AccountState = {
   userId: null,
   name: null,
   email: null,
+  titlePreference: "mixed",
 };
 
 export const createGameStore = () =>

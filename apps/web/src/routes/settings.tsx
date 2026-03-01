@@ -1,44 +1,89 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
-  disconnectMusicProvider,
+  getAccountTitlePreference,
+  getAniListRecoveredLibrary,
+  getAniListLibrarySyncStatus,
+  getAniListLinkStatus,
   getAuthSession,
-  getMySpotifyLibrarySyncStatus,
-  getMusicProviderConnectUrl,
-  getMusicProviderLinks,
-  queueMySpotifyLibrarySync,
+  HttpStatusError,
+  queueAniListLibrarySync,
   signOutAccount,
+  type TitlePreference,
+  updateAccountTitlePreference,
+  updateAniListUsername,
 } from "../lib/api";
 import { useGameStore } from "../stores/gameStore";
 
-type LinkableProvider = "spotify" | "deezer";
-type ProviderLinkStatus = "linked" | "not_linked" | "expired";
+type AniListLinkStatus = "linked" | "not_linked";
 
-function providerLabel(provider: LinkableProvider) {
-  return provider === "spotify" ? "Spotify" : "Deezer";
-}
-
-function providerStatusMeta(status: ProviderLinkStatus) {
+function anilistStatusMeta(status: AniListLinkStatus) {
   if (status === "linked") {
     return {
-      label: "Connecte",
+      label: "Pret",
       tone: "connected",
-      description: "Compte pret pour tes playlists et titres likes.",
-    } as const;
-  }
-  if (status === "expired") {
-    return {
-      label: "Session expiree",
-      tone: "expired",
-      description: "Reconnecte ce compte pour continuer a l'utiliser.",
+      description: "Pseudo AniList configure pour les manches anime.",
     } as const;
   }
   return {
-    label: "Non connecte",
+    label: "Non configure",
     tone: "idle",
-    description: "Connecte ce compte pour enrichir tes parties.",
+    description: "Renseigne ton pseudo AniList puis clique Mettre a jour.",
   } as const;
+}
+
+function syncStatusLabel(status: "queued" | "running" | "success" | "error" | "idle") {
+  if (status === "queued") return "en file";
+  if (status === "running") return "en cours";
+  if (status === "success") return "terminee";
+  if (status === "error") return "en erreur";
+  return "idle";
+}
+
+function syncErrorMessage(code: string | null | undefined) {
+  const normalized = typeof code === "string" ? code.trim() : "";
+  if (!normalized) return "Erreur de synchronisation AniList.";
+  if (normalized === "ANILIST_USERNAME_NOT_SET") {
+    return "Renseigne ton pseudo AniList avant de synchroniser.";
+  }
+  if (normalized === "ANILIST_USER_NOT_FOUND") {
+    return "Pseudo AniList introuvable. Verifie le nom puis relance.";
+  }
+  if (normalized === "ANILIST_COLLECTION_GRAPHQL_ERROR") {
+    return "AniList a retourne une erreur GraphQL. Reessaie dans quelques secondes.";
+  }
+  if (normalized === "ANIME_CATALOG_EMPTY") {
+    return "Le catalogue anime local est vide. Laisse l'API finir son rafraichissement AnimeThemes puis relance.";
+  }
+  if (normalized.startsWith("ANILIST_COLLECTION_HTTP_")) {
+    return `AniList a retourne ${normalized.replace("ANILIST_COLLECTION_HTTP_", "HTTP ")}. Reessaie dans quelques secondes.`;
+  }
+  if (normalized === "QUEUE_UNAVAILABLE" || normalized === "ENQUEUE_FAILED") {
+    return "La file de synchronisation est indisponible pour le moment.";
+  }
+  return `Erreur sync AniList: ${normalized}`;
+}
+
+function updateMutationErrorMessage(error: unknown) {
+  if (!(error instanceof HttpStatusError)) {
+    return "Impossible de mettre a jour la liste AniList.";
+  }
+  if (error.message === "INVALID_ANILIST_USERNAME") {
+    return "Pseudo AniList invalide (lettres, chiffres, _ ou - uniquement).";
+  }
+  if (error.message === "ANILIST_USERNAME_NOT_SET") {
+    return "Renseigne ton pseudo AniList avant la mise a jour.";
+  }
+  if (error.message === "QUEUE_UNAVAILABLE" || error.message === "ENQUEUE_FAILED") {
+    return "Pseudo enregistre, mais la file de sync est indisponible.";
+  }
+  return "Impossible de mettre a jour la liste AniList.";
+}
+
+function formatSyncTimestamp(ts: number | null | undefined) {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return "jamais";
+  return new Date(ts).toLocaleString("fr-FR");
 }
 
 export function SettingsPage() {
@@ -46,6 +91,8 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const setAccount = useGameStore((state) => state.setAccount);
   const clearAccount = useGameStore((state) => state.clearAccount);
+  const [anilistUsernameInput, setAniListUsernameInput] = useState("");
+  const [usernameDirty, setUsernameDirty] = useState(false);
 
   const sessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -66,87 +113,85 @@ export function SettingsPage() {
     });
   }, [clearAccount, sessionQuery.data, sessionQuery.isSuccess, setAccount]);
 
-  const providerLinksQuery = useQuery({
-    queryKey: ["music-provider-links"],
-    queryFn: getMusicProviderLinks,
+  const anilistLinkQuery = useQuery({
+    queryKey: ["anilist-link-status"],
+    queryFn: getAniListLinkStatus,
     enabled: Boolean(sessionQuery.data?.user),
   });
 
-  const spotifyLinked = providerLinksQuery.data?.providers?.spotify?.status === "linked";
-
-  const librarySyncStatusQuery = useQuery({
-    queryKey: ["music-library-sync-status"],
-    queryFn: getMySpotifyLibrarySyncStatus,
-    enabled: Boolean(sessionQuery.data?.user) && spotifyLinked,
+  const anilistSyncStatusQuery = useQuery({
+    queryKey: ["anilist-sync-status"],
+    queryFn: getAniListLibrarySyncStatus,
+    enabled: Boolean(sessionQuery.data?.user),
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "syncing" ? 2_000 : false;
+      const runStatus = query.state.data?.run?.status;
+      return runStatus === "queued" || runStatus === "running" ? 2_000 : false;
     },
   });
 
-  const syncErrorMessage = (() => {
-    const code = librarySyncStatusQuery.data?.lastError ?? "";
-    if (code === "SPOTIFY_SYNC_SCOPE_MISSING_USER_LIBRARY_READ") {
-      return "Spotify n'a pas autorise l'acces aux titres likes. Reconnecte Spotify puis relance la sync.";
-    }
-    if (code === "SPOTIFY_SYNC_UNAUTHORIZED") {
-      return "Session Spotify invalide ou expiree. Reconnecte Spotify puis relance la sync.";
-    }
-    if (code === "SPOTIFY_SYNC_FORBIDDEN") {
-      return "Spotify a refuse la synchronisation pour ce compte. Reconnecte Spotify et reessaie.";
-    }
-    if (code === "SPOTIFY_SYNC_ACCOUNT_NOT_APPROVED") {
-      return "Ce compte Spotify n'est pas autorise pour cette app Spotify. Ajoute-le dans le dashboard Spotify (utilisateur test), puis reconnecte-le.";
-    }
-    if (code === "SPOTIFY_SYNC_BAD_REQUEST") {
-      return "Requete Spotify invalide. Reconnecte Spotify puis reessaie.";
-    }
-    if (code.startsWith("SPOTIFY_SYNC_FETCH_FAILED_HTTP_")) {
-      return `Echec Spotify (${code.replace("SPOTIFY_SYNC_FETCH_FAILED_HTTP_", "HTTP ")}). Reessaie dans quelques secondes.`;
-    }
-    return `Erreur sync Spotify: ${code || "UNKNOWN_ERROR"}`;
-  })();
+  const anilistRecoveredLibraryQuery = useQuery({
+    queryKey: ["anilist-recovered-library", sessionQuery.data?.user?.id ?? null],
+    queryFn: () => getAniListRecoveredLibrary({ limit: 5_000 }),
+    enabled: Boolean(sessionQuery.data?.user),
+    refetchInterval: () => {
+      const runStatus = anilistSyncStatusQuery.data?.run?.status;
+      return runStatus === "queued" || runStatus === "running" ? 2_000 : false;
+    },
+  });
+
+  const titlePreferenceQuery = useQuery({
+    queryKey: ["account-title-preference"],
+    queryFn: getAccountTitlePreference,
+    enabled: Boolean(sessionQuery.data?.user),
+  });
 
   useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      const payload = event.data as { source?: string; ok?: boolean } | null;
-      if (!payload || payload.source !== "kwizik-music-oauth") return;
-      if (payload.ok === true) {
-        void providerLinksQuery.refetch();
-        void librarySyncStatusQuery.refetch();
+    if (!sessionQuery.data?.user) return;
+    if (!titlePreferenceQuery.isSuccess) return;
+    setAccount({
+      titlePreference: titlePreferenceQuery.data.titlePreference,
+    });
+  }, [sessionQuery.data?.user, setAccount, titlePreferenceQuery.data?.titlePreference, titlePreferenceQuery.isSuccess]);
+
+  useEffect(() => {
+    if (usernameDirty) return;
+    const username = anilistLinkQuery.data?.link?.anilistUsername ?? "";
+    setAniListUsernameInput(username);
+  }, [anilistLinkQuery.data?.link?.anilistUsername, usernameDirty]);
+
+  const updateAndSyncMutation = useMutation({
+    mutationFn: async () => {
+      const username = anilistUsernameInput.trim();
+      await updateAniListUsername({ username });
+      if (!username) {
+        return { queued: false as const };
       }
-    }
+      const queued = await queueAniListLibrarySync();
+      return {
+        queued: true as const,
+        runId: queued.runId,
+      };
+    },
+    onSettled: async () => {
+      setUsernameDirty(false);
+      await anilistLinkQuery.refetch();
+      await anilistSyncStatusQuery.refetch();
+      await anilistRecoveredLibraryQuery.refetch();
+    },
+  });
 
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [librarySyncStatusQuery, providerLinksQuery]);
-
-  const connectMutation = useMutation({
-    mutationFn: async (provider: LinkableProvider) => {
-      const payload = await getMusicProviderConnectUrl({
-        provider,
-        returnTo: window.location.href,
+  const updateTitlePreferenceMutation = useMutation({
+    mutationFn: (titlePreference: TitlePreference) =>
+      updateAccountTitlePreference({
+        titlePreference,
+      }),
+    onSuccess: (payload) => {
+      setAccount({
+        titlePreference: payload.titlePreference,
       });
-      const popup = window.open(payload.authorizeUrl, "kwizik-music-oauth", "width=640,height=760");
-      if (!popup) {
-        window.location.assign(payload.authorizeUrl);
-      }
-      return payload;
     },
-  });
-
-  const disconnectMutation = useMutation({
-    mutationFn: async (provider: LinkableProvider) => disconnectMusicProvider({ provider }),
-    onSuccess: async () => {
-      await providerLinksQuery.refetch();
-      await librarySyncStatusQuery.refetch();
-    },
-  });
-
-  const librarySyncMutation = useMutation({
-    mutationFn: queueMySpotifyLibrarySync,
-    onSuccess: async () => {
-      await librarySyncStatusQuery.refetch();
+    onSettled: async () => {
+      await titlePreferenceQuery.refetch();
     },
   });
 
@@ -155,24 +200,34 @@ export function SettingsPage() {
     onSuccess: async () => {
       clearAccount();
       await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
-      await queryClient.invalidateQueries({ queryKey: ["music-provider-links"] });
+      await queryClient.invalidateQueries({ queryKey: ["anilist-link-status"] });
+      await queryClient.invalidateQueries({ queryKey: ["anilist-sync-status"] });
+      await queryClient.invalidateQueries({ queryKey: ["account-title-preference"] });
       navigate({ to: "/" });
     },
   });
 
   const user = sessionQuery.data?.user ?? null;
+  const linkStatus = (anilistLinkQuery.data?.status ?? "not_linked") as AniListLinkStatus;
+  const linkStatusMeta = anilistStatusMeta(linkStatus);
+  const activeRun = anilistSyncStatusQuery.data?.run ?? null;
+  const runStatus = activeRun?.status ?? "idle";
+  const lastCompletedAtMs = activeRun?.finishedAtMs ?? null;
+  const recoveredAnimeItems = anilistRecoveredLibraryQuery.data?.items ?? [];
+  const recoveredAnimeCount = anilistRecoveredLibraryQuery.data?.total ?? 0;
+  const titlePreference = titlePreferenceQuery.data?.titlePreference ?? "mixed";
 
   return (
     <section className="single-panel">
       <article className="panel-card">
         <h2 className="panel-title">Profil & connexions</h2>
         <p className="panel-copy">
-          Lie tes comptes musicaux pour contribuer tes bibliothèques personnelles dans les rooms.
+          Renseigne ton pseudo AniList puis clique Mettre a jour quand tu veux rafraichir ta liste.
         </p>
 
         {!sessionQuery.isPending && !user && (
           <div className="panel-form">
-            <p className="status">Tu dois être connecté pour gérer tes connexions musicales.</p>
+            <p className="status">Tu dois etre connecte pour gerer ton pseudo AniList.</p>
             <div className="waiting-actions">
               <Link className="solid-btn" to="/auth">
                 Se connecter
@@ -189,91 +244,143 @@ export function SettingsPage() {
         {user && (
           <div className="panel-form">
             <p className="status">
-              Connecté: <strong>{user.name}</strong> ({user.email})
+              Connecte: <strong>{user.name}</strong> ({user.email})
             </p>
 
-            {(["spotify", "deezer"] as const).map((provider) => {
-              const status = (providerLinksQuery.data?.providers?.[provider]?.status ??
-                "not_linked") as ProviderLinkStatus;
-              const statusMeta = providerStatusMeta(status);
-              const busy =
-                connectMutation.isPending ||
-                disconnectMutation.isPending ||
-                librarySyncMutation.isPending;
-              return (
-                <div key={provider} className="provider-link-card">
-                  <div className="provider-link-head">
-                    <div>
-                      <p className="kicker">{providerLabel(provider)}</p>
-                      <h3>{providerLabel(provider)} Music</h3>
-                    </div>
-                    <span className={`provider-badge ${statusMeta.tone}`}>{statusMeta.label}</span>
-                  </div>
-                  <p className="status">{statusMeta.description}</p>
-                  <div className="waiting-actions">
-                    {status === "linked" ? (
-                      <button
-                        className="ghost-btn danger-btn"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => disconnectMutation.mutate(provider)}
-                      >
-                        Deconnecter {providerLabel(provider)}
-                      </button>
-                    ) : (
-                      <button
-                        className="solid-btn"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => connectMutation.mutate(provider)}
-                      >
-                        Connecter {providerLabel(provider)}
-                      </button>
-                    )}
-                  </div>
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">AniList</p>
+                  <h3>Pseudo AniList</h3>
                 </div>
-              );
-            })}
-
-            {spotifyLinked && (
-              <div className="provider-link-card">
-                <div className="provider-link-head">
-                  <div>
-                    <p className="kicker">Spotify</p>
-                    <h3>Bibliotheque likes</h3>
-                  </div>
-                  <span className="provider-badge connected">Action manuelle</span>
-                </div>
-                <p className="status">
-                  Etat sync: <strong>{librarySyncStatusQuery.data?.status ?? "idle"}</strong>
-                  {typeof librarySyncStatusQuery.data?.progress === "number"
-                    ? ` (${librarySyncStatusQuery.data.progress}%)`
-                    : ""}
-                  {typeof librarySyncStatusQuery.data?.totalTracks === "number"
-                    ? ` · ${librarySyncStatusQuery.data.totalTracks} titres`
-                    : ""}
-                </p>
-                <div className="waiting-actions">
-                  <button
-                    className="solid-btn"
-                    type="button"
-                    disabled={librarySyncMutation.isPending}
-                    onClick={() => librarySyncMutation.mutate()}
-                  >
-                    {librarySyncMutation.isPending ? "Synchronisation..." : "Synchroniser mes likes"}
-                  </button>
-                </div>
+                <span className={`provider-badge ${linkStatusMeta.tone}`}>{linkStatusMeta.label}</span>
               </div>
-            )}
+              <p className="status">{linkStatusMeta.description}</p>
+              <label>
+                <span>Pseudo AniList</span>
+                <input
+                  value={anilistUsernameInput}
+                  onChange={(event) => {
+                    setUsernameDirty(true);
+                    setAniListUsernameInput(event.currentTarget.value);
+                  }}
+                  placeholder="Ton pseudo AniList"
+                  maxLength={50}
+                />
+              </label>
+              <div className="waiting-actions">
+                <button
+                  className="solid-btn"
+                  type="button"
+                  disabled={updateAndSyncMutation.isPending || signOutMutation.isPending}
+                  onClick={() => updateAndSyncMutation.mutate()}
+                >
+                  {updateAndSyncMutation.isPending ? "Mise a jour..." : "Mettre a jour"}
+                </button>
+              </div>
+              <p className="status">
+                Derniere sync: <strong>{formatSyncTimestamp(lastCompletedAtMs)}</strong>
+              </p>
+            </div>
+
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">Anime Quiz</p>
+                  <h3>Preference de titre</h3>
+                </div>
+                <span className="provider-badge connected">{titlePreference}</span>
+              </div>
+              <p className="status">Choisis le format affiche pour les choix QCM anime.</p>
+              <div className="waiting-actions">
+                {([
+                  { value: "mixed", label: "Mixte" },
+                  { value: "romaji", label: "Romaji" },
+                  { value: "english", label: "Anglais" },
+                ] as Array<{ value: TitlePreference; label: string }>).map((entry) => (
+                  <button
+                    key={entry.value}
+                    className={titlePreference === entry.value ? "solid-btn" : "ghost-btn"}
+                    type="button"
+                    disabled={updateTitlePreferenceMutation.isPending || signOutMutation.isPending}
+                    onClick={() => updateTitlePreferenceMutation.mutate(entry.value)}
+                  >
+                    {titlePreference === entry.value && updateTitlePreferenceMutation.isPending
+                      ? "Mise a jour..."
+                      : entry.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">AniList</p>
+                  <h3>Etat synchronisation</h3>
+                </div>
+                <span className={`provider-badge ${runStatus === "error" ? "expired" : "connected"}`}>
+                  {syncStatusLabel(runStatus)}
+                </span>
+              </div>
+              <p className="status">
+                Progression: <strong>{typeof activeRun?.progress === "number" ? `${activeRun.progress}%` : "0%"}</strong>
+              </p>
+              <p className="status">Derniere execution: {formatSyncTimestamp(activeRun?.createdAtMs ?? null)}</p>
+            </div>
+
+            <div className="provider-link-card">
+              <div className="provider-link-head">
+                <div>
+                  <p className="kicker">AniList</p>
+                  <h3>Animes recuperes</h3>
+                </div>
+                <span className={`provider-badge ${recoveredAnimeCount > 0 ? "connected" : "idle"}`}>
+                  {recoveredAnimeCount}
+                </span>
+              </div>
+              <p className="status">Titres presents dans la bibliotheque synchronisee locale (watching + completed).</p>
+
+              {anilistRecoveredLibraryQuery.isPending && (
+                <p className="status">Chargement de la bibliotheque anime...</p>
+              )}
+
+              {anilistRecoveredLibraryQuery.isError && (
+                <p className="status error">Impossible de charger la bibliotheque anime.</p>
+              )}
+
+              {!anilistRecoveredLibraryQuery.isPending && recoveredAnimeItems.length <= 0 && (
+                <p className="status">
+                  Aucun anime trouve pour le moment. Lance une synchronisation puis recharge cette page.
+                </p>
+              )}
+
+              {recoveredAnimeItems.length > 0 && (
+                <ul className="anilist-library-list">
+                  {recoveredAnimeItems.map((entry) => (
+                    <li key={`${entry.animeId}:${entry.listStatus}`} className="anilist-library-item">
+                      <strong>{entry.title}</strong>
+                      <span
+                        className={`anilist-library-status${
+                          entry.listStatus === "WATCHING" ? " watching" : " completed"
+                        }`}
+                      >
+                        {entry.listStatus === "WATCHING" ? "Watching" : "Completed"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             <div className="waiting-actions">
               <button
                 className="ghost-btn danger-btn"
                 type="button"
-                disabled={signOutMutation.isPending || librarySyncMutation.isPending}
+                disabled={signOutMutation.isPending || updateAndSyncMutation.isPending}
                 onClick={() => signOutMutation.mutate()}
               >
-                {signOutMutation.isPending ? "Déconnexion..." : "Se déconnecter"}
+                {signOutMutation.isPending ? "Deconnexion..." : "Se deconnecter"}
               </button>
               <Link className="ghost-btn" to="/">
                 Retour accueil
@@ -284,22 +391,18 @@ export function SettingsPage() {
 
         <p
           className={
-            (connectMutation.isError ||
-            disconnectMutation.isError ||
+            updateAndSyncMutation.isError ||
+            updateTitlePreferenceMutation.isError ||
             signOutMutation.isError ||
-            librarySyncMutation.isError ||
-            librarySyncStatusQuery.data?.status === "error")
+            activeRun?.status === "error"
               ? "status error"
               : "status"
           }
         >
-          {connectMutation.isError && "Impossible de lancer la connexion OAuth."}
-          {disconnectMutation.isError && "Impossible de déconnecter ce provider."}
-          {signOutMutation.isError && "Déconnexion impossible pour le moment."}
-          {librarySyncMutation.isError && "Impossible de lancer la synchronisation Spotify."}
-          {!librarySyncMutation.isError &&
-            librarySyncStatusQuery.data?.status === "error" &&
-            syncErrorMessage}
+          {updateAndSyncMutation.isError && updateMutationErrorMessage(updateAndSyncMutation.error)}
+          {updateTitlePreferenceMutation.isError && "Impossible de mettre a jour la preference de titre."}
+          {signOutMutation.isError && "Deconnexion impossible pour le moment."}
+          {!updateAndSyncMutation.isError && activeRun?.status === "error" && syncErrorMessage(activeRun.message)}
         </p>
       </article>
     </section>

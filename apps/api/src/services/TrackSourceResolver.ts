@@ -47,6 +47,12 @@ export type ParsedTrackSource =
       original: string;
       query: string;
       payload: { usernames: string[] };
+    }
+  | {
+      type: "anilist_linked_union";
+      original: string;
+      query: string;
+      payload: null;
     };
 
 const SPOTIFY_PLAYLIST_PREFIX = "spotify:playlist:";
@@ -54,6 +60,7 @@ const SPOTIFY_POPULAR_PREFIX = "spotify:popular";
 const DEEZER_PLAYLIST_PREFIX = "deezer:playlist:";
 const DEEZER_CHART_PREFIX = "deezer:chart";
 const ANILIST_USERS_PREFIX = "anilist:users:";
+const ANILIST_LINKED_UNION_PREFIX = "anilist:linked:union";
 
 function parseUsers(raw: string) {
   return raw
@@ -147,6 +154,15 @@ export function parseTrackSource(categoryQuery: string): ParsedTrackSource {
       original: categoryQuery,
       query: "",
       payload: { usernames },
+    };
+  }
+
+  if (lower === ANILIST_LINKED_UNION_PREFIX) {
+    return {
+      type: "anilist_linked_union",
+      original: categoryQuery,
+      query: "",
+      payload: null,
     };
   }
 
