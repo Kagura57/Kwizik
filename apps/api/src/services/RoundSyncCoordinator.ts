@@ -28,13 +28,11 @@ export type RoundStartSchedule =
   | {
       type: "scheduled";
       startAtMs: number;
-      reason: "quorum" | "timeout";
+      reason: "all_ready";
     };
 
 function requiredPreparedCount(playerIds: string[]) {
-  if (playerIds.length <= 1) return playerIds.length;
-  if (playerIds.length === 2) return 2;
-  return Math.floor(playerIds.length / 2) + 1;
+  return playerIds.length;
 }
 
 export class RoundSyncCoordinator {
@@ -54,12 +52,24 @@ export class RoundSyncCoordinator {
     this.status = "preparing";
     this.phaseToken = input.phaseToken;
     this.plannedStartAtMs = null;
-    this.maxWaitUntilMs = input.nowMs + Math.max(0, this.config.maxWaitMs);
+    this.maxWaitUntilMs = null;
     this.mediaOffsetSec = Math.max(0, input.mediaOffsetSec);
     this.preparedPlayerIds.clear();
     this.playerIds = [...new Set(input.playerIds)];
     this.hostPlayerId = input.hostPlayerId;
     this.requiredPrepared = requiredPreparedCount(this.playerIds);
+  }
+
+  refreshParticipants(playerIds: string[], hostPlayerId: string | null) {
+    const nextPlayerIds = [...new Set(playerIds)];
+    const allowedPlayerIds = new Set(nextPlayerIds);
+    this.playerIds = nextPlayerIds;
+    this.hostPlayerId = hostPlayerId;
+    this.requiredPrepared = requiredPreparedCount(this.playerIds);
+    for (const playerId of this.preparedPlayerIds) {
+      if (allowedPlayerIds.has(playerId)) continue;
+      this.preparedPlayerIds.delete(playerId);
+    }
   }
 
   markPrepared(playerId: string, _preparedAtMs: number) {
@@ -78,21 +88,14 @@ export class RoundSyncCoordinator {
 
   maybeScheduleStart(nowMs: number): RoundStartSchedule | null {
     if (this.status !== "preparing") return null;
-
-    const quorumReached =
-      this.preparedPlayerIds.size >= this.requiredPrepared &&
-      this.hostSatisfiedForQuorum();
-    const timedOut =
-      this.maxWaitUntilMs !== null && nowMs >= this.maxWaitUntilMs;
-
-    if (!quorumReached && !timedOut) return null;
+    if (this.preparedPlayerIds.size < this.requiredPrepared) return null;
 
     this.status = "scheduled";
     this.plannedStartAtMs = nowMs + Math.max(0, this.config.startLeadMs);
     return {
       type: "scheduled",
       startAtMs: this.plannedStartAtMs,
-      reason: quorumReached ? "quorum" : "timeout",
+      reason: "all_ready",
     };
   }
 
@@ -125,11 +128,5 @@ export class RoundSyncCoordinator {
       requiredPreparedCount: this.requiredPrepared,
       totalPlayerCount: this.playerIds.length,
     };
-  }
-
-  private hostSatisfiedForQuorum() {
-    if (this.playerIds.length <= 2) return true;
-    if (!this.hostPlayerId) return true;
-    return this.preparedPlayerIds.has(this.hostPlayerId);
   }
 }

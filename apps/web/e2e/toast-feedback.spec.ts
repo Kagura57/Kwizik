@@ -103,7 +103,7 @@ async function stubRoomApis(page: Page, phase: "loading" | "playing") {
   });
 }
 
-test("play screen shows a toast when anime playback fails repeatedly", async ({ page }) => {
+test("play screen keeps anime loading local when playback fails", async ({ page }) => {
   await stubRoomApis(page, "loading");
 
   await page.goto("/room/ABC123/play");
@@ -121,9 +121,10 @@ test("play screen shows a toast when anime playback fails repeatedly", async ({ 
     node.dispatchEvent(new Event("error"));
   });
 
+  await expect(page.getByText("Chargement de la video...")).toBeVisible();
   await expect(
     page.getByText("Lecture du theme impossible. Passage automatique au round suivant..."),
-  ).toBeVisible();
+  ).toHaveCount(0);
 });
 
 test("projection screen shows a toast when the current track fails", async ({ page }) => {

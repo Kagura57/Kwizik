@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { RoundSyncCoordinator } from "../src/services/RoundSyncCoordinator";
 
 describe("RoundSyncCoordinator", () => {
-  it("schedules a shared start when host plus majority are prepared", () => {
+  it("schedules a shared start only when every active player is prepared", () => {
     const sync = new RoundSyncCoordinator({
       startLeadMs: 900,
       maxWaitMs: 2_000,
@@ -19,23 +19,26 @@ describe("RoundSyncCoordinator", () => {
     sync.markPrepared("p1", 10_150);
     sync.markPrepared("p2", 10_250);
 
-    const scheduled = sync.maybeScheduleStart(10_250);
+    expect(sync.maybeScheduleStart(10_250)).toBeNull();
+    sync.markPrepared("p3", 10_350);
+
+    const scheduled = sync.maybeScheduleStart(10_350);
     expect(scheduled).toEqual({
       type: "scheduled",
-      startAtMs: 11_150,
-      reason: "quorum",
+      startAtMs: 11_250,
+      reason: "all_ready",
     });
     expect(sync.snapshot()).toEqual(
       expect.objectContaining({
         status: "scheduled",
         phaseToken: "phase-1",
-        preparedCount: 2,
-        requiredPreparedCount: 2,
+        preparedCount: 3,
+        requiredPreparedCount: 3,
       }),
     );
   });
 
-  it("forces a start after the short max wait even if one player is still missing", () => {
+  it("never schedules from timeout alone when a player is still missing", () => {
     const sync = new RoundSyncCoordinator({
       startLeadMs: 900,
       maxWaitMs: 2_000,
@@ -53,10 +56,7 @@ describe("RoundSyncCoordinator", () => {
     sync.markPrepared("p2", 20_200);
 
     expect(sync.maybeScheduleStart(21_900)).toBeNull();
-    expect(sync.maybeScheduleStart(22_000)).toEqual({
-      type: "scheduled",
-      startAtMs: 22_900,
-      reason: "timeout",
-    });
+    expect(sync.maybeScheduleStart(22_000)).toBeNull();
+    expect(sync.snapshot().plannedStartAtMs).toBeNull();
   });
 });

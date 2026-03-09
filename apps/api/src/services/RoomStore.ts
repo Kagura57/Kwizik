@@ -156,7 +156,6 @@ const MCQ_REQUIRED_CHOICES = 4;
 const START_POOL_RETRY_ATTEMPTS = 3;
 const START_POOL_RETRY_DELAY_MS = 900;
 const PLAYERS_LIKED_POOL_BUILD_TIMEOUT_MS = 45_000;
-const ANIMETHEMES_EXTREME_TIMEOUT_MS = 180_000;
 const ROOM_ANSWER_SUGGESTION_LIMIT = 1_000;
 const ROOM_BULK_ANSWER_TRACK_LIMIT = 16_000;
 const ROOM_BULK_ANSWER_SUGGESTION_LIMIT = 24_000;
@@ -1420,15 +1419,6 @@ export class RoomStore {
     return this.loadingMsForRound(session, round);
   }
 
-  private loadingTimeoutMsForCurrentRound(session: RoomSession) {
-    const configured = Math.max(this.config.loadingMs, this.config.loadingTimeoutMs);
-    const round = session.manager.round();
-    if (round <= 0) return 0;
-    const track = this.trackForRound(session, round);
-    if (!track || track.provider !== "animethemes") return 0;
-    return Math.max(configured, ANIMETHEMES_EXTREME_TIMEOUT_MS);
-  }
-
   private warmAnimeThemesRoundTrack(session: RoomSession, round: number) {
     const track = this.trackForRound(session, round);
     if (!track || track.provider !== "animethemes" || !track.id) return;
@@ -1447,38 +1437,6 @@ export class RoomStore {
     for (const round of rounds) {
       this.warmAnimeThemesRoundTrack(session, round);
     }
-  }
-
-  private maybeSkipStalledLoadingRound(session: RoomSession, nowMs: number) {
-    if (session.manager.state() !== "loading") return false;
-
-    const timeoutMs = this.loadingTimeoutMsForCurrentRound(session);
-    if (timeoutMs <= 0) return false;
-
-    const loadingStartedAtMs = session.manager.startedAtMs();
-    if (loadingStartedAtMs === null) return false;
-
-    const elapsedMs = Math.max(0, nowMs - loadingStartedAtMs);
-    if (elapsedMs < timeoutMs) return false;
-
-    const currentRound = session.manager.round();
-    const activeTrack = this.trackForRound(session, currentRound);
-    if (!activeTrack || activeTrack.provider !== "animethemes") return false;
-
-    logEvent("warn", "room_loading_timeout_skip_round", {
-      roomCode: session.roomCode,
-      round: currentRound,
-      trackId: activeTrack.id,
-      timeoutMs,
-      elapsedMs,
-    });
-
-    session.manager.skipPlayingRound({
-      nowMs,
-      loadingMs: this.loadingMsForRound(session, currentRound + 1),
-      roundMs: this.config.playingMs,
-    });
-    return true;
   }
 
   private isGuessPhaseDoneForAll(session: RoomSession) {
@@ -1529,6 +1487,11 @@ export class RoomStore {
         });
         this.warmUpcomingAnimeThemesTracks(session, currentRound);
         session.roundSyncRound = currentRound;
+      } else {
+        session.roundSync.refreshParticipants(
+          this.activePlayerIds(session),
+          this.ensureHost(session),
+        );
       }
       return;
     }
@@ -1583,11 +1546,6 @@ export class RoomStore {
     this.maybeScheduleLoadingRoundStart(session, nowMs);
     if (this.maybeStartScheduledLoadingRound(session, nowMs)) {
       // Continue into the regular tick path so the loading phase flips to playing immediately.
-    }
-
-    if (this.maybeSkipStalledLoadingRound(session, nowMs)) {
-      this.syncRoundTimeline(session, nowMs);
-      return;
     }
 
     const loadingMs = this.loadingMsForCurrentTransition(session);
@@ -2641,19 +2599,18 @@ export class RoomStore {
     // Runtime delivery failures can be transient (upstream rate-limit/challenge/network),
     // so do not permanently blacklist the catalog entry from a single room report.
 
-    if (state === "loading" || state === "playing") {
-      session.manager.skipPlayingRound({
-        nowMs,
-        loadingMs: this.loadingMsForRound(session, currentRound + 1),
-        roundMs: this.config.playingMs,
-      });
-    } else if (session.manager.expireCurrentPhase(nowMs)) {
-      this.progressSession(session, nowMs);
-    }
+    logEvent("warn", "room_animethemes_media_unavailable_reported", {
+      roomCode,
+      round: currentRound,
+      state,
+      playerId,
+      trackId,
+      nowMs,
+    });
 
     return {
       status: "ok" as const,
-      accepted: true,
+      accepted: false,
       state: session.manager.state(),
       round: session.manager.round(),
       deadlineMs: session.manager.deadlineMs(),

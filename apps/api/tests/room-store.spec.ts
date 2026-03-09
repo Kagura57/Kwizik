@@ -648,7 +648,7 @@ describe("RoomStore gameplay progression", () => {
     expect(playing?.deadlineMs).toBe(1_450);
   });
 
-  it("does not require unanimous preparation once quorum has been reached", async () => {
+  it("requires every active player before a loading round is scheduled", async () => {
     let nowMs = 0;
     const animeTrack: MusicTrack = {
       provider: "animethemes",
@@ -708,21 +708,33 @@ describe("RoomStore gameplay progression", () => {
     const secondPrepared = store.reportMediaPrepared(created.roomCode, player2.value.playerId, animeTrack.id);
     expect(secondPrepared.status).toBe("ok");
 
+    const stillPreparing = store.roomState(created.roomCode);
+    expect(stillPreparing?.state).toBe("loading");
+    expect(stillPreparing?.roundSync.status).toBe("preparing");
+    expect(stillPreparing?.roundSync.preparedCount).toBe(2);
+    expect(stillPreparing?.roundSync.requiredPreparedCount).toBe(3);
+
+    nowMs = 910;
+    expect(store.roomState(created.roomCode)?.state).toBe("loading");
+
+    const thirdPrepared = store.reportMediaPrepared(created.roomCode, player3.value.playerId, animeTrack.id);
+    expect(thirdPrepared.status).toBe("ok");
+
     const scheduled = store.roomState(created.roomCode);
     expect(scheduled?.state).toBe("loading");
     expect(scheduled?.roundSync.status).toBe("scheduled");
-    expect(scheduled?.roundSync.preparedCount).toBe(2);
-    expect(scheduled?.roundSync.requiredPreparedCount).toBe(2);
+    expect(scheduled?.roundSync.preparedCount).toBe(3);
+    expect(scheduled?.roundSync.requiredPreparedCount).toBe(3);
 
-    nowMs = 909;
+    nowMs = 1_809;
     expect(store.roomState(created.roomCode)?.state).toBe("loading");
 
-    nowMs = 910;
+    nowMs = 1_810;
     const playing = store.roomState(created.roomCode);
     expect(playing?.state).toBe("playing");
   });
 
-  it("starts animethemes rounds after the short sync timeout even without preparation", async () => {
+  it("keeps animethemes rounds loading until every player is prepared", async () => {
     let nowMs = 0;
     const animeTrack: MusicTrack = {
       provider: "animethemes",
@@ -773,22 +785,11 @@ describe("RoomStore gameplay progression", () => {
     nowMs = 10;
     expect(store.roomState(created.roomCode)?.state).toBe("loading");
 
-    nowMs = 2_009;
-    expect(store.roomState(created.roomCode)?.state).toBe("loading");
-
-    nowMs = 2_010;
-    const scheduled = store.roomState(created.roomCode);
-    expect(scheduled?.state).toBe("loading");
-    expect(scheduled?.roundSync.status).toBe("scheduled");
-    expect(scheduled?.roundSync.plannedStartAtMs).toBe(2_910);
-
-    nowMs = 2_909;
-    expect(store.roomState(created.roomCode)?.state).toBe("loading");
-
-    nowMs = 2_910;
-    const playing = store.roomState(created.roomCode);
-    expect(playing?.state).toBe("playing");
-    expect(playing?.deadlineMs).toBe(3_110);
+    nowMs = 120_000;
+    const stillLoading = store.roomState(created.roomCode);
+    expect(stillLoading?.state).toBe("loading");
+    expect(stillLoading?.roundSync.status).toBe("preparing");
+    expect(stillLoading?.roundSync.plannedStartAtMs).toBeNull();
   });
 
   it("includes round sync metadata while an animethemes round is preparing", async () => {
@@ -924,7 +925,7 @@ describe("RoomStore gameplay progression", () => {
     expect(warmAnimeThemeVideo).toHaveBeenCalledTimes(2);
   });
 
-  it("reports unavailable animethemes media and skips the current round", async () => {
+  it("reports unavailable animethemes media without skipping the current round", async () => {
     let nowMs = 0;
     const store = new RoomStore({
       now: () => nowMs,
@@ -976,11 +977,11 @@ describe("RoomStore gameplay progression", () => {
     const reported = await store.reportMediaUnavailable(roomCode, host.value.playerId, "AhiruNoSora-OP2-NCBD1080");
     expect(reported.status).toBe("ok");
     if (reported.status === "ok") {
-      expect(reported.accepted).toBe(true);
-      expect(reported.state).toBe("results");
+      expect(reported.accepted).toBe(false);
+      expect(reported.state).toBe("playing");
     }
 
-    expect(store.roomState(roomCode)?.state).toBe("results");
+    expect(store.roomState(roomCode)?.state).toBe("playing");
   });
 
   it("ignores animethemes unavailable reports for a non-active track", async () => {

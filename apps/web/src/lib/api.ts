@@ -661,23 +661,6 @@ export async function skipRoomRound(input: { roomCode: string; playerId: string 
   });
 }
 
-export async function reportRoomMediaUnavailable(input: {
-  roomCode: string;
-  playerId: string;
-  trackId: string;
-}) {
-  return requestJson<{
-    ok: true;
-    accepted: boolean;
-    state: string;
-    round: number;
-    deadlineMs: number | null;
-  }>("/quiz/media/unavailable", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
 export async function markRoomMediaPrepared(input: {
   roomCode: string;
   playerId: string;
