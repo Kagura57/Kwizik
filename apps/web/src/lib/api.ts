@@ -1,17 +1,10 @@
 import { logClientEvent } from "./logger";
+import { shouldAllowLoopbackFallbacks } from "./runtimeOrigin";
 const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 let preferredApiBaseUrl: string | null = null;
 
 function normalizeApiBaseUrl(raw: string) {
   return raw.trim().replace(/\/+$/, "");
-}
-
-function isLocalViteDevOrigin() {
-  if (typeof window === "undefined") return false;
-  const host = window.location.hostname;
-  const port = window.location.port;
-  const isLoopback = host === "localhost" || host === "127.0.0.1";
-  return isLoopback && (port === "5173" || port === "4173");
 }
 
 function apiBaseCandidates() {
@@ -24,13 +17,15 @@ function apiBaseCandidates() {
     candidates.push(ENV_API_BASE_URL);
   } else if (typeof window !== "undefined" && window.location.origin.length > 0) {
     candidates.push(`${window.location.origin}/api`);
-    if (!isLocalViteDevOrigin()) {
+    if (!shouldAllowLoopbackFallbacks()) {
       candidates.push(window.location.origin);
     }
   }
 
-  candidates.push("http://127.0.0.1:3001");
-  candidates.push("http://localhost:3001");
+  if (shouldAllowLoopbackFallbacks()) {
+    candidates.push("http://127.0.0.1:3001");
+    candidates.push("http://localhost:3001");
+  }
 
   const seen = new Set<string>();
   const deduped: string[] = [];

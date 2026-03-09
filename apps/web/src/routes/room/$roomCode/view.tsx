@@ -9,6 +9,7 @@ import {
   getEffectiveRoomStartedAtMs,
   getNextRoomTransitionAtMs,
 } from "../../../lib/liveRoundTiming";
+import { logClientEvent } from "../../../lib/logger";
 import { notify } from "../../../lib/notify";
 import { fetchLiveRoomState } from "../../../lib/realtime";
 import { useRoomRealtimeSubscription } from "../../../lib/useRoomRealtimeSubscription";
@@ -135,6 +136,8 @@ export function RoomViewPage() {
     startedAtMs: number;
   } | null>(null);
   const animeWarmupVerifiedKeyRef = useRef<string | null>(null);
+  const animeReloadAttemptRef = useRef<{ key: string; count: number } | null>(null);
+  const animeDiagnosticsRef = useRef<Set<string>>(new Set());
   const userInteractionUnlockedRef = useRef(false);
   const lastSnapshotErrorToastRef = useRef<string | null>(null);
   const lastPlaybackErrorToastRef = useRef<string | null>(null);
@@ -351,6 +354,35 @@ export function RoomViewPage() {
     return Math.max(0, state?.roundSync?.mediaOffsetSec ?? 0);
   }
 
+  function describeMediaElement(media: HTMLMediaElement | null) {
+    if (!media) return {};
+    return {
+      readyState: media.readyState,
+      networkState: media.networkState,
+      currentTime: Number.isFinite(media.currentTime) ? Number(media.currentTime.toFixed(3)) : null,
+      currentSrc: media.currentSrc || media.getAttribute("src") || null,
+    };
+  }
+
+  function logAnimeDiagnosticOnce(
+    level: Parameters<typeof logClientEvent>[0],
+    event: string,
+    key: string,
+    data: Record<string, unknown> = {},
+  ) {
+    const signature = `${event}:${key}`;
+    if (animeDiagnosticsRef.current.has(signature)) return;
+    animeDiagnosticsRef.current.add(signature);
+    logClientEvent(level, event, {
+      roomCode,
+      projection: true,
+      round: state?.round ?? null,
+      phase: state?.state ?? null,
+      effectivePhase: effectivePhase ?? null,
+      ...data,
+    });
+  }
+
   function cancelAnimeWarmupVerification() {
     if (animeWarmupRafRef.current !== null) {
       window.cancelAnimationFrame(animeWarmupRafRef.current);
@@ -373,6 +405,60 @@ export function RoomViewPage() {
   function hasEnoughAnimeReadyBuffer(video: HTMLVideoElement) {
     if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return false;
     return animeBufferedAheadSec(video) >= ANIME_MEDIA_PREPARED_BUFFER_SEC;
+  }
+
+  function disposeAnimeVideoElement(
+    video: HTMLVideoElement | null,
+    reason: string,
+    trackKey = currentAnimeRoundKey ?? `${state?.round ?? 0}:${stableAnimeVideoPlayback?.key ?? "none"}`,
+  ) {
+    if (!video) return;
+    cancelAnimeWarmupVerification();
+    logAnimeDiagnosticOnce("info", "anime_video_disposed", `${trackKey}:${reason}`, {
+      reason,
+      ...describeMediaElement(video),
+    });
+    try {
+      video.pause();
+    } catch {
+      // Ignore pause failures during projection teardown.
+    }
+    try {
+      video.removeAttribute("src");
+    } catch {
+      // Ignore attribute cleanup errors.
+    }
+    try {
+      video.load();
+    } catch {
+      // Ignore decoder reset failures.
+    }
+  }
+
+  function retryAnimeMediaLoad(trackKey: string) {
+    const video = animeVideoRef.current;
+    if (!video || !activeAnimeVideoSource) return false;
+
+    const previousAttempt =
+      animeReloadAttemptRef.current?.key === trackKey ? animeReloadAttemptRef.current.count : 0;
+    if (previousAttempt >= 1) return false;
+
+    animeReloadAttemptRef.current = {
+      key: trackKey,
+      count: previousAttempt + 1,
+    };
+    animeWarmupVerifiedKeyRef.current = null;
+    setAudioError(false);
+    setAnimePlaybackStatus("buffering");
+    logAnimeDiagnosticOnce("warn", "anime_video_soft_reload", trackKey, {
+      attempt: previousAttempt + 1,
+      sourceUrl: activeAnimeVideoSource,
+      ...describeMediaElement(video),
+    });
+    disposeAnimeVideoElement(video, "soft_reload", trackKey);
+    video.src = activeAnimeVideoSource;
+    video.load();
+    return true;
   }
 
   function timelinePlaybackTargetSec(nowMs: number) {
@@ -442,8 +528,18 @@ export function RoomViewPage() {
         return;
       }
       if (Date.now() - verification.startedAtMs >= ANIME_MEDIA_WARMUP_VERIFY_TIMEOUT_MS) {
-        cancelAnimeWarmupVerification();
-        setAnimePlaybackStatus("buffering");
+        const elapsedMs = Math.max(0, Date.now() - verification.startedAtMs);
+        const didRetry = retryAnimeMediaLoad(trackKey);
+        logAnimeDiagnosticOnce("warn", "anime_video_warmup_verify_timeout", trackKey, {
+          advancedSec: Number(advancedSec.toFixed(3)),
+          elapsedMs,
+          didRetry,
+          ...describeMediaElement(video),
+        });
+        if (!didRetry) {
+          cancelAnimeWarmupVerification();
+          setAnimePlaybackStatus("buffering");
+        }
         return;
       }
       animeWarmupRafRef.current = window.requestAnimationFrame(tick);
@@ -458,6 +554,10 @@ export function RoomViewPage() {
       return true;
     }
     if (!hasEnoughAnimeReadyBuffer(video)) {
+      logAnimeDiagnosticOnce("info", "anime_video_warmup_waiting_for_buffer", currentAnimeRoundKey, {
+        bufferedAheadSec: Number(animeBufferedAheadSec(video).toFixed(3)),
+        ...describeMediaElement(video),
+      });
       setAnimePlaybackStatus("buffering");
       return false;
     }
@@ -484,7 +584,11 @@ export function RoomViewPage() {
     try {
       const playPromise = video.play();
       if (playPromise) {
-        playPromise.then(startVerification).catch(() => {
+        playPromise.then(startVerification).catch((error) => {
+          logAnimeDiagnosticOnce("warn", "anime_video_warmup_play_failed", currentAnimeRoundKey, {
+            error: error instanceof Error ? error.message : String(error),
+            ...describeMediaElement(video),
+          });
           cancelAnimeWarmupVerification();
           setAudioError(true);
           setAnimePlaybackStatus("buffering");
@@ -492,7 +596,11 @@ export function RoomViewPage() {
       } else {
         startVerification();
       }
-    } catch {
+    } catch (error) {
+      logAnimeDiagnosticOnce("warn", "anime_video_warmup_play_failed", currentAnimeRoundKey, {
+        error: error instanceof Error ? error.message : String(error),
+        ...describeMediaElement(video),
+      });
       cancelAnimeWarmupVerification();
       setAudioError(true);
       setAnimePlaybackStatus("buffering");
@@ -515,6 +623,11 @@ export function RoomViewPage() {
   }
 
   useEffect(() => {
+    animeDiagnosticsRef.current.clear();
+    animeReloadAttemptRef.current = null;
+  }, [state?.round, state?.media?.trackId, state?.reveal?.trackId]);
+
+  useEffect(() => {
     setAudioError(false);
     animeWarmupVerifiedKeyRef.current = null;
     cancelAnimeWarmupVerification();
@@ -530,9 +643,8 @@ export function RoomViewPage() {
     if (!video) return;
 
     if (!activeAnimeVideoSource) {
-      cancelAnimeWarmupVerification();
+      disposeAnimeVideoElement(video, "source_cleared");
       animeWarmupVerifiedKeyRef.current = null;
-      video.pause();
       setAnimePlaybackStatus("idle");
       return;
     }
@@ -547,6 +659,14 @@ export function RoomViewPage() {
     setAnimePlaybackStatus("buffering");
     syncMediaElementToTimeline(video);
   }, [activeAnimeVideoSource, shouldWarmupAnimePlayback, stableAnimeVideoPlayback?.key]);
+
+  useEffect(() => {
+    const video = animeVideoRef.current;
+    const trackKey = `${state?.round ?? 0}:${stableAnimeVideoPlayback?.key ?? "none"}`;
+    return () => {
+      disposeAnimeVideoElement(video, "track_change", trackKey);
+    };
+  }, [stableAnimeVideoPlayback?.key, state?.round]);
 
   useEffect(() => {
     const video = animeVideoRef.current;
@@ -584,7 +704,12 @@ export function RoomViewPage() {
     }
     const playPromise = video.play();
     if (playPromise) {
-      playPromise.catch(() => undefined);
+      playPromise.catch((error) => {
+        logAnimeDiagnosticOnce("warn", "anime_video_play_failed", currentAnimeRoundKey ?? "none", {
+          error: error instanceof Error ? error.message : String(error),
+          ...describeMediaElement(video),
+        });
+      });
     }
   }, [
     activeAnimeVideoSource,
@@ -642,6 +767,7 @@ export function RoomViewPage() {
     if (activeYoutubeEmbed || activeAnimeVideoSource) {
       audio.pause();
       audio.removeAttribute("src");
+      audio.load();
       lastPreviewRef.current = null;
       return;
     }
@@ -649,6 +775,8 @@ export function RoomViewPage() {
     const previewUrl = state?.previewUrl ?? null;
     if (!previewUrl) {
       audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
       lastPreviewRef.current = null;
       return;
     }
@@ -728,6 +856,16 @@ export function RoomViewPage() {
       }
       if (animeWarmupRafRef.current !== null) {
         window.cancelAnimationFrame(animeWarmupRafRef.current);
+      }
+      try {
+        const video = animeVideoRef.current;
+        if (video) {
+          video.pause();
+          video.removeAttribute("src");
+          video.load();
+        }
+      } catch {
+        // Ignore cleanup failures during unmount.
       }
     };
   }, []);

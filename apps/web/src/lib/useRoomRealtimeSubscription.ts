@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { RealtimeRoomSnapshot } from "./api";
 import { logClientEvent } from "./logger";
+import { shouldAllowLoopbackFallbacks } from "./runtimeOrigin";
 
 const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 const SOCKET_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000];
@@ -34,8 +35,10 @@ function roomSocketCandidates() {
     candidates.push(toSocketBaseUrl(ENV_API_BASE_URL));
   }
 
-  candidates.push("ws://127.0.0.1:3001");
-  candidates.push("ws://localhost:3001");
+  if (shouldAllowLoopbackFallbacks()) {
+    candidates.push("ws://127.0.0.1:3001");
+    candidates.push("ws://localhost:3001");
+  }
 
   const seen = new Set<string>();
   const deduped: string[] = [];
