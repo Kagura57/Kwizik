@@ -18,6 +18,8 @@ import {
   setRoomPublicPlaylist,
   setRoomSourceMode,
   setRoomThemeMode,
+  setRoomRoundConfig,
+  setRoomAnswerMode,
   skipRoomRound,
   startRoom,
   submitRoomAnswer,
@@ -52,6 +54,7 @@ const MEDIA_READY_RETRY_MAX_ATTEMPTS = 4;
 
 type SourceMode = "public_playlist" | "players_liked" | "anilist_union";
 type ThemeMode = "op_only" | "ed_only" | "mix";
+type AnswerMode = "mcq_only" | "text_only" | "mixed";
 type AnswerSelectOption = {
   value: string;
   label: string;
@@ -434,6 +437,10 @@ export function RoomPlayPage() {
   const [answerSuggestionPool, setAnswerSuggestionPool] = useState<string[]>([]);
   const [sourceMode, setSourceMode] = useState<SourceMode>("anilist_union");
   const [themeMode, setThemeMode] = useState<ThemeMode>("mix");
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("mixed");
+  const [maxRounds, setMaxRounds] = useState(10);
+  const [playingMs, setPlayingMs] = useState(20_000);
+  const [revealMs, setRevealMs] = useState(20_000);
   const titlePreference = account.titlePreference;
   const [debouncedAnswer, setDebouncedAnswer] = useState("");
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
@@ -645,6 +652,18 @@ export function RoomPlayPage() {
     if (!state?.sourceConfig?.themeMode) return;
     setThemeMode(state.sourceConfig.themeMode);
   }, [state?.sourceConfig?.themeMode]);
+
+  useEffect(() => {
+    if (!state?.answerMode) return;
+    setAnswerMode(state.answerMode);
+  }, [state?.answerMode]);
+
+  useEffect(() => {
+    if (!state?.roomRoundConfig) return;
+    setMaxRounds(state.roomRoundConfig.maxRounds);
+    setPlayingMs(state.roomRoundConfig.playingMs);
+    setRevealMs(state.roomRoundConfig.revealMs);
+  }, [state?.roomRoundConfig]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -1014,6 +1033,46 @@ export function RoomPlayPage() {
     onError: (error) => {
       notify.error(themeModeErrorMessage(error), {
         key: `room-play:theme-mode:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const roundConfigMutation = useMutation({
+    mutationFn: (config: { maxRounds?: number; playingMs?: number; revealMs?: number }) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomRoundConfig({
+        roomCode,
+        playerId: session.playerId,
+        ...config,
+      });
+    },
+    onSuccess: () => {
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error("Erreur lors de la mise à jour de la configuration.", {
+        key: `room-play:round-config:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const answerModeMutation = useMutation({
+    mutationFn: (mode: AnswerMode) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomAnswerMode({
+        roomCode,
+        playerId: session.playerId,
+        mode,
+      });
+    },
+    onSuccess: (_result, mode) => {
+      const label = mode === "mcq_only" ? "QCM" : mode === "text_only" ? "Texte" : "Mixte";
+      notify.success(`Mode réponse: ${label}.`);
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error("Erreur lors du changement de mode réponse.", {
+        key: `room-play:answer-mode:${roomCode}:${errorCode(error) ?? "unknown"}`,
       });
     },
   });
@@ -2209,6 +2268,26 @@ export function RoomPlayPage() {
     themeModeMutation.mutate(mode);
   }
 
+  function onSelectAnswerMode(mode: AnswerMode) {
+    setAnswerMode(mode);
+    answerModeMutation.mutate(mode);
+  }
+
+  function onSelectMaxRounds(value: number) {
+    setMaxRounds(value);
+    roundConfigMutation.mutate({ maxRounds: value });
+  }
+
+  function onSelectPlayingMs(value: number) {
+    setPlayingMs(value);
+    roundConfigMutation.mutate({ playingMs: value });
+  }
+
+  function onSelectRevealMs(value: number) {
+    setRevealMs(value);
+    roundConfigMutation.mutate({ revealMs: value });
+  }
+
   function dispatchLeaveSignal() {
     if (leaveSentRef.current || !session.playerId) return;
     leaveSentRef.current = true;
@@ -2492,6 +2571,94 @@ export function RoomPlayPage() {
                       >
                         <strong>Mix</strong>
                         <span>Openings + Endings</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Nombre de rounds</span>
+                    <div className="source-preset-grid">
+                      {[5, 10, 15, 20].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className={`source-preset-btn${maxRounds === n ? " active" : ""}`}
+                          onClick={() => onSelectMaxRounds(n)}
+                        >
+                          <strong>{n}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Durée de devinette</span>
+                    <div className="source-preset-grid">
+                      {([
+                        [10_000, "10s"],
+                        [15_000, "15s"],
+                        [20_000, "20s"],
+                        [30_000, "30s"],
+                      ] as const).map(([ms, label]) => (
+                        <button
+                          key={ms}
+                          type="button"
+                          className={`source-preset-btn${playingMs === ms ? " active" : ""}`}
+                          onClick={() => onSelectPlayingMs(ms)}
+                        >
+                          <strong>{label}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Durée de révélation</span>
+                    <div className="source-preset-grid">
+                      {([
+                        [5_000, "5s"],
+                        [10_000, "10s"],
+                        [15_000, "15s"],
+                        [20_000, "20s"],
+                      ] as const).map(([ms, label]) => (
+                        <button
+                          key={ms}
+                          type="button"
+                          className={`source-preset-btn${revealMs === ms ? " active" : ""}`}
+                          onClick={() => onSelectRevealMs(ms)}
+                        >
+                          <strong>{label}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Mode réponse</span>
+                    <div className="source-preset-grid">
+                      <button
+                        type="button"
+                        className={`source-preset-btn${answerMode === "mcq_only" ? " active" : ""}`}
+                        onClick={() => onSelectAnswerMode("mcq_only")}
+                      >
+                        <strong>QCM</strong>
+                        <span>Choix multiples uniquement</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${answerMode === "text_only" ? " active" : ""}`}
+                        onClick={() => onSelectAnswerMode("text_only")}
+                      >
+                        <strong>Texte</strong>
+                        <span>Réponse libre uniquement</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${answerMode === "mixed" ? " active" : ""}`}
+                        onClick={() => onSelectAnswerMode("mixed")}
+                      >
+                        <strong>Mixte</strong>
+                        <span>Alternance QCM / Texte</span>
                       </button>
                     </div>
                   </div>

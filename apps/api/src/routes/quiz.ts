@@ -759,4 +759,65 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
     }
 
     return results;
+  })
+  .post("/settings/round-config", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+    const maxRounds = typeof (body as any).maxRounds === "number" ? (body as any).maxRounds : undefined;
+    const playingMs = typeof (body as any).playingMs === "number" ? (body as any).playingMs : undefined;
+    const revealMs = typeof (body as any).revealMs === "number" ? (body as any).revealMs : undefined;
+
+    const result = roomStore.setRoomRoundConfig(roomCode, playerId, { maxRounds, playingMs, revealMs });
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    return { ok: true as const, config: result.config };
+  })
+  .post("/settings/answer-mode", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const mode = readStringField(body, "mode");
+    if (!roomCode || !playerId || !mode) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+    if (mode !== "mcq_only" && mode !== "text_only" && mode !== "mixed") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_MODE" };
+    }
+    const result = roomStore.setRoomAnswerMode(roomCode, playerId, mode);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    return { ok: true as const, mode: result.mode };
   });

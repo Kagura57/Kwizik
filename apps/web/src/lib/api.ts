@@ -102,6 +102,12 @@ export type RoomState = {
   poolSize: number;
   categoryQuery: string;
   sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+  answerMode: "mcq_only" | "text_only" | "mixed";
+  roomRoundConfig: {
+    maxRounds: number;
+    playingMs: number;
+    revealMs: number;
+  };
   sourceConfig: {
     mode: "public_playlist" | "players_liked" | "anilist_union";
     themeMode: "op_only" | "ed_only" | "mix";
@@ -555,6 +561,30 @@ export async function setRoomThemeMode(input: {
   mode: "op_only" | "ed_only" | "mix";
 }) {
   return requestJson<{ ok: true; mode: "op_only" | "ed_only" | "mix" }>("/quiz/source/theme-mode", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomRoundConfig(input: {
+  roomCode: string;
+  playerId: string;
+  maxRounds?: number;
+  playingMs?: number;
+  revealMs?: number;
+}) {
+  return requestJson<{ ok: true; config: { maxRounds: number; playingMs: number; revealMs: number } }>(
+    "/quiz/settings/round-config",
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function setRoomAnswerMode(input: {
+  roomCode: string;
+  playerId: string;
+  mode: "mcq_only" | "text_only" | "mixed";
+}) {
+  return requestJson<{ ok: true; mode: string }>("/quiz/settings/answer-mode", {
     method: "POST",
     body: JSON.stringify(input),
   });

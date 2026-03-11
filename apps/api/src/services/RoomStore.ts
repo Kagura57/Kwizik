@@ -27,6 +27,7 @@ type RoundChoice = {
 };
 type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union";
 type RoomThemeMode = "op_only" | "ed_only" | "mix";
+type RoomAnswerMode = "mcq_only" | "text_only" | "mixed";
 type LibraryProvider = "spotify" | "deezer";
 type ProviderLinkStatus = "linked" | "not_linked" | "expired";
 type PoolBuildStatus = "idle" | "building" | "ready" | "failed";
@@ -76,6 +77,12 @@ type RoomSession = {
   distractorTrackPool: MusicTrack[];
   sourceMode: RoomSourceMode;
   themeMode: RoomThemeMode;
+  answerMode: RoomAnswerMode;
+  roomRoundConfig: {
+    maxRounds: number;
+    playingMs: number;
+    revealMs: number;
+  };
   publicPlaylistSelection: {
     provider: "deezer";
     id: string;
@@ -270,7 +277,9 @@ function averageResponseMs(player: Player) {
   return player.totalResponseMs / player.correctAnswers;
 }
 
-function modeForRound(round: number): RoundMode {
+function modeForRound(round: number, answerMode: RoomAnswerMode): RoundMode {
+  if (answerMode === "mcq_only") return "mcq";
+  if (answerMode === "text_only") return "text";
   return round % 2 === 1 ? "mcq" : "text";
 }
 
@@ -1029,7 +1038,32 @@ export class RoomStore {
     }
 
     const animeLookupLimit = Math.min(20_000, Math.max(targetCandidateSize * 30, 2_000));
-    const animeIds = await userAnimeLibraryRepository.unionAnimeIdsForUsers(userIds, animeLookupLimit);
+
+    // Get per-user anime IDs for equitable distribution
+    const perUserLimit = Math.ceil(animeLookupLimit / userIds.length);
+    const perUserAnimeIds = await Promise.all(
+      userIds.map((userId) => userAnimeLibraryRepository.animeIdsForUser(userId, perUserLimit)),
+    );
+
+    // Round-robin interleave to ensure equitable representation
+    const animeIds: number[] = [];
+    const seen = new Set<number>();
+    let added = true;
+    let round = 0;
+    while (added && animeIds.length < animeLookupLimit) {
+      added = false;
+      for (const userAnimeIds of perUserAnimeIds) {
+        if (round < userAnimeIds.length) {
+          const id = userAnimeIds[round];
+          if (!seen.has(id)) {
+            seen.add(id);
+            animeIds.push(id);
+          }
+          added = true;
+        }
+      }
+      round++;
+    }
     if (animeIds.length <= 0) {
       return {
         tracks: [] as MusicTrack[],
@@ -1290,7 +1324,7 @@ export class RoomStore {
   }
 
   private refreshRoundPlan(session: RoomSession) {
-    const plannedRounds = Math.min(session.trackPool.length, this.config.maxRounds);
+    const plannedRounds = Math.min(session.trackPool.length, session.roomRoundConfig.maxRounds);
     session.totalRounds = plannedRounds;
     if (plannedRounds <= 0) {
       session.roundModes = [];
@@ -1298,7 +1332,7 @@ export class RoomStore {
     }
 
     for (let round = session.roundModes.length + 1; round <= plannedRounds; round += 1) {
-      session.roundModes.push(modeForRound(round));
+      session.roundModes.push(modeForRound(round, session.answerMode));
     }
     if (session.roundModes.length > plannedRounds) {
       session.roundModes = session.roundModes.slice(0, plannedRounds);
@@ -1556,8 +1590,8 @@ export class RoomStore {
     const tick = session.manager.tick({
       nowMs,
       loadingMs,
-      roundMs: this.config.playingMs,
-      revealMs: this.config.revealMs,
+      roundMs: session.roomRoundConfig.playingMs,
+      revealMs: session.roomRoundConfig.revealMs,
       leaderboardMs: this.config.leaderboardMs,
     });
 
@@ -1686,6 +1720,12 @@ export class RoomStore {
       distractorTrackPool: [],
       sourceMode: initialSourceMode,
       themeMode: "mix",
+      answerMode: "mixed",
+      roomRoundConfig: {
+        maxRounds: this.config.maxRounds,
+        playingMs: this.config.playingMs,
+        revealMs: this.config.revealMs,
+      },
       publicPlaylistSelection: null,
       playersLikedRules: {
         minContributors: 1,
@@ -1910,6 +1950,45 @@ export class RoomStore {
     return { status: "ok" as const, mode: session.themeMode };
   }
 
+  setRoomRoundConfig(
+    roomCode: string,
+    playerId: string,
+    config: { maxRounds?: number; playingMs?: number; revealMs?: number },
+  ) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    if (typeof config.maxRounds === "number") {
+      session.roomRoundConfig.maxRounds = Math.max(1, Math.min(50, config.maxRounds));
+    }
+    if (typeof config.playingMs === "number") {
+      session.roomRoundConfig.playingMs = Math.max(5_000, Math.min(60_000, config.playingMs));
+    }
+    if (typeof config.revealMs === "number") {
+      session.roomRoundConfig.revealMs = Math.max(3_000, Math.min(30_000, config.revealMs));
+    }
+
+    this.resetReadyStates(session);
+    return { status: "ok" as const, config: session.roomRoundConfig };
+  }
+
+  setRoomAnswerMode(roomCode: string, playerId: string, mode: RoomAnswerMode) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.answerMode = mode;
+    this.resetReadyStates(session);
+    return { status: "ok" as const, mode: session.answerMode };
+  }
+
   setRoomPublicPlaylist(
     roomCode: string,
     playerId: string,
@@ -2102,6 +2181,12 @@ export class RoomStore {
     session.chatMessages = [];
     session.sourceMode = "anilist_union";
     session.themeMode = "mix";
+    session.answerMode = "mixed";
+    session.roomRoundConfig = {
+      maxRounds: this.config.maxRounds,
+      playingMs: this.config.playingMs,
+      revealMs: this.config.revealMs,
+    };
     session.publicPlaylistSelection = null;
     session.playersLikedPool = [];
     session.poolBuild = {
@@ -2168,7 +2253,7 @@ export class RoomStore {
         error: "NO_PLAYERS" as const,
       };
     }
-    const poolSize = Math.max(1, this.config.maxRounds);
+    const poolSize = Math.max(1, session.roomRoundConfig.maxRounds);
     if (session.sourceMode === "public_playlist") {
       const sourceQuery = this.sourceQueryForSession(session);
       if (sourceQuery.length <= 0) {
@@ -2860,6 +2945,8 @@ export class RoomStore {
       poolSize: session.trackPool.length,
       categoryQuery: session.categoryQuery,
       sourceMode: session.sourceMode,
+      answerMode: session.answerMode,
+      roomRoundConfig: session.roomRoundConfig,
       sourceConfig: {
         mode: session.sourceMode,
         themeMode: session.themeMode,
