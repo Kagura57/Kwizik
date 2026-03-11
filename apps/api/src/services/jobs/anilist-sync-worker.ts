@@ -228,6 +228,8 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
   const collectedEntries: Array<{
     status: "WATCHING" | "COMPLETED";
     aliases: string[];
+    titleEnglish: string | null;
+    titleNative: string | null;
   }> = [];
   const normalizedToStatus = new Map<string, "WATCHING" | "COMPLETED">();
   for (const list of lists) {
@@ -236,7 +238,12 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
       if (!status) continue;
       const aliases = collectAniListAliasCandidates(entry);
       if (aliases.length <= 0) continue;
-      collectedEntries.push({ status, aliases });
+      collectedEntries.push({
+        status,
+        aliases,
+        titleEnglish: entry.media?.title?.english?.trim() || null,
+        titleNative: entry.media?.title?.native?.trim() || null,
+      });
       for (const value of aliases) {
         const normalized = normalizeAnimeAlias(value);
         if (!normalized) continue;
@@ -271,6 +278,8 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
     });
   };
 
+  const catalogTitleUpdates = new Map<number, { titleEnglish: string | null; titleNative: string | null }>();
+
   for (const entry of collectedEntries) {
     const normalizedAliases = entry.aliases
       .map((value) => normalizeAnimeAlias(value))
@@ -286,6 +295,13 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
       });
     }
 
+    if ((entry.titleEnglish || entry.titleNative) && !catalogTitleUpdates.has(animeId)) {
+      catalogTitleUpdates.set(animeId, {
+        titleEnglish: entry.titleEnglish,
+        titleNative: entry.titleNative,
+      });
+    }
+
     for (const alias of entry.aliases) {
       pushAlias(animeId, alias, "synonym");
       const acronym = buildAnimeAcronym(alias);
@@ -297,6 +313,33 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
 
   if (process.env.DATABASE_URL && aliasRowsByKey.size > 0) {
     await upsertAnimeAliases([...aliasRowsByKey.values()]);
+  }
+
+  if (process.env.DATABASE_URL && catalogTitleUpdates.size > 0) {
+    const updates = [...catalogTitleUpdates.entries()];
+    const BATCH = 200;
+    for (let i = 0; i < updates.length; i += BATCH) {
+      const batch = updates.slice(i, i + BATCH);
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let idx = 1;
+      for (const [animeId, titles] of batch) {
+        placeholders.push(`($${idx}, $${idx + 1}::text, $${idx + 2}::text)`);
+        values.push(animeId, titles.titleEnglish, titles.titleNative);
+        idx += 3;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = coalesce(v.title_english, a.title_english),
+            title_native = coalesce(v.title_native, a.title_native),
+            updated_at = now()
+          from (values ${placeholders.join(", ")}) as v(id, title_english, title_native)
+          where a.id = v.id::bigint
+        `,
+        values,
+      );
+    }
   }
 
   await userAnimeLibraryRepository.setStagingForRun({
