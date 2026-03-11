@@ -26,22 +26,33 @@ body,
   min-height: 100%;
 }
 
-html.game-active,
-html.game-active body {
-  overflow: hidden;
-  height: 100vh;
-}
-
 html.game-active .blindtest-stage {
   height: calc(100vh - 90px);
   max-height: calc(100vh - 90px);
   overflow: hidden;
 }
 
+html.game-active .stage-main {
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.game-active .stage-main.arena-layout {
+  align-items: stretch;
+}
+
 html.game-active .arena-side {
   min-height: 0;
   overflow-y: auto;
-  max-height: calc(100vh - 200px);
+}
+
+html.game-active .gameplay-center {
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.game-active .media-shell {
+  max-height: clamp(180px, 42vh, 400px);
 }
 
 body {
