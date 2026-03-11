@@ -32,6 +32,18 @@ html.game-active body {
   height: 100vh;
 }
 
+html.game-active .blindtest-stage {
+  height: calc(100vh - 90px);
+  max-height: calc(100vh - 90px);
+  overflow: hidden;
+}
+
+html.game-active .arena-side {
+  min-height: 0;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
 body {
   margin: 0;
   color: var(--text);
@@ -1143,9 +1155,7 @@ select option {
 
 .blindtest-stage,
 .projection-stage {
-  height: calc(100vh - 90px);
-  max-height: calc(100vh - 90px);
-  overflow: hidden;
+  min-height: calc(100vh - 90px);
   padding: 18px;
   display: grid;
   gap: 14px;
@@ -1219,9 +1229,7 @@ select option {
   display: grid;
   gap: 10px;
   align-content: start;
-  min-height: 0;
-  overflow-y: auto;
-  max-height: calc(100vh - 200px);
+  min-height: 100%;
 }
 
 .side-title {
