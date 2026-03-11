@@ -1107,7 +1107,7 @@ export class RoomStore {
       [animeIds, rowLimit],
     );
 
-    const tracks: MusicTrack[] = randomShuffle(selected.rows).map((row) => {
+    const tracks: MusicTrack[] = selected.rows.map((row) => {
       const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
       const answerAliases = Array.from(
         new Set(
@@ -1137,6 +1137,9 @@ export class RoomStore {
     });
 
     const candidateTracks = tracks.filter((track) => isTrackPlayable(track));
+    console.log(
+      `[RoomStore] AniList track pool: ${animeIds.length} anime IDs → ${selected.rows.length} raw → ${candidateTracks.length} playable (need ${safeRounds} rounds)`,
+    );
     const split = this.splitAnswerAndDistractorPools(candidateTracks, safeRounds);
     return {
       tracks: split.tracks,

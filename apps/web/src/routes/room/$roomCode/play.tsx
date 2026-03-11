@@ -269,6 +269,13 @@ function normalizeChoiceLabel(value: string) {
     .trim();
 }
 
+const SEASON_SUFFIX_RE =
+  /\s*(?:(?:Season|Saison|S)\s*\d+|Part\s*\d+|\d+(?:st|nd|rd|th)\s*Season|:\s*(?:.*?(?:Season|Part|Final|Cour).*)$)/i;
+
+function stripSeasonSuffix(title: string) {
+  return title.replace(SEASON_SUFFIX_RE, "").trim();
+}
+
 function formatRoundChoiceLabel(choice: RoundChoice, preference: TitlePreference) {
   const romajiTitle = withRomajiLabel(choice.titleRomaji);
   const englishTitle = choice.titleEnglish?.trim() ?? "";
@@ -771,12 +778,16 @@ export function RoomPlayPage() {
     const values = [...fromApi.map((item) => item.label), ...rankedPool];
     const deduped: AnswerSelectOption[] = [];
     const seen = new Set<string>();
+    const seenFranchise = new Set<string>();
     for (const value of values) {
       const normalized = value.trim();
       if (normalized.length <= 0) continue;
       const key = normalized.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
+      const franchise = normalizeChoiceLabel(stripSeasonSuffix(normalized));
+      if (franchise.length > 0 && seenFranchise.has(franchise)) continue;
+      if (franchise.length > 0) seenFranchise.add(franchise);
       deduped.push({ value: normalized, label: normalized });
     }
     return deduped;
@@ -2604,15 +2615,32 @@ export function RoomPlayPage() {
                   unstyled
                   options={answerSelectOptions}
                   value={selectedAnswerOption}
+                  inputValue={answer}
                   onInputChange={(inputValue: string, actionMeta: InputActionMeta) => {
                     if (actionMeta.action === "input-change") {
                       setAnswer(inputValue.slice(0, 80));
                     }
+                    if (actionMeta.action === "set-value") {
+                      // Keep input in sync after option selection
+                    }
                   }}
                   onChange={(option: SingleValue<AnswerSelectOption>) => {
-                    if (!option) return;
+                    if (!option) {
+                      setAnswer("");
+                      return;
+                    }
                     setAnswer(option.value.slice(0, 80));
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      // Prevent react-select from selecting the highlighted option.
+                      // The form's onSubmit will handle submission instead.
+                      event.preventDefault();
+                      const form = (event.target as HTMLElement).closest("form");
+                      if (form) form.requestSubmit();
+                    }
+                  }}
+                  filterOption={() => true}
                   placeholder="Nom de l'anime"
                   noOptionsMessage={() =>
                     typedAnswer.length <= 0
