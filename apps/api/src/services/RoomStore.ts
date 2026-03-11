@@ -108,6 +108,7 @@ type RoomSession = {
     trackId: string;
     title: string;
     titleRomaji: string | null;
+    titleEnglish: string | null;
     artist: string;
     artistRomaji: string | null;
     songTitle: string | null;
@@ -1628,6 +1629,7 @@ export class RoomStore {
           trackId: track.id,
           title: track.title,
           titleRomaji: getRomanizedJapaneseCached(track.title),
+          titleEnglish: englishTitleForTrack(track),
           artist: track.artist,
           artistRomaji: getRomanizedJapaneseCached(track.artist),
           songTitle: track.songTitle ?? null,

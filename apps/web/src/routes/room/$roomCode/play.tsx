@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import Select, { type InputActionMeta, type SingleValue } from "react-select";
 import { toRomaji } from "wanakana";
 import {
+  getAccountTitlePreference,
   getRoomAnswerSuggestions,
   HttpStatusError,
   kickPlayer,
@@ -284,6 +285,20 @@ function formatRoundChoiceLabel(choice: RoundChoice, preference: TitlePreference
   return `${romajiTitle} - ${choice.themeLabel}`;
 }
 
+function formatRevealTitle(
+  reveal: { title: string; titleRomaji: string | null; titleEnglish?: string | null },
+  preference: TitlePreference,
+) {
+  const romaji = withRomajiLabel(reveal.title, reveal.titleRomaji);
+  const english = (reveal.titleEnglish ?? "").trim();
+  const hasDistinctEnglish =
+    english.length > 0 && normalizeChoiceLabel(english) !== normalizeChoiceLabel(reveal.title);
+
+  if (preference === "english" && hasDistinctEnglish) return english;
+  if (preference === "mixed" && hasDistinctEnglish) return `${romaji} (${english})`;
+  return romaji;
+}
+
 function revealArtworkUrl(reveal: {
   provider:
     | UnifiedPlaylistOption["provider"]
@@ -387,6 +402,7 @@ export function RoomPlayPage() {
   const navigate = useNavigate();
   const session = useGameStore((state) => state.session);
   const account = useGameStore((state) => state.account);
+  const setAccount = useGameStore((state) => state.setAccount);
   const clearSession = useGameStore((state) => state.clearSession);
   const setLiveRound = useGameStore((state) => state.setLiveRound);
   const [answer, setAnswer] = useState("");
@@ -501,6 +517,30 @@ export function RoomPlayPage() {
   });
 
   const state = snapshotQuery.data?.snapshot;
+
+  useEffect(() => {
+    const activePhases = ["countdown", "loading", "playing", "reveal", "leaderboard"];
+    const isGameActive = state?.state != null && activePhases.includes(state.state);
+    if (isGameActive) {
+      document.documentElement.classList.add("game-active");
+    } else {
+      document.documentElement.classList.remove("game-active");
+    }
+    return () => {
+      document.documentElement.classList.remove("game-active");
+    };
+  }, [state?.state]);
+
+  const titlePrefQuery = useQuery({
+    queryKey: ["account-title-preference"],
+    queryFn: getAccountTitlePreference,
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (!titlePrefQuery.isSuccess) return;
+    setAccount({ titlePreference: titlePrefQuery.data.titlePreference });
+  }, [titlePrefQuery.data?.titlePreference, titlePrefQuery.isSuccess, setAccount]);
+
   useEffect(() => {
     if (typeof snapshotQuery.data?.serverNowMs !== "number") return;
     setServerClockOffsetMs(snapshotQuery.data.serverNowMs - Date.now());
@@ -2632,7 +2672,7 @@ export function RoomPlayPage() {
               <div className="reveal-content">
                 <p className="kicker">Reveal</p>
                 <h3 className="reveal-title">
-                  {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
+                  {formatRevealTitle(state.reveal, titlePreference)}
                 </h3>
                 {state.reveal.songTitle && (
                   <p className="reveal-song-title">{state.reveal.songTitle}</p>
@@ -2702,8 +2742,7 @@ export function RoomPlayPage() {
           )}
         </div>
 
-        {!isResults && (
-          <aside className="arena-side meta-side">
+        <aside className="arena-side meta-side">
             <h2 className="side-title">Chat</h2>
             <div ref={chatLogRef} className="room-chat-log">
               {chatMessages.map((message) => (
@@ -2735,11 +2774,12 @@ export function RoomPlayPage() {
                 {chatMutation.isPending ? "Envoi..." : "Envoyer"}
               </button>
             </form>
-            <button className="ghost-btn" type="button" onClick={leaveRoom}>
-              Quitter la room
-            </button>
+            {!isResults && (
+              <button className="ghost-btn" type="button" onClick={leaveRoom}>
+                Quitter la room
+              </button>
+            )}
           </aside>
-        )}
       </article>
 
       <audio
