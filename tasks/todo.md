@@ -4,7 +4,7 @@
 - [x] Clarifier le comportement exact attendu pour le mode blindtest anime aleatoire hors listes utilisateurs.
 - [x] Valider un design minimal et elegant pour le nouveau mode.
 - [x] Ecrire le design dans `docs/plans/2026-03-13-random-anime-blindtest-design.md`.
-- [ ] Ecrire le plan d'implementation dans `docs/plans/2026-03-13-random-anime-blindtest.md`.
+- [x] Ecrire le plan d'implementation dans `docs/plans/2026-03-13-random-anime-blindtest.md`.
 - [ ] Implementer le mode approuve.
 - [ ] Verifier avec tests cibles et revue finale.
 
