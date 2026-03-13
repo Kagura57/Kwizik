@@ -115,7 +115,7 @@ function hostOnlyMessage(action: string) {
 
 function sourceModeLabel(mode: SourceMode) {
   if (mode === "anilist_union") return "AniList synchronise";
-  if (mode === "random_classic") return "Blindtest classique";
+  if (mode === "random_classic") return "Blindtest aléatoire classique";
   if (mode === "players_liked") return "Liked Songs joueurs";
   return "Playlist publique";
 }

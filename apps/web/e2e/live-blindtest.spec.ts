@@ -410,8 +410,13 @@ test("host lobby exposes random classic button and posts correct source mode", a
   const randomClassicBtn = page.locator(".source-preset-btn", { hasText: "Blindtest aléatoire classique" });
   await expect(randomClassicBtn).toBeVisible();
 
+  const sourceModeRequestPromise = page.waitForRequest(
+    (request) => request.url().includes("/quiz/source/mode") && request.method() === "POST",
+  );
   await randomClassicBtn.click();
+  const sourceModeRequest = await sourceModeRequestPromise;
 
   await expect.poll(() => capturedBody).not.toBe("");
+  expect(sourceModeRequest.postDataJSON().mode).toBe("random_classic");
   expect(JSON.parse(capturedBody).mode).toBe("random_classic");
 });
