@@ -25,6 +25,7 @@ import { normalizeAnimeText } from "./AnimeTextNormalization";
 import {
   fetchAniListMediaMetadataBySearchBatch,
 } from "./AniListTitleLookup";
+import { fetchRandomAniListAnimeIds } from "./AniListRandomAnimeSource";
 import { animeThemesProxyCache } from "./AnimeThemesProxyCache";
 import { RoundSyncCoordinator } from "./RoundSyncCoordinator";
 
@@ -35,7 +36,7 @@ type RoundChoice = {
   titleEnglish: string | null;
   themeLabel: string;
 };
-type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 type RoomThemeMode = "op_only" | "ed_only" | "mix";
 type RoomAnswerMode = "mcq_only" | "text_only" | "mixed";
 type LibraryProvider = "spotify" | "deezer";
@@ -228,6 +229,10 @@ function isAniListUnionSource(mode: RoomSourceMode) {
   return mode === "anilist_union";
 }
 
+function isRandomClassicSource(mode: RoomSourceMode) {
+  return mode === "random_classic";
+}
+
 type RoomStoreDependencies = {
   now?: () => number;
   getTrackPool?: (categoryQuery: string, size: number) => Promise<MusicTrack[]>;
@@ -239,6 +244,11 @@ type RoomStoreDependencies = {
   }) => Promise<MusicTrack[]>;
   warmAnimeThemeVideo?: (videoKey: string) => Promise<void>;
   config?: Partial<RoundConfig>;
+  getRandomAniListAnimeIds?: (input: {
+    seed: string;
+    desiredCount: number;
+    themeMode: RoomThemeMode;
+  }) => Promise<number[]>;
 };
 
 function randomRoomCode(length = 6): string {
@@ -875,6 +885,11 @@ export class RoomStore {
     allowExternalResolve?: boolean;
   }) => Promise<MusicTrack[]>;
   private readonly warmAnimeThemeVideo: (videoKey: string) => Promise<void>;
+  private readonly getRandomAniListAnimeIds: (input: {
+    seed: string;
+    desiredCount: number;
+    themeMode: RoomThemeMode;
+  }) => Promise<number[]>;
   private readonly config: RoundConfig;
 
   constructor(dependencies: RoomStoreDependencies = {}) {
@@ -884,6 +899,7 @@ export class RoomStore {
     this.getPlayerLikedTracks = dependencies.getPlayerLikedTracks ?? fetchSyncedUserLikedTracksForProviders;
     this.warmAnimeThemeVideo = dependencies.warmAnimeThemeVideo ?? ((videoKey) =>
       animeThemesProxyCache.warmByVideoKey(videoKey).then(() => undefined));
+    this.getRandomAniListAnimeIds = dependencies.getRandomAniListAnimeIds ?? fetchRandomAniListAnimeIds;
     this.config = {
       ...DEFAULT_ROUND_CONFIG,
       ...(dependencies.config ?? {}),
@@ -924,6 +940,9 @@ export class RoomStore {
     if (isAniListUnionSource(session.sourceMode)) {
       return "anilist:linked:union";
     }
+    if (isRandomClassicSource(session.sourceMode)) {
+      return "anilist:random:classic";
+    }
     return "players:liked";
   }
 
@@ -954,6 +973,9 @@ export class RoomStore {
 
     if (session.sourceMode === "public_playlist") {
       return this.sourceQueryForSession(session).length > 0;
+    }
+    if (isRandomClassicSource(session.sourceMode)) {
+      return true;
     }
     if (isAniListUnionSource(session.sourceMode)) {
       return [...session.players.values()].some((player) => player.userId !== null);
@@ -1259,6 +1281,48 @@ export class RoomStore {
         cleanTotal: 0,
       };
     }
+
+    return this.buildAniListTrackPoolFromIds(session, safeRounds, animeIds);
+  }
+
+  private async buildRandomClassicTrackPool(session: RoomSession, requestedRounds: number) {
+    const safeRounds = Math.max(1, requestedRounds);
+    const targetCandidateSize = this.targetAniListCandidatePoolSize(safeRounds);
+
+    if (!(typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0)) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    const seed = `${session.roomCode}:${Date.now()}`;
+    const animeIds = await this.getRandomAniListAnimeIds({
+      seed,
+      desiredCount: Math.min(20_000, Math.max(targetCandidateSize * 30, 2_000)),
+      themeMode: session.themeMode,
+    });
+
+    if (animeIds.length <= 0) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    return this.buildAniListTrackPoolFromIds(session, safeRounds, animeIds);
+  }
+
+  private async buildAniListTrackPoolFromIds(session: RoomSession, safeRounds: number, animeIds: number[]) {
+    const targetCandidateSize = this.targetAniListCandidatePoolSize(safeRounds);
 
     const themeCondition =
       session.themeMode === "op_only"
@@ -2309,6 +2373,23 @@ export class RoomStore {
           }
         }
       }
+    } else if (isRandomClassicSource(mode)) {
+      session.publicPlaylistSelection = null;
+      session.playersLikedPool = [];
+      session.distractorTrackPool = [];
+      session.trackPool = [];
+      this.roomLikedPoolRebuildRequested.delete(roomCode);
+      session.poolBuild = {
+        status: "idle",
+        contributorsCount: 0,
+        mergedTracksCount: 0,
+        playableTracksCount: 0,
+        lastBuiltAtMs: null,
+        errorCode: null,
+      };
+      session.isResolvingTracks = false;
+      session.trackResolutionJobsInFlight = 0;
+      session.categoryQuery = "anilist:random:classic";
     } else {
       session.publicPlaylistSelection = null;
       session.playersLikedPool = [];
@@ -2732,6 +2813,8 @@ export class RoomStore {
           error: "PLAYERS_LIBRARY_NOT_READY" as const,
         };
       }
+    } else if (isRandomClassicSource(session.sourceMode)) {
+      // random_classic does not require linked players — no validation needed here
     } else {
       const contributors = this.playersLikedContributors(session);
       if (contributors.length < session.playersLikedRules.minContributors) {
@@ -2828,6 +2911,11 @@ export class RoomStore {
       startPoolStats = await this.resolveTracksWithFlag(
         session,
         async () => await this.buildAniListUnionTrackPool(session, poolSize),
+      );
+    } else if (isRandomClassicSource(session.sourceMode)) {
+      startPoolStats = await this.resolveTracksWithFlag(
+        session,
+        async () => await this.buildRandomClassicTrackPool(session, poolSize),
       );
     } else {
       try {
