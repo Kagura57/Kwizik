@@ -25,7 +25,7 @@ import { normalizeAnimeText } from "./AnimeTextNormalization";
 import {
   fetchAniListMediaMetadataBySearchBatch,
 } from "./AniListTitleLookup";
-import { fetchRandomAniListAnimeIds } from "./AniListRandomAnimeSource";
+import { fetchRandomAniListAnimeIds, AniListRemoteFailureError } from "./AniListRandomAnimeSource";
 import { animeThemesProxyCache } from "./AnimeThemesProxyCache";
 import { RoundSyncCoordinator } from "./RoundSyncCoordinator";
 
@@ -2924,10 +2924,25 @@ export class RoomStore {
         async () => await this.buildAniListUnionTrackPool(session, poolSize),
       );
     } else if (isRandomClassicSource(session.sourceMode)) {
-      startPoolStats = await this.resolveTracksWithFlag(
-        session,
-        async () => await this.buildRandomClassicTrackPool(session, poolSize),
-      );
+      try {
+        startPoolStats = await this.resolveTracksWithFlag(
+          session,
+          async () => await this.buildRandomClassicTrackPool(session, poolSize),
+        );
+      } catch (error) {
+        if (error instanceof AniListRemoteFailureError) {
+          logEvent("warn", "room_start_anilist_remote_failure", {
+            roomCode,
+            requestedRounds: poolSize,
+            failedFetchCount: error.failedFetchCount,
+          });
+          return {
+            ok: false as const,
+            error: "ANILIST_REMOTE_FAILURE" as const,
+          };
+        }
+        throw error;
+      }
     } else {
       try {
         startPoolStats = await this.resolveTracksWithFlag(

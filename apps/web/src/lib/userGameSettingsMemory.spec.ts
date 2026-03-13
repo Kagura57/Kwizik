@@ -31,6 +31,7 @@ function stubWindowWithStorage() {
       },
     },
   });
+  return backing;
 }
 
 function restoreWindow() {
@@ -231,5 +232,54 @@ describe("user game settings memory", () => {
         remembered,
       ),
     ).toBe(true);
+  });
+
+  it("migrates v1 settings when v2 key is absent, preserving compatible fields with default sourceMode", () => {
+    const backing = stubWindowWithStorage();
+
+    const v1Settings = {
+      themeMode: "op_only",
+      difficultyFilter: "hard",
+      contentFilters: { decades: [2010], genres: ["Action"] },
+      answerMode: "text_only",
+      livesMode: true,
+      maxLives: 5,
+      roundConfig: { maxRounds: 20, playingMs: 30_000, revealMs: 15_000 },
+    };
+    backing.set("kwizik:user-game-settings:v1", JSON.stringify(v1Settings));
+
+    const loaded = loadRememberedGameSettings();
+
+    expect(loaded).toEqual({
+      sourceMode: DEFAULT_USER_GAME_SETTINGS.sourceMode,
+      themeMode: "op_only",
+      difficultyFilter: "hard",
+      contentFilters: { decades: [2010], genres: ["Action"] },
+      answerMode: "text_only",
+      livesMode: true,
+      maxLives: 5,
+      roundConfig: { maxRounds: 20, playingMs: 30_000, revealMs: 15_000 },
+    });
+  });
+
+  it("returns null when neither v2 nor v1 settings exist in storage", () => {
+    stubWindowWithStorage();
+    expect(loadRememberedGameSettings()).toBeNull();
+  });
+
+  it("prefers v2 settings over v1 when both exist", () => {
+    const backing = stubWindowWithStorage();
+
+    backing.set(
+      "kwizik:user-game-settings:v1",
+      JSON.stringify({ themeMode: "op_only", difficultyFilter: "easy" }),
+    );
+    backing.set(
+      "kwizik:user-game-settings:v2",
+      JSON.stringify({ ...DEFAULT_USER_GAME_SETTINGS, themeMode: "ed_only" }),
+    );
+
+    const loaded = loadRememberedGameSettings();
+    expect(loaded).toMatchObject({ themeMode: "ed_only" });
   });
 });

@@ -1,6 +1,13 @@
 import { logEvent } from "../lib/logger";
 import { fetchJsonWithTimeout } from "../routes/music/http";
 
+export class AniListRemoteFailureError extends Error {
+  constructor(public readonly failedFetchCount: number) {
+    super(`AniList remote unavailable: ${failedFetchCount} fetch(es) failed`);
+    this.name = "AniListRemoteFailureError";
+  }
+}
+
 const ANILIST_GRAPHQL_URL = "https://graphql.anilist.co";
 const ANILIST_SLICE_SORTS = [
   ["POPULARITY_DESC"],
@@ -99,6 +106,7 @@ export async function fetchRandomAniListAnimeIds(input: {
   const seenIds = new Set<number>();
   const requestMemo = new Map<string, { ids: number[]; hasNextPage: boolean }>();
   let fetchedPageCount = 0;
+  let failedFetchCount = 0;
 
   for (const [sliceIndex, slice] of requestPlan.entries()) {
     let page = slice.startPage;
@@ -141,6 +149,12 @@ export async function fetchRandomAniListAnimeIds(input: {
         )) as AniListRandomPayload | null;
 
         fetchedPageCount += 1;
+        if (payload === null) {
+          failedFetchCount += 1;
+          const response = { ids: [] as number[], hasNextPage: false };
+          requestMemo.set(requestKey, response);
+          return response;
+        }
         const ids = (payload?.data?.Page?.media ?? [])
           .map((entry) => entry?.id)
           .filter((id): id is number => typeof id === "number" && Number.isFinite(id) && Number.isInteger(id) && id > 0);
@@ -173,7 +187,12 @@ export async function fetchRandomAniListAnimeIds(input: {
     sliceCount: requestPlan.length,
     fetchedPageCount,
     uniqueAnimeIdCount: uniqueIds.length,
+    failedFetchCount,
   });
+
+  if (uniqueIds.length === 0 && failedFetchCount > 0) {
+    throw new AniListRemoteFailureError(failedFetchCount);
+  }
 
   return uniqueIds;
 }

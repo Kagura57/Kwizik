@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchRandomAniListAnimeIds } from "../src/services/AniListRandomAnimeSource";
+import { fetchRandomAniListAnimeIds, AniListRemoteFailureError } from "../src/services/AniListRandomAnimeSource";
 
 type AniListRequest = {
   query?: string;
@@ -194,5 +194,64 @@ describe("AniListRandomAnimeSource", () => {
     });
 
     expect(ids).toEqual([7, 8]);
+  });
+
+  it("throws AniListRemoteFailureError when all fetches fail and no IDs are collected", async () => {
+    Object.defineProperty(globalThis, "fetch", {
+      value: vi.fn(async () =>
+        new Response(null, { status: 503, headers: { "content-type": "application/json" } }),
+      ),
+      configurable: true,
+      writable: true,
+    });
+
+    await expect(
+      fetchRandomAniListAnimeIds({ seed: "fail-seed", desiredCount: 5, themeMode: "mix" }),
+    ).rejects.toBeInstanceOf(AniListRemoteFailureError);
+  });
+
+  it("does not throw AniListRemoteFailureError when AniList returns legitimately empty pages", async () => {
+    mockAniListFetch(() => ({
+      ids: [],
+      hasNextPage: false,
+    }));
+
+    const ids = await fetchRandomAniListAnimeIds({
+      seed: "empty-seed",
+      desiredCount: 5,
+      themeMode: "mix",
+    });
+
+    expect(ids).toEqual([]);
+  });
+
+  it("returns collected IDs when some fetches fail but at least one succeeds", async () => {
+    let callIndex = 0;
+    Object.defineProperty(globalThis, "fetch", {
+      value: vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        callIndex += 1;
+        if (callIndex === 1) {
+          const request = JSON.parse((init?.body as string) ?? "{}") as AniListRequest;
+          return new Response(
+            JSON.stringify({
+              data: {
+                Page: {
+                  pageInfo: { currentPage: request.variables?.page ?? 1, hasNextPage: false },
+                  media: [{ id: 42 }, { id: 43 }],
+                },
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(null, { status: 503, headers: { "content-type": "application/json" } });
+      }),
+      configurable: true,
+      writable: true,
+    });
+
+    const ids = await fetchRandomAniListAnimeIds({ seed: "partial-seed", desiredCount: 2, themeMode: "mix" });
+    expect(ids).toContain(42);
+    expect(ids).toContain(43);
   });
 });

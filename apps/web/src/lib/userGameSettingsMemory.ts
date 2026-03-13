@@ -20,6 +20,7 @@ export type RememberedGameSettings = {
 };
 
 const STORAGE_KEY = "kwizik:user-game-settings:v2";
+const LEGACY_V1_STORAGE_KEY = "kwizik:user-game-settings:v1";
 const VALID_SOURCE_MODES = new Set<SourceMode>(["public_playlist", "players_liked", "anilist_union", "random_classic"]);
 const VALID_THEME_MODES = new Set<ThemeMode>(["op_only", "ed_only", "mix"]);
 const VALID_DIFFICULTY_FILTERS = new Set<RoomDifficultyFilter>(["all", "easy", "medium", "hard"]);
@@ -154,8 +155,17 @@ export function loadRememberedGameSettings() {
   if (!availableStorage) return null;
   try {
     const raw = availableStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    return normalizeRememberedGameSettings(JSON.parse(raw));
+    if (raw) return normalizeRememberedGameSettings(JSON.parse(raw));
+
+    // Migrate legacy v1 settings: preserve compatible fields, reset sourceMode to default.
+    const legacyRaw = availableStorage.getItem(LEGACY_V1_STORAGE_KEY);
+    if (!legacyRaw) return null;
+    const legacyParsed = JSON.parse(legacyRaw) as unknown;
+    const legacyBase = legacyParsed && typeof legacyParsed === "object" ? legacyParsed : {};
+    return normalizeRememberedGameSettings({
+      ...legacyBase,
+      sourceMode: DEFAULT_USER_GAME_SETTINGS.sourceMode,
+    });
   } catch {
     return null;
   }
