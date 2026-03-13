@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
-import { HttpStatusError, type RoundChoice } from "../../../lib/api";
+import {
+  getAccountTitlePreference,
+  HttpStatusError,
+  type RoundChoice,
+  type TitlePreference,
+} from "../../../lib/api";
 import {
   getEffectiveRoomDeadlineMs,
   getEffectiveRoomPhase,
@@ -95,14 +100,33 @@ function normalizeChoiceLabel(value: string) {
     .trim();
 }
 
-function formatProjectionChoiceLabel(choice: RoundChoice) {
+function formatProjectionChoiceLabel(choice: RoundChoice, preference: TitlePreference) {
   const romajiTitle = withRomajiLabel(choice.titleRomaji);
   const englishTitle = choice.titleEnglish?.trim() ?? "";
   const hasDistinctEnglish =
     englishTitle.length > 0 &&
     normalizeChoiceLabel(englishTitle) !== normalizeChoiceLabel(choice.titleRomaji);
-  const title = hasDistinctEnglish ? `${romajiTitle} (${englishTitle})` : romajiTitle;
+  const title =
+    preference === "english" && hasDistinctEnglish
+      ? englishTitle
+      : preference === "mixed" && hasDistinctEnglish
+        ? `${romajiTitle} (${englishTitle})`
+        : romajiTitle;
   return `${title} - ${choice.themeLabel}`;
+}
+
+function formatProjectionRevealTitle(
+  reveal: { title: string; titleRomaji: string | null; titleEnglish?: string | null },
+  preference: TitlePreference,
+) {
+  const romaji = withRomajiLabel(reveal.title, reveal.titleRomaji);
+  const english = (reveal.titleEnglish ?? "").trim();
+  const hasDistinctEnglish =
+    english.length > 0 && normalizeChoiceLabel(english) !== normalizeChoiceLabel(reveal.title);
+
+  if (preference === "english" && hasDistinctEnglish) return english;
+  if (preference === "mixed" && hasDistinctEnglish) return `${romaji} (${english})`;
+  return romaji;
 }
 
 export function RoomViewPage() {
@@ -163,6 +187,26 @@ export function RoomViewPage() {
   });
 
   const state = snapshotQuery.data?.snapshot;
+  const titlePreferenceQuery = useQuery({
+    queryKey: ["account-title-preference"],
+    queryFn: async () => {
+      try {
+        return await getAccountTitlePreference();
+      } catch (error) {
+        if (error instanceof HttpStatusError && error.status === 401) {
+          return {
+            ok: true as const,
+            titlePreference: "mixed" as const,
+          };
+        }
+        throw error;
+      }
+    },
+    retry: false,
+    staleTime: 60_000,
+  });
+  const titlePreference = titlePreferenceQuery.data?.titlePreference ?? "mixed";
+
   useEffect(() => {
     if (typeof snapshotQuery.data?.serverNowMs !== "number") return;
     setServerClockOffsetMs(snapshotQuery.data.serverNowMs - Date.now());
@@ -949,7 +993,7 @@ export function RoomViewPage() {
           <div className="projection-choices">
             {state.choices.map((choice, index) => (
               <div key={`${choice.value}-${index}`} className="projection-choice">
-                {formatProjectionChoiceLabel(choice)}
+                {formatProjectionChoiceLabel(choice, titlePreference)}
               </div>
             ))}
           </div>
@@ -974,7 +1018,7 @@ export function RoomViewPage() {
               <div className="reveal-content">
                 <p className="kicker">Reveal</p>
                 <h3 className="reveal-title">
-                  {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
+                  {formatProjectionRevealTitle(state.reveal, titlePreference)}
                 </h3>
                 {state.reveal.songTitle && (
                   <p className="reveal-song-title">{state.reveal.songTitle}</p>

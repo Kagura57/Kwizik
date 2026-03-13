@@ -55,6 +55,11 @@ export class HttpStatusError extends Error {
 }
 
 export type TitlePreference = "romaji" | "english" | "mixed";
+export type RoomDifficultyFilter = "all" | "easy" | "medium" | "hard";
+export type RoomContentFilters = {
+  decades: number[];
+  genres: string[];
+};
 export type RoundChoice = {
   value: string;
   titleRomaji: string;
@@ -77,6 +82,8 @@ export type RoomState = {
     isReady: boolean;
     hasAnsweredCurrentRound: boolean;
     isHost: boolean;
+    lives: number;
+    isEliminated: boolean;
     canContributeLibrary: boolean;
     libraryContribution: {
       includeInPool: {
@@ -103,6 +110,8 @@ export type RoomState = {
   categoryQuery: string;
   sourceMode: "public_playlist" | "players_liked" | "anilist_union";
   answerMode: "mcq_only" | "text_only" | "mixed";
+  livesMode: boolean;
+  maxLives: number;
   roomRoundConfig: {
     maxRounds: number;
     playingMs: number;
@@ -111,6 +120,8 @@ export type RoomState = {
   sourceConfig: {
     mode: "public_playlist" | "players_liked" | "anilist_union";
     themeMode: "op_only" | "ed_only" | "mix";
+    difficultyFilter: RoomDifficultyFilter;
+    contentFilters: RoomContentFilters;
     publicPlaylist: {
       provider: "deezer";
       id: string;
@@ -194,6 +205,8 @@ export type RoomState = {
     lastRoundScore: number;
     streak: number;
     maxStreak: number;
+    lives: number;
+    isEliminated: boolean;
     hasAnsweredCurrentRound: boolean;
   }> | null;
   chatMessages: Array<{
@@ -279,7 +292,10 @@ function readRetryCount(method: string, retry?: number) {
   return method === "GET" ? 2 : 0;
 }
 
-function readRequestTimeoutMs(method: string) {
+function readRequestTimeoutMs(method: string, path: string) {
+  if (method === "POST" && path === "/quiz/start") {
+    return 20_000;
+  }
   return method === "GET" ? 9_000 : 4_500;
 }
 
@@ -333,7 +349,7 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
         }
         const timeoutId = globalThis.setTimeout(() => {
           timeoutController.abort();
-        }, readRequestTimeoutMs(method));
+        }, readRequestTimeoutMs(method, pathWithSlash));
         let response: Response;
         try {
           response = await fetch(`${base}${pathWithSlash}`, {
@@ -585,6 +601,41 @@ export async function setRoomAnswerMode(input: {
   mode: "mcq_only" | "text_only" | "mixed";
 }) {
   return requestJson<{ ok: true; mode: string }>("/quiz/settings/answer-mode", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomDifficulty(input: {
+  roomCode: string;
+  playerId: string;
+  filter: RoomDifficultyFilter;
+}) {
+  return requestJson<{ ok: true; filter: RoomDifficultyFilter }>("/quiz/settings/difficulty", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomContentFilters(input: {
+  roomCode: string;
+  playerId: string;
+  decades: number[];
+  genres: string[];
+}) {
+  return requestJson<{ ok: true; contentFilters: RoomContentFilters }>("/quiz/settings/content-filters", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomLives(input: {
+  roomCode: string;
+  playerId: string;
+  livesMode: boolean;
+  maxLives: number;
+}) {
+  return requestJson<{ ok: true; livesMode: boolean; maxLives: number }>("/quiz/settings/lives", {
     method: "POST",
     body: JSON.stringify(input),
   });

@@ -1,6 +1,17 @@
 import { expect, test } from "@playwright/test";
 
-function buildSnapshot(phase: "playing" | "reveal") {
+function buildSnapshot(
+  phase: "playing" | "reveal",
+  overrides?: Partial<{
+    mode: "text" | "mcq";
+    choices: Array<{
+      value: string;
+      titleRomaji: string;
+      titleEnglish: string | null;
+      themeLabel: string;
+    }> | null;
+  }>,
+) {
   const now = Date.now();
   const media = {
     provider: "animethemes" as const,
@@ -13,8 +24,8 @@ function buildSnapshot(phase: "playing" | "reveal") {
     roomCode: "ABC123",
     state: phase,
     round: 1,
-    mode: "text" as const,
-    choices: null,
+    mode: overrides?.mode ?? ("text" as const),
+    choices: overrides?.choices ?? null,
     serverNowMs: now,
     playerCount: 1,
     hostPlayerId: "p1",
@@ -80,7 +91,7 @@ function buildSnapshot(phase: "playing" | "reveal") {
         : null,
     leaderboard: [],
     chatMessages: [],
-    answerSuggestions: ["Attack on Titan", "AOT"],
+    answerSuggestions: ["Naruto", "Bleach"],
   };
 }
 
@@ -114,4 +125,133 @@ test("anime round keeps video hidden during guessing then reveals without restar
 
   phase = "reveal";
   await expect.poll(async () => page.locator("video.anime-video-reveal").count()).toBeGreaterThan(0);
+});
+
+test("text answer select keeps the chosen anime visible after selection", async ({ page }) => {
+  await page.route("**/realtime/room/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        roomCode: "ABC123",
+        snapshot: buildSnapshot("playing"),
+        serverNowMs: Date.now(),
+      }),
+    });
+  });
+
+  await page.route("**/room/**/state", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(buildSnapshot("playing")),
+    });
+  });
+
+  await page.route("**/account/preferences/title", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, titlePreference: "romaji" }),
+    });
+  });
+
+  await page.route("**/anime/autocomplete?**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        q: "Nar",
+        suggestions: [
+          {
+            animeId: 20,
+            label: "Naruto",
+            score: 1,
+            matchedAlias: "Naruto",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto("/room/ABC123/play");
+
+  const answerInput = page.locator("#answer-select-input");
+  await answerInput.click();
+  await answerInput.fill("Nar");
+  await page.getByText("Naruto", { exact: true }).click();
+
+  await expect(answerInput).toHaveValue("Naruto");
+
+  const computed = await answerInput.evaluate((element) => {
+    const style = window.getComputedStyle(element);
+    return {
+      borderTopWidth: style.borderTopWidth,
+      paddingTop: style.paddingTop,
+      paddingRight: style.paddingRight,
+      paddingBottom: style.paddingBottom,
+      paddingLeft: style.paddingLeft,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+
+  expect(computed).toEqual({
+    borderTopWidth: "0px",
+    paddingTop: "0px",
+    paddingRight: "0px",
+    paddingBottom: "0px",
+    paddingLeft: "0px",
+    backgroundColor: "rgba(0, 0, 0, 0)",
+  });
+});
+
+test("projection mcq uses english titles when english preference is selected", async ({ page }) => {
+  const snapshot = buildSnapshot("playing", {
+    mode: "mcq",
+    choices: [
+      {
+        value: "Shingeki no Kyojin - OP1",
+        titleRomaji: "Shingeki no Kyojin",
+        titleEnglish: "Attack on Titan",
+        themeLabel: "OP1",
+      },
+    ],
+  });
+
+  await page.route("**/realtime/room/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        roomCode: "ABC123",
+        snapshot,
+        serverNowMs: Date.now(),
+      }),
+    });
+  });
+
+  await page.route("**/room/**/state", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(snapshot),
+    });
+  });
+
+  await page.route("**/account/preferences/title", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, titlePreference: "english" }),
+    });
+  });
+
+  await page.goto("/room/ABC123/view");
+
+  const choice = page.locator(".projection-choice").first();
+  await expect(choice).toHaveText("Attack on Titan - OP1");
+  await expect(choice).not.toContainText("Shingeki no Kyojin");
 });

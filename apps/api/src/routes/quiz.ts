@@ -41,6 +41,22 @@ function readOptionalNumberField(body: unknown, key: string) {
   return null;
 }
 
+function readOptionalStringArrayField(body: unknown, key: string) {
+  if (typeof body !== "object" || body === null) return null;
+  const record = body as Record<string, unknown>;
+  const value = record[key];
+  if (!Array.isArray(value)) return null;
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function readOptionalNumberArrayField(body: unknown, key: string) {
+  if (typeof body !== "object" || body === null) return null;
+  const record = body as Record<string, unknown>;
+  const value = record[key];
+  if (!Array.isArray(value)) return null;
+  return value.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+}
+
 function isSafeAnimeThemeVideoKey(value: string) {
   return /^[A-Za-z0-9_.-]{1,180}$/.test(value);
 }
@@ -820,4 +836,101 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       return { ok: false, error: "INVALID_STATE" };
     }
     return { ok: true as const, mode: result.mode };
+  })
+  .post("/settings/difficulty", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    const filter = readStringField(body, "filter");
+    if (!roomCode || !playerId || !filter) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+    if (filter !== "all" && filter !== "easy" && filter !== "medium" && filter !== "hard") {
+      set.status = 400;
+      return { ok: false, error: "INVALID_FILTER" };
+    }
+    const result = roomStore.setRoomDifficultyFilter(roomCode, playerId, filter);
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+    return { ok: true as const, filter: result.filter };
+  })
+  .post("/settings/content-filters", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.setRoomContentFilters(roomCode, playerId, {
+      decades: readOptionalNumberArrayField(body, "decades") ?? undefined,
+      genres: readOptionalStringArrayField(body, "genres") ?? undefined,
+    });
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+
+    return { ok: true as const, contentFilters: result.contentFilters };
+  })
+  .post("/settings/lives", ({ body, set }) => {
+    const roomCode = readStringField(body, "roomCode");
+    const playerId = readStringField(body, "playerId");
+    if (!roomCode || !playerId) {
+      set.status = 400;
+      return { ok: false, error: "INVALID_PAYLOAD" };
+    }
+
+    const result = roomStore.setRoomLivesMode(roomCode, playerId, {
+      livesMode: readOptionalBooleanField(body, "livesMode") ?? undefined,
+      maxLives: readOptionalNumberField(body, "maxLives") ?? undefined,
+    });
+    if (result.status === "room_not_found") {
+      set.status = 404;
+      return { ok: false, error: "ROOM_NOT_FOUND" };
+    }
+    if (result.status === "player_not_found") {
+      set.status = 404;
+      return { ok: false, error: "PLAYER_NOT_FOUND" };
+    }
+    if (result.status === "forbidden") {
+      set.status = 403;
+      return { ok: false, error: "HOST_ONLY" };
+    }
+    if (result.status === "invalid_state") {
+      set.status = 409;
+      return { ok: false, error: "INVALID_STATE" };
+    }
+
+    return {
+      ok: true as const,
+      livesMode: result.livesMode,
+      maxLives: result.maxLives,
+    };
   });

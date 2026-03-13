@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { pool } from "../src/db/client";
 import { userAnimeLibraryRepository } from "../src/repositories/UserAnimeLibraryRepository";
+import * as aniListLookupModule from "../src/services/AniListTitleLookup";
 import { RoomStore } from "../src/services/RoomStore";
 import type { MusicTrack } from "../src/services/music-types";
 
@@ -208,6 +209,133 @@ const COHERENT_LANGUAGE_TRACKS: MusicTrack[] = [
     artist: "Evan Glow",
     previewUrl: null,
     sourceUrl: "https://www.youtube.com/watch?v=en-5",
+  },
+];
+
+const ANIME_ALIAS_FALLBACK_TRACKS: MusicTrack[] = [
+  {
+    provider: "youtube",
+    id: "anime-1",
+    title: "Kimetsu no Yaiba: Yuukaku-hen",
+    artist: "ED",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=anime-1",
+    answer: {
+      canonical: "Kimetsu no Yaiba: Yuukaku-hen",
+      englishTitle: null,
+      aliases: [
+        "Demon Slayer: Kimetsu no Yaiba Entertainment District Arc",
+        "Demon Slayer: Kimetsu no Yaiba - Le quartier des plaisirs",
+        "KNYYH",
+      ],
+    },
+  },
+  {
+    provider: "youtube",
+    id: "anime-2",
+    title: "Gintama': Enchousen",
+    artist: "OP3",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=anime-2",
+    answer: {
+      canonical: "Gintama': Enchousen",
+      englishTitle: null,
+      aliases: ["Gintama Season 2 Part 2", "GE"],
+    },
+  },
+  {
+    provider: "youtube",
+    id: "anime-3",
+    title: "One Piece",
+    artist: "OP6",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=anime-3",
+    answer: {
+      canonical: "One Piece",
+      englishTitle: null,
+      aliases: ["One Piece", "One Piece: Clockwork Island Adventure"],
+    },
+  },
+  {
+    provider: "youtube",
+    id: "anime-4",
+    title: "Naruto",
+    artist: "ED8",
+    previewUrl: null,
+    sourceUrl: "https://www.youtube.com/watch?v=anime-4",
+    answer: {
+      canonical: "Naruto",
+      englishTitle: null,
+      aliases: ["Naruto", "Naruto the Movie: Guardians of the Crescent Moon Kingdom"],
+    },
+  },
+];
+
+const ANIME_DUPLICATE_CHOICE_TRACKS: MusicTrack[] = [
+  {
+    provider: "animethemes",
+    id: "anime-choice-1",
+    title: "進撃の巨人",
+    artist: "OP1",
+    previewUrl: "https://v.animethemes.moe/anime-choice-1.webm",
+    sourceUrl: "https://v.animethemes.moe/anime-choice-1.webm",
+    answer: {
+      canonical: "Shingeki no Kyojin",
+      englishTitle: "Attack on Titan",
+      aliases: ["Attack on Titan"],
+    },
+  },
+  {
+    provider: "animethemes",
+    id: "anime-choice-2",
+    title: "ワンピース",
+    artist: "OP2",
+    previewUrl: "https://v.animethemes.moe/anime-choice-2.webm",
+    sourceUrl: "https://v.animethemes.moe/anime-choice-2.webm",
+    answer: {
+      canonical: "One Piece",
+      englishTitle: "One Piece",
+      aliases: ["One Piece"],
+    },
+  },
+  {
+    provider: "animethemes",
+    id: "anime-choice-3",
+    title: "ワンピース",
+    artist: "OP23",
+    previewUrl: "https://v.animethemes.moe/anime-choice-3.webm",
+    sourceUrl: "https://v.animethemes.moe/anime-choice-3.webm",
+    answer: {
+      canonical: "One Piece",
+      englishTitle: "One Piece",
+      aliases: ["One Piece"],
+    },
+  },
+  {
+    provider: "animethemes",
+    id: "anime-choice-4",
+    title: "ナルト",
+    artist: "ED8",
+    previewUrl: "https://v.animethemes.moe/anime-choice-4.webm",
+    sourceUrl: "https://v.animethemes.moe/anime-choice-4.webm",
+    answer: {
+      canonical: "Naruto",
+      englishTitle: "Naruto",
+      aliases: ["Naruto"],
+    },
+  },
+  {
+    provider: "animethemes",
+    id: "anime-choice-5",
+    title: "Bleach",
+    artist: "OP1",
+    previewUrl: "https://v.animethemes.moe/anime-choice-5.webm",
+    sourceUrl: "https://v.animethemes.moe/anime-choice-5.webm",
+    answer: {
+      canonical: "Bleach",
+      englishTitle: "Bleach",
+      aliases: ["Bleach"],
+    },
   },
 ];
 
@@ -1278,6 +1406,82 @@ describe("RoomStore gameplay progression", () => {
     expect(sameLanguageCount >= 3).toBe(true);
   });
 
+  it("deduplicates MCQ anime choices by canonical anime title", () => {
+    const store = new RoomStore();
+    const { roomCode } = store.createRoom();
+
+    const roomMap = (store as unknown as { rooms: Map<string, unknown> }).rooms;
+    const session = roomMap.get(roomCode) as {
+      trackPool: MusicTrack[];
+      distractorTrackPool: MusicTrack[];
+      roundChoices: Map<number, Array<{ value: string; titleRomaji: string }>>;
+    } | null;
+    expect(session).not.toBeNull();
+    if (!session) return;
+
+    session.trackPool = [...ANIME_DUPLICATE_CHOICE_TRACKS];
+    session.distractorTrackPool = [];
+    session.roundChoices = new Map();
+
+    const choices = (
+      store as unknown as {
+        buildRoundChoices: (
+          inputSession: typeof session,
+          round: number,
+        ) => Array<{ value: string; titleRomaji: string }>;
+      }
+    ).buildRoundChoices(session, 1);
+
+    expect(choices).toHaveLength(4);
+    expect(choices.filter((choice) => choice.titleRomaji === "ワンピース")).toHaveLength(1);
+    expect(choices.some((choice) => choice.titleRomaji === "Bleach")).toBe(true);
+  });
+
+  it("falls back to an english anime alias when title_english is missing", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => ANIME_ALIAS_FALLBACK_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 50,
+        revealMs: 5,
+        leaderboardMs: 5,
+        baseScore: 1_000,
+        maxRounds: 1,
+      },
+    });
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(created.roomCode, host.value.playerId, "anime alias fallback");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const playing = store.roomState(created.roomCode);
+    expect(playing?.state).toBe("playing");
+    expect(playing?.choices).toHaveLength(4);
+
+    const demonSlayerChoice = (playing?.choices ?? []).find(
+      (choice) => choice.titleRomaji === "Kimetsu no Yaiba: Yuukaku-hen",
+    );
+    expect(demonSlayerChoice?.titleEnglish).toBe(
+      "Demon Slayer: Kimetsu no Yaiba Entertainment District Arc",
+    );
+
+    const onePieceChoice = (playing?.choices ?? []).find((choice) => choice.titleRomaji === "One Piece");
+    expect(onePieceChoice?.titleEnglish).toBeNull();
+
+    const narutoChoice = (playing?.choices ?? []).find((choice) => choice.titleRomaji === "Naruto");
+    expect(narutoChoice?.titleEnglish).toBeNull();
+  });
+
   it("accepts youtube tracks without preview as playable rounds", async () => {
     let nowMs = 0;
     const store = new RoomStore({
@@ -1498,14 +1702,653 @@ describe("RoomStore gameplay progression", () => {
     expect(lobby?.readyCount).toBe(0);
   });
 
+  it("applies the AniList difficulty filter to the pool query and snapshot", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const animeIds = Array.from({ length: 48 }, (_, index) => index + 1);
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockResolvedValue(animeIds);
+    const metadataSpy = vi
+      .spyOn(aniListLookupModule, "fetchAniListMediaMetadataBySearchBatch")
+      .mockResolvedValue(new Map());
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(18),
+    } as never);
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 5,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const difficultySet = store.setRoomDifficultyFilter(created.roomCode, host.playerId, "hard");
+      expect(difficultySet).toMatchObject({ status: "ok", filter: "hard" });
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({
+        ok: true,
+        sourceMode: "anilist_union",
+      });
+
+      expect(perUserSpy).toHaveBeenCalledTimes(1);
+      expect(querySpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      const sql = String(querySpy.mock.calls[0]?.[0] ?? "");
+      expect(sql).toContain("aa.anilist_popularity is not null and aa.anilist_popularity < 30000");
+      expect(store.roomState(created.roomCode)?.sourceConfig.difficultyFilter).toBe("hard");
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      metadataSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("backfills AniList popularity on demand before failing a difficulty-filtered start", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockResolvedValue([101, 102, 103]);
+    const metadataSpy = vi.spyOn(aniListLookupModule, "fetchAniListMediaMetadataBySearchBatch");
+    metadataSpy.mockImplementation(async (titles) =>
+      new Map(
+        titles.map((title) => [
+          title,
+          {
+            englishTitle: `${title} EN`,
+            popularity: 150_000,
+            year: 2019,
+            genres: ["Action"],
+          },
+        ]),
+      ),
+    );
+
+    let filteredSelectCalls = 0;
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("from unnest($1::bigint[]) with ordinality")) {
+        return {
+          rows: [
+            { anime_id: 101, title_romaji: "Anime 101" },
+            { anime_id: 102, title_romaji: "Anime 102" },
+          ],
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set") && text.includes("anilist_popularity")) {
+        return { rows: [] } as never;
+      }
+      if (text.includes("from best_theme_video") && text.includes("aa.anilist_popularity >= 100000")) {
+        filteredSelectCalls += 1;
+        if (filteredSelectCalls === 1) {
+          return { rows: [] } as never;
+        }
+        return {
+          rows: [
+            {
+              anime_id: 101,
+              video_key: "theme-101",
+              webm_url: "https://v.animethemes.moe/theme-101.webm",
+              theme_type: "OP",
+              theme_number: 1,
+              title_romaji: "Anime 101",
+              title_english: "Anime 101 EN",
+              song_title: "Song 101",
+              song_artists: ["Artist 101"],
+              aliases: ["Alias 101"],
+            },
+          ],
+        } as never;
+      }
+      return { rows: [] } as never;
+    });
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 1,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const difficultySet = store.setRoomDifficultyFilter(created.roomCode, host.playerId, "easy");
+      expect(difficultySet).toMatchObject({ status: "ok", filter: "easy" });
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "anilist_union" });
+      expect(filteredSelectCalls).toBe(2);
+      expect(metadataSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      metadataSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("keeps the selected AniList difficulty when metadata stays incomplete", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const animeIds = Array.from({ length: 16 }, (_, index) => 401 + index);
+    const perUserSpy = vi.spyOn(userAnimeLibraryRepository, "animeIdsForUser").mockResolvedValue(animeIds);
+    const metadataSpy = vi
+      .spyOn(aniListLookupModule, "fetchAniListMediaMetadataBySearchBatch")
+      .mockResolvedValue(
+        new Map(animeIds.map((animeId) => [`Anime ${animeId}`, null])),
+      );
+
+    let filteredSelectCalls = 0;
+    let unfilteredSelectCalls = 0;
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown, params?: unknown[]) => {
+      const text = String(sql);
+      if (text.includes("from unnest($1::bigint[]) with ordinality")) {
+        const limit = Number(params?.[1] ?? 0);
+        const offset = Number(params?.[2] ?? 0);
+        return {
+          rows: animeIds.slice(offset, offset + limit).map((animeId) => ({
+            anime_id: animeId,
+            title_romaji: `Anime ${animeId}`,
+          })),
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set") && text.includes("anilist_popularity")) {
+        return { rows: [] } as never;
+      }
+      if (text.includes("from best_theme_video") && text.includes("aa.anilist_popularity >= 100000")) {
+        filteredSelectCalls += 1;
+        return { rows: [] } as never;
+      }
+      if (text.includes("from best_theme_video")) {
+        unfilteredSelectCalls += 1;
+      }
+      return { rows: [] } as never;
+    });
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 1,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const difficultySet = store.setRoomDifficultyFilter(created.roomCode, host.playerId, "easy");
+      expect(difficultySet).toMatchObject({ status: "ok", filter: "easy" });
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({ ok: false, error: "NO_TRACKS_FOUND" });
+      expect(filteredSelectCalls).toBeGreaterThanOrEqual(2);
+      expect(unfilteredSelectCalls).toBe(0);
+      expect(metadataSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      metadataSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("applies AniList decade and genre filters to the pool query and snapshot", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const animeIds = Array.from({ length: 48 }, (_, index) => index + 1);
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockResolvedValue(animeIds);
+    const metadataSpy = vi
+      .spyOn(aniListLookupModule, "fetchAniListMediaMetadataBySearchBatch")
+      .mockResolvedValue(new Map());
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(12),
+    } as never);
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 5,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const filtersSet = store.setRoomContentFilters(created.roomCode, host.playerId, {
+        decades: [2010],
+        genres: ["Action"],
+      });
+      expect(filtersSet).toMatchObject({
+        status: "ok",
+        contentFilters: {
+          decades: [2010],
+          genres: ["Action"],
+        },
+      });
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({
+        ok: true,
+        sourceMode: "anilist_union",
+      });
+
+      const sql = String(querySpy.mock.calls[0]?.[0] ?? "");
+      const params = (querySpy.mock.calls[0]?.[1] as unknown[]) ?? [];
+      expect(sql).toContain("aa.year >= $3 and aa.year <= $4");
+      expect(sql).toContain("aa.genres && $5::text[]");
+      expect(params[2]).toBe(2010);
+      expect(params[3]).toBe(2019);
+      expect(params[4]).toEqual(["Action"]);
+      expect(store.roomState(created.roomCode)?.sourceConfig.contentFilters).toEqual({
+        decades: [2010],
+        genres: ["Action"],
+      });
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      metadataSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("backfills AniList year and genre metadata on demand before failing a filtered start", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockResolvedValue([101, 102, 103]);
+    const metadataSpy = vi.spyOn(aniListLookupModule, "fetchAniListMediaMetadataBySearchBatch");
+    metadataSpy.mockImplementation(async (titles) =>
+      new Map(
+        titles.map((title) => [
+          title,
+          {
+            englishTitle: `${title} EN`,
+            popularity: 150_000,
+            year: 2011,
+            genres: ["Action"],
+          },
+        ]),
+      ),
+    );
+
+    let filteredSelectCalls = 0;
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("from unnest($1::bigint[]) with ordinality")) {
+        return {
+          rows: [
+            { anime_id: 101, title_romaji: "Anime 101" },
+            { anime_id: 102, title_romaji: "Anime 102" },
+          ],
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set") && text.includes("year = coalesce")) {
+        return { rows: [] } as never;
+      }
+      if (text.includes("from best_theme_video") && text.includes("aa.year >= $3 and aa.year <= $4")) {
+        filteredSelectCalls += 1;
+        if (filteredSelectCalls === 1) {
+          return { rows: [] } as never;
+        }
+        return {
+          rows: [
+            {
+              anime_id: 101,
+              video_key: "theme-101",
+              webm_url: "https://v.animethemes.moe/theme-101.webm",
+              theme_type: "OP",
+              theme_number: 1,
+              title_romaji: "Anime 101",
+              title_english: "Anime 101 EN",
+              song_title: "Song 101",
+              song_artists: ["Artist 101"],
+              aliases: ["Alias 101"],
+            },
+          ],
+        } as never;
+      }
+      return { rows: [] } as never;
+    });
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 1,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const filtersSet = store.setRoomContentFilters(created.roomCode, host.playerId, {
+        decades: [2010],
+        genres: ["Action"],
+      });
+      expect(filtersSet).toMatchObject({
+        status: "ok",
+        contentFilters: {
+          decades: [2010],
+          genres: ["Action"],
+        },
+      });
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "anilist_union" });
+      expect(filteredSelectCalls).toBe(2);
+      expect(metadataSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      metadataSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("eliminates players in lives mode, excludes spectators from later rounds, and ends early with one survivor", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 0,
+        maxRounds: 3,
+      },
+    });
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    const guestA = store.joinRoom(created.roomCode, "Guest A");
+    const guestB = store.joinRoom(created.roomCode, "Guest B");
+    expect(host.status).toBe("ok");
+    expect(guestA.status).toBe("ok");
+    expect(guestB.status).toBe("ok");
+    if (host.status !== "ok" || guestA.status !== "ok" || guestB.status !== "ok") return;
+
+    const livesSet = store.setRoomLivesMode(created.roomCode, host.value.playerId, {
+      livesMode: true,
+      maxLives: 1,
+    });
+    expect(livesSet).toMatchObject({
+      status: "ok",
+      livesMode: true,
+      maxLives: 1,
+    });
+
+    store.setRoomSource(created.roomCode, host.value.playerId, "popular hits");
+    store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    store.setPlayerReady(created.roomCode, guestA.value.playerId, true);
+    store.setPlayerReady(created.roomCode, guestB.value.playerId, true);
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const roundOne = store.roomState(created.roomCode);
+    expect(roundOne?.state).toBe("playing");
+    const roundOneTrack = FIXTURE_TRACKS.find((track) => track.id === roundOne?.media?.trackId);
+    expect(roundOneTrack).toBeDefined();
+    const roundOneAnswer =
+      roundOne?.mode === "mcq"
+        ? `${roundOneTrack?.title} - ${roundOneTrack?.artist}`
+        : roundOneTrack?.title ?? "";
+    store.submitAnswer(created.roomCode, guestA.value.playerId, roundOneAnswer);
+    store.submitAnswer(created.roomCode, guestB.value.playerId, roundOneAnswer);
+
+    nowMs = 25;
+    const revealAfterRoundOne = store.roomState(created.roomCode);
+    expect(revealAfterRoundOne?.state).toBe("reveal");
+    expect(revealAfterRoundOne?.players.find((player) => player.playerId === host.value.playerId)).toMatchObject({
+      lives: 0,
+      isEliminated: true,
+    });
+
+    nowMs = 30;
+    const roundTwo = store.roomState(created.roomCode);
+    expect(roundTwo?.state).toBe("playing");
+    expect(roundTwo?.round).toBe(2);
+    expect(roundTwo?.guessTotalCount).toBe(2);
+    const roundTwoTrack = FIXTURE_TRACKS.find((track) => track.id === roundTwo?.media?.trackId);
+    expect(roundTwoTrack).toBeDefined();
+    const roundTwoAnswer =
+      roundTwo?.mode === "mcq"
+        ? `${roundTwoTrack?.title} - ${roundTwoTrack?.artist}`
+        : roundTwoTrack?.title ?? "";
+    expect(store.submitAnswer(created.roomCode, host.value.playerId, roundTwoAnswer)).toMatchObject({
+      status: "ok",
+      accepted: false,
+    });
+
+    store.submitAnswer(created.roomCode, guestA.value.playerId, roundTwoAnswer);
+
+    nowMs = 50;
+    const revealAfterRoundTwo = store.roomState(created.roomCode);
+    expect(revealAfterRoundTwo?.state).toBe("reveal");
+    expect(revealAfterRoundTwo?.totalRounds).toBe(2);
+    expect(revealAfterRoundTwo?.players.find((player) => player.playerId === guestB.value.playerId)).toMatchObject({
+      lives: 0,
+      isEliminated: true,
+    });
+
+    nowMs = 55;
+    const results = store.roomState(created.roomCode);
+    expect(results?.state).toBe("results");
+    expect(results?.totalRounds).toBe(2);
+    expect(results?.leaderboard?.find((entry) => entry.playerId === guestA.value.playerId)).toMatchObject({
+      lives: 1,
+      isEliminated: false,
+    });
+  });
+
+  it("does not collapse a solo lives-mode game while the player is still alive", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 0,
+        maxRounds: 3,
+      },
+    });
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const livesSet = store.setRoomLivesMode(created.roomCode, host.value.playerId, {
+      livesMode: true,
+      maxLives: 1,
+    });
+    expect(livesSet).toMatchObject({
+      status: "ok",
+      livesMode: true,
+      maxLives: 1,
+    });
+
+    store.setRoomSource(created.roomCode, host.value.playerId, "popular hits");
+    store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const roundOne = store.roomState(created.roomCode);
+    expect(roundOne?.state).toBe("playing");
+    expect(roundOne?.totalRounds).toBe(3);
+
+    const roundOneTrack = FIXTURE_TRACKS.find((track) => track.id === roundOne?.media?.trackId);
+    expect(roundOneTrack).toBeDefined();
+    const correctAnswer =
+      roundOne?.mode === "mcq"
+        ? `${roundOneTrack?.title} - ${roundOneTrack?.artist}`
+        : roundOneTrack?.title ?? "";
+    store.submitAnswer(created.roomCode, host.value.playerId, correctAnswer);
+
+    const revealAfterRoundOne = store.roomState(created.roomCode);
+    expect(revealAfterRoundOne?.state).toBe("reveal");
+    expect(revealAfterRoundOne?.totalRounds).toBe(3);
+    expect(revealAfterRoundOne?.players.find((player) => player.playerId === host.value.playerId)).toMatchObject({
+      lives: 1,
+      isEliminated: false,
+    });
+
+    nowMs = 10;
+    const roundTwo = store.roomState(created.roomCode);
+    expect(roundTwo?.state).toBe("playing");
+    expect(roundTwo?.round).toBe(2);
+    expect(roundTwo?.totalRounds).toBe(3);
+  });
+
+  it("ends a solo lives-mode game when the last player is eliminated", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 0,
+        maxRounds: 3,
+      },
+    });
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    const livesSet = store.setRoomLivesMode(created.roomCode, host.value.playerId, {
+      livesMode: true,
+      maxLives: 1,
+    });
+    expect(livesSet).toMatchObject({
+      status: "ok",
+      livesMode: true,
+      maxLives: 1,
+    });
+
+    store.setRoomSource(created.roomCode, host.value.playerId, "popular hits");
+    store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    nowMs = 5;
+    const roundOne = store.roomState(created.roomCode);
+    expect(roundOne?.state).toBe("playing");
+    expect(roundOne?.totalRounds).toBe(3);
+
+    const wrongAnswer = roundOne?.mode === "mcq" ? "wrong mcq answer" : "wrong text answer";
+    store.submitAnswer(created.roomCode, host.value.playerId, wrongAnswer);
+
+    const revealAfterRoundOne = store.roomState(created.roomCode);
+    expect(revealAfterRoundOne?.state).toBe("reveal");
+    expect(revealAfterRoundOne?.totalRounds).toBe(1);
+    expect(revealAfterRoundOne?.players.find((player) => player.playerId === host.value.playerId)).toMatchObject({
+      lives: 0,
+      isEliminated: true,
+    });
+
+    nowMs = 10;
+    const results = store.roomState(created.roomCode);
+    expect(results?.state).toBe("results");
+    expect(results?.totalRounds).toBe(1);
+  });
+
   it("uses an unbiased AniList random draw without recent-history exclusions", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
     process.env.DATABASE_URL = "postgres://test";
     process.env.BETTER_AUTH_URL = "https://api.example.test";
     const animeIds = Array.from({ length: 741 }, (_, index) => index + 1);
-    const unionSpy = vi
-      .spyOn(userAnimeLibraryRepository, "unionAnimeIdsForUsers")
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
       .mockResolvedValue(animeIds);
     const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
       rows: makeAniListThemeRows(30),
@@ -1532,8 +2375,8 @@ describe("RoomStore gameplay progression", () => {
         sourceMode: "anilist_union",
       });
 
-      expect(unionSpy).toHaveBeenCalledTimes(1);
-      const requestedLimit = unionSpy.mock.calls[0]?.[1] ?? 0;
+      expect(perUserSpy).toHaveBeenCalledTimes(1);
+      const requestedLimit = perUserSpy.mock.calls[0]?.[1] ?? 0;
       expect(requestedLimit).toBeGreaterThanOrEqual(2_000);
       expect(querySpy).toHaveBeenCalledTimes(1);
       const queryParams = querySpy.mock.calls[0]?.[1] as unknown[] | undefined;
@@ -1565,7 +2408,67 @@ describe("RoomStore gameplay progression", () => {
       } else {
         process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
       }
-      unionSpy.mockRestore();
+      perUserSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("uses a larger AniList candidate draw to reduce repeated easy-mode openings and qcm choices", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const animeIds = Array.from({ length: 2_000 }, (_, index) => index + 1);
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockResolvedValue(animeIds);
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(120),
+    } as never);
+
+    try {
+      const store = new RoomStore({
+        config: {
+          maxRounds: 15,
+          countdownMs: 5,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      });
+
+      const created = store.createRoom();
+      const host = store.joinRoomAsUser(created.roomCode, "Host", "user-host");
+      if ("status" in host) return;
+
+      const difficultySet = store.setRoomDifficultyFilter(created.roomCode, host.playerId, "easy");
+      expect(difficultySet).toMatchObject({ status: "ok", filter: "easy" });
+
+      const started = await store.startGame(created.roomCode, host.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "anilist_union" });
+
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      const queryParams = querySpy.mock.calls[0]?.[1] as unknown[] | undefined;
+      expect(Array.isArray(queryParams)).toBe(true);
+      expect(Number(queryParams?.[1] ?? 0)).toBeGreaterThanOrEqual(240);
+      const roomMap = (store as unknown as {
+        rooms: Map<string, { trackPool: MusicTrack[]; distractorTrackPool: MusicTrack[] }>;
+      }).rooms;
+      const session = roomMap.get(created.roomCode);
+      expect(session?.trackPool.length).toBe(15);
+      expect((session?.distractorTrackPool.length ?? 0)).toBeGreaterThanOrEqual(80);
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
       querySpy.mockRestore();
     }
   });

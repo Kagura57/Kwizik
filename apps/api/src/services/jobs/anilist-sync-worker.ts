@@ -28,6 +28,9 @@ type AniListCollectionPayload = {
               native?: string | null;
             } | null;
             synonyms?: string[] | null;
+            popularity?: number | null;
+            seasonYear?: number | null;
+            genres?: string[] | null;
           } | null;
         }>;
       }>;
@@ -51,6 +54,9 @@ query ($userName: String) {
             native
           }
           synonyms
+          popularity
+          seasonYear
+          genres
         }
       }
     }
@@ -118,6 +124,50 @@ export function collectAniListAliasCandidates(entry: {
     .map((value) => value?.trim() ?? "")
     .filter((value) => value.length > 0);
   return Array.from(new Set(values));
+}
+
+export type AniListCatalogMetadata = {
+  titleEnglish: string | null;
+  titleNative: string | null;
+  popularity: number | null;
+  year: number | null;
+  genres: string[];
+};
+
+export function collectAniListCatalogMetadata(entry: {
+  media?: {
+    title?: {
+      english?: string | null;
+      native?: string | null;
+    } | null;
+    popularity?: number | null;
+    seasonYear?: number | null;
+    genres?: string[] | null;
+  } | null;
+}): AniListCatalogMetadata {
+  const popularity =
+    typeof entry.media?.popularity === "number" && Number.isFinite(entry.media.popularity)
+      ? Math.max(0, Math.round(entry.media.popularity))
+      : null;
+  const year =
+    typeof entry.media?.seasonYear === "number" && Number.isFinite(entry.media.seasonYear)
+      ? Math.max(1900, Math.round(entry.media.seasonYear))
+      : null;
+  const genres = Array.from(
+    new Set(
+      (entry.media?.genres ?? [])
+        .map((value) => value?.trim() ?? "")
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  return {
+    titleEnglish: entry.media?.title?.english?.trim() || null,
+    titleNative: entry.media?.title?.native?.trim() || null,
+    popularity,
+    year,
+    genres,
+  };
 }
 
 type AliasUpsertRow = {
@@ -228,8 +278,7 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
   const collectedEntries: Array<{
     status: "WATCHING" | "COMPLETED";
     aliases: string[];
-    titleEnglish: string | null;
-    titleNative: string | null;
+    metadata: AniListCatalogMetadata;
   }> = [];
   const normalizedToStatus = new Map<string, "WATCHING" | "COMPLETED">();
   for (const list of lists) {
@@ -241,8 +290,7 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
       collectedEntries.push({
         status,
         aliases,
-        titleEnglish: entry.media?.title?.english?.trim() || null,
-        titleNative: entry.media?.title?.native?.trim() || null,
+        metadata: collectAniListCatalogMetadata(entry),
       });
       for (const value of aliases) {
         const normalized = normalizeAnimeAlias(value);
@@ -278,7 +326,7 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
     });
   };
 
-  const catalogTitleUpdates = new Map<number, { titleEnglish: string | null; titleNative: string | null }>();
+  const catalogMetadataUpdates = new Map<number, AniListCatalogMetadata>();
 
   for (const entry of collectedEntries) {
     const normalizedAliases = entry.aliases
@@ -295,11 +343,15 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
       });
     }
 
-    if ((entry.titleEnglish || entry.titleNative) && !catalogTitleUpdates.has(animeId)) {
-      catalogTitleUpdates.set(animeId, {
-        titleEnglish: entry.titleEnglish,
-        titleNative: entry.titleNative,
-      });
+    if (
+      (entry.metadata.titleEnglish ||
+        entry.metadata.titleNative ||
+        entry.metadata.popularity !== null ||
+        entry.metadata.year !== null ||
+        entry.metadata.genres.length > 0) &&
+      !catalogMetadataUpdates.has(animeId)
+    ) {
+      catalogMetadataUpdates.set(animeId, entry.metadata);
     }
 
     for (const alias of entry.aliases) {
@@ -315,26 +367,43 @@ async function syncAniListLibrary(input: { userId: string; runId: number }) {
     await upsertAnimeAliases([...aliasRowsByKey.values()]);
   }
 
-  if (process.env.DATABASE_URL && catalogTitleUpdates.size > 0) {
-    const updates = [...catalogTitleUpdates.entries()];
+  if (process.env.DATABASE_URL && catalogMetadataUpdates.size > 0) {
+    const updates = [...catalogMetadataUpdates.entries()];
     const BATCH = 200;
     for (let i = 0; i < updates.length; i += BATCH) {
       const batch = updates.slice(i, i + BATCH);
       const values: unknown[] = [];
       const placeholders: string[] = [];
       let idx = 1;
-      for (const [animeId, titles] of batch) {
-        placeholders.push(`($${idx}, $${idx + 1}::text, $${idx + 2}::text)`);
-        values.push(animeId, titles.titleEnglish, titles.titleNative);
-        idx += 3;
+      for (const [animeId, metadata] of batch) {
+        placeholders.push(
+          `($${idx}, $${idx + 1}::text, $${idx + 2}::text, $${idx + 3}::integer, $${idx + 4}::integer, $${idx + 5}::text[])`,
+        );
+        values.push(
+          animeId,
+          metadata.titleEnglish,
+          metadata.titleNative,
+          metadata.popularity,
+          metadata.year,
+          metadata.genres,
+        );
+        idx += 6;
       }
       await pool.query(
         `
           update anime_catalog_anime as a set
             title_english = coalesce(v.title_english, a.title_english),
             title_native = coalesce(v.title_native, a.title_native),
+            anilist_popularity = coalesce(v.anilist_popularity, a.anilist_popularity),
+            year = coalesce(v.year, a.year),
+            genres = case
+              when coalesce(array_length(v.genres, 1), 0) > 0 then v.genres
+              else a.genres
+            end,
             updated_at = now()
-          from (values ${placeholders.join(", ")}) as v(id, title_english, title_native)
+          from (
+            values ${placeholders.join(", ")}
+          ) as v(id, title_english, title_native, anilist_popularity, year, genres)
           where a.id = v.id::bigint
         `,
         values,

@@ -26,9 +26,21 @@ body,
   min-height: 100%;
 }
 
+html.game-active,
+html.game-active body {
+  height: 100%;
+  overflow: hidden;
+}
+
+html.game-active .game-shell {
+  height: 100dvh;
+  overflow: hidden;
+}
+
 html.game-active .blindtest-stage {
-  height: calc(100vh - 90px);
-  max-height: calc(100vh - 90px);
+  min-height: 0;
+  height: 100%;
+  max-height: none;
   overflow: hidden;
 }
 
@@ -89,8 +101,10 @@ a {
 }
 
 .game-shell {
-  width: 100vw;
+  width: 100%;
   min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .room-topbar {
@@ -522,6 +536,18 @@ a {
   gap: 8px;
 }
 
+.source-preset-grid-four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.source-preset-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.source-preset-grid-five {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .source-preset-btn {
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 12px;
@@ -853,6 +879,10 @@ select option {
   background: rgba(54, 214, 180, 0.09);
 }
 
+.leaderboard-list li.eliminated {
+  opacity: 0.76;
+}
+
 .leaderboard-name {
   display: flex;
   align-items: center;
@@ -864,6 +894,16 @@ select option {
   display: grid;
   gap: 2px;
   min-width: 0;
+}
+
+.leaderboard-lives {
+  color: #ffd46e;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.leaderboard-lives.eliminated {
+  color: rgba(232, 240, 255, 0.62);
 }
 
 .leaderboard-reveal-answer {
@@ -1325,6 +1365,17 @@ select option {
   font-size: 0.95rem;
 }
 
+.round-strip-lives {
+  margin-left: auto;
+  color: #ffd46e;
+  font-size: 0.96rem;
+  letter-spacing: 0.1em;
+}
+
+.round-strip-lives.eliminated {
+  color: rgba(232, 240, 255, 0.62);
+}
+
 .sound-visual {
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 16px;
@@ -1720,6 +1771,18 @@ select option {
   font-size: 0.82rem;
 }
 
+.lobby-player-lives {
+  display: block;
+  margin-top: 6px;
+  color: #ffd46e;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+.lobby-player-lives.eliminated {
+  color: rgba(232, 240, 255, 0.62);
+}
+
 .podium-panel {
   border: 1px solid rgba(255, 232, 111, 0.38);
   border-radius: 22px;
@@ -1839,6 +1902,24 @@ select option {
   justify-self: center;
 }
 
+.spectator-banner {
+  border: 1px solid rgba(255, 210, 126, 0.42);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 184, 77, 0.1);
+  display: grid;
+  gap: 4px;
+}
+
+.spectator-banner strong {
+  color: #ffe3a4;
+}
+
+.spectator-banner span {
+  color: rgba(232, 240, 255, 0.84);
+  font-size: 0.9rem;
+}
+
 .answer-box .answer-select__control {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1865,6 +1946,15 @@ select option {
 .answer-box .answer-select__single-value {
   margin: 0;
   color: var(--text);
+}
+
+.answer-box .answer-select__input-container input {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
 }
 
 .answer-box .answer-select__indicator-separator,
@@ -2064,6 +2154,9 @@ select option {
   }
 
   .source-preset-grid,
+  .source-preset-grid-four,
+  .source-preset-grid-three,
+  .source-preset-grid-five,
   .playlist-card-grid,
   .stage-main.arena-layout {
     grid-template-columns: 1fr;

@@ -14,7 +14,17 @@ import { pool } from "../db/client";
 import { readEnvVar } from "../lib/env";
 import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLikedTrackRepository } from "../repositories/UserLikedTrackRepository";
+import {
+  contentFilterSqlCondition,
+  difficultySqlCondition,
+  normalizeRoomContentFilters,
+  type RoomContentFilters,
+  type RoomDifficultyFilter,
+} from "./AniListRoomFilters";
 import { normalizeAnimeText } from "./AnimeTextNormalization";
+import {
+  fetchAniListMediaMetadataBySearchBatch,
+} from "./AniListTitleLookup";
 import { animeThemesProxyCache } from "./AnimeThemesProxyCache";
 import { RoundSyncCoordinator } from "./RoundSyncCoordinator";
 
@@ -52,6 +62,8 @@ type Player = {
   maxStreak: number;
   totalResponseMs: number;
   correctAnswers: number;
+  lives: number;
+  isEliminated: boolean;
   library: PlayerLibraryState;
 };
 
@@ -77,7 +89,11 @@ type RoomSession = {
   distractorTrackPool: MusicTrack[];
   sourceMode: RoomSourceMode;
   themeMode: RoomThemeMode;
+  difficultyFilter: RoomDifficultyFilter;
+  contentFilters: RoomContentFilters;
   answerMode: RoomAnswerMode;
+  livesMode: boolean;
+  maxLives: number;
   roomRoundConfig: {
     maxRounds: number;
     playingMs: number;
@@ -153,6 +169,9 @@ const DEFAULT_ROUND_CONFIG = {
 const TRACK_POOL_TARGET_MULTIPLIER = 5;
 const TRACK_POOL_MIN_CANDIDATES = 24;
 const TRACK_POOL_MAX_CANDIDATES = 100;
+const ANILIST_TRACK_POOL_TARGET_MULTIPLIER = 8;
+const ANILIST_TRACK_POOL_MIN_CANDIDATES = 48;
+const ANILIST_TRACK_POOL_MAX_CANDIDATES = 240;
 const YOUTUBE_RANDOM_START_MIN_SEC = 18;
 const YOUTUBE_RANDOM_START_END_BUFFER_SEC = 20;
 const YOUTUBE_RANDOM_START_MIN_DURATION_SEC = 45;
@@ -169,6 +188,13 @@ const ROOM_BULK_ANSWER_TRACK_LIMIT = 16_000;
 const ROOM_BULK_ANSWER_SUGGESTION_LIMIT = 24_000;
 const ROUND_SYNC_START_LEAD_MS = 900;
 const ROUND_SYNC_MAX_WAIT_MS = 2_000;
+const ANILIST_ENGLISH_BACKFILL_BATCH_SIZE = 24;
+const ANILIST_DIFFICULTY_START_BACKFILL_LIMIT = 48;
+const DEFAULT_ROOM_CONTENT_FILTERS: RoomContentFilters = {
+  decades: [],
+  genres: [],
+};
+const DEFAULT_MAX_LIVES = 3;
 
 function readApiBaseUrl() {
   const fromBetterAuth = readEnvVar("BETTER_AUTH_URL")?.trim() ?? "";
@@ -231,6 +257,17 @@ function normalizeAnswer(value: string) {
   return normalizeAnimeText(value);
 }
 
+function mcqChoiceIdentity(track: Pick<MusicTrack, "provider" | "title" | "artist" | "answer">) {
+  const canonical = track.answer?.canonical?.trim() ?? "";
+  if (canonical.length > 0) {
+    return normalizeAnswer(canonical);
+  }
+  if (track.provider === "animethemes") {
+    return normalizeAnswer(track.title);
+  }
+  return normalizeAnswer(asChoiceLabel(track));
+}
+
 function collectAnswerVariants(track: MusicTrack) {
   const variants = new Set<string>();
 
@@ -277,6 +314,13 @@ function averageResponseMs(player: Player) {
   return player.totalResponseMs / player.correctAnswers;
 }
 
+function defaultRoomContentFilters(): RoomContentFilters {
+  return {
+    decades: [...DEFAULT_ROOM_CONTENT_FILTERS.decades],
+    genres: [...DEFAULT_ROOM_CONTENT_FILTERS.genres],
+  };
+}
+
 function modeForRound(round: number, answerMode: RoomAnswerMode): RoundMode {
   if (answerMode === "mcq_only") return "mcq";
   if (answerMode === "text_only") return "text";
@@ -287,11 +331,111 @@ function asChoiceLabel(track: MusicTrack) {
   return `${track.title} - ${track.artist}`;
 }
 
+const ENGLISH_TITLE_CUE_WORDS = new Set([
+  "adventure",
+  "arc",
+  "chapter",
+  "district",
+  "entertainment",
+  "final",
+  "kingdom",
+  "movie",
+  "part",
+  "root",
+  "season",
+  "special",
+  "story",
+]);
+
+const SPINOFF_TITLE_CUE_WORDS = new Set([
+  "film",
+  "kingdom",
+  "moon",
+  "movie",
+  "ova",
+  "princess",
+  "prison",
+  "snow",
+  "special",
+  "tower",
+ ]);
+
+function englishAliasScore(alias: string, trackTitle: string) {
+  const normalizedAlias = normalizeChoiceText(alias).replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  const normalizedTrackTitle = normalizeChoiceText(trackTitle)
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalizedAlias || normalizedAlias === normalizedTrackTitle) return Number.NEGATIVE_INFINITY;
+  if (JAPANESE_SCRIPT_RE.test(alias) || KOREAN_SCRIPT_RE.test(alias)) return Number.NEGATIVE_INFINITY;
+
+  const tokens = normalizedAlias.split(" ").filter((token) => token.length > 0);
+  if (tokens.length <= 0) return Number.NEGATIVE_INFINITY;
+
+  const titleTokens = new Set(
+    normalizedTrackTitle.split(" ").filter((token) => token.length >= 3),
+  );
+  const englishHits = tokens.filter(
+    (token) => ENGLISH_WORD_HINTS.has(token) || ENGLISH_TITLE_CUE_WORDS.has(token),
+  ).length;
+  const frenchHits = tokens.filter((token) => FRENCH_WORD_HINTS.has(token)).length;
+  const sharedTokenHits = tokens.filter((token) => titleTokens.has(token)).length;
+  const extraTokenHits = tokens.filter((token) => !titleTokens.has(token)).length;
+  const spinoffHits = tokens.filter((token) => SPINOFF_TITLE_CUE_WORDS.has(token)).length;
+  const aliasContainsTrackTitle =
+    normalizedTrackTitle.length > 0 &&
+    (normalizedAlias === normalizedTrackTitle ||
+      normalizedAlias.startsWith(`${normalizedTrackTitle} `) ||
+      normalizedAlias.includes(` ${normalizedTrackTitle} `));
+
+  let score = 0;
+  score += englishHits * 5;
+  score -= frenchHits * 5;
+  score += sharedTokenHits * 2;
+  score -= extraTokenHits;
+  if (/^[\x00-\x7f]+$/.test(alias)) score += 2;
+  if (tokens.length >= 2) score += 1;
+  if (/^[A-Z0-9' -]{2,8}$/.test(alias.trim())) score -= 6;
+  if (/[^\x00-\x7f]/.test(alias)) score -= 2;
+  if (aliasContainsTrackTitle) score -= spinoffHits * 6;
+
+  return score;
+}
+
+function englishAliasForTrack(track: MusicTrack) {
+  const aliases = track.answer?.aliases ?? [];
+  const normalizedTrackTitle = normalizeAnswer(track.title);
+  const hasExactCanonicalAlias = aliases.some(
+    (alias) => normalizeAnswer(alias) === normalizedTrackTitle,
+  );
+  let best: { value: string; score: number } | null = null;
+
+  for (const alias of aliases) {
+    const candidate = alias.trim();
+    if (candidate.length <= 0) continue;
+    const normalizedCandidate = normalizeAnswer(candidate);
+    const candidateExtendsCanonicalTitle =
+      hasExactCanonicalAlias &&
+      normalizedCandidate !== normalizedTrackTitle &&
+      (normalizedCandidate.startsWith(`${normalizedTrackTitle} `) ||
+        normalizedCandidate.includes(` ${normalizedTrackTitle} `));
+    if (candidateExtendsCanonicalTitle) continue;
+    const score = englishAliasScore(candidate, track.title);
+    if (!Number.isFinite(score) || score < 4) continue;
+    if (!best || score > best.score) {
+      best = { value: candidate, score };
+    }
+  }
+
+  return best?.value ?? null;
+}
+
 function englishTitleForTrack(track: MusicTrack) {
   const raw = track.answer?.englishTitle?.trim() ?? "";
-  if (raw.length <= 0) return null;
-  if (normalizeAnswer(raw) === normalizeAnswer(track.title)) return null;
-  return raw;
+  if (raw.length > 0 && normalizeAnswer(raw) !== normalizeAnswer(track.title)) {
+    return raw;
+  }
+  return englishAliasForTrack(track);
 }
 
 function buildRoundChoice(track: MusicTrack): RoundChoice {
@@ -765,6 +909,14 @@ export class RoomStore {
     }
   }
 
+  private isPlayerSpectating(session: RoomSession, player: Player | null | undefined) {
+    return Boolean(session.livesMode && player?.isEliminated);
+  }
+
+  private activePlayers(session: RoomSession) {
+    return this.sortedPlayers(session).filter((player) => !this.isPlayerSpectating(session, player));
+  }
+
   private sourceQueryForSession(session: RoomSession) {
     if (session.sourceMode === "public_playlist") {
       return session.publicPlaylistSelection?.sourceQuery?.trim() || session.categoryQuery.trim();
@@ -842,6 +994,8 @@ export class RoomStore {
         lastRoundScore: player.lastRoundScore,
         streak: player.streak,
         maxStreak: player.maxStreak,
+        lives: player.lives,
+        isEliminated: player.isEliminated,
         averageResponseMs: Number.isFinite(averageResponseMs(player))
           ? Math.round(averageResponseMs(player))
           : null,
@@ -856,6 +1010,18 @@ export class RoomStore {
         safeRounds + 3,
         safeRounds * TRACK_POOL_TARGET_MULTIPLIER,
         TRACK_POOL_MIN_CANDIDATES,
+      ),
+    );
+  }
+
+  private targetAniListCandidatePoolSize(requestedRounds: number) {
+    const safeRounds = Math.max(1, requestedRounds);
+    return Math.min(
+      ANILIST_TRACK_POOL_MAX_CANDIDATES,
+      Math.max(
+        safeRounds + 6,
+        safeRounds * ANILIST_TRACK_POOL_TARGET_MULTIPLIER,
+        ANILIST_TRACK_POOL_MIN_CANDIDATES,
       ),
     );
   }
@@ -880,13 +1046,18 @@ export class RoomStore {
     if (!track) return [];
 
     const correct = buildRoundChoice(track);
+    const correctIdentity = mcqChoiceIdentity(track);
     const sourceProfile = buildChoiceProfile(track);
     const futureRoundTracks = session.trackPool.slice(round);
     const distractorCandidates = [...futureRoundTracks, ...session.distractorTrackPool]
-      .filter((candidate) => asChoiceLabel(candidate) !== correct.value)
+      .filter((candidate) => {
+        const candidateIdentity = mcqChoiceIdentity(candidate);
+        return candidateIdentity !== correctIdentity && asChoiceLabel(candidate) !== correct.value;
+      })
       .map((candidate) => ({
         choice: buildRoundChoice(candidate),
         track: candidate,
+        identity: mcqChoiceIdentity(candidate),
         profile: buildChoiceProfile(candidate),
       }));
     const rankedDistractors = randomShuffle(distractorCandidates)
@@ -897,7 +1068,8 @@ export class RoomStore {
     const minimumScore = minChoiceCoherenceScore(sourceProfile.language);
 
     const uniqueOptions: RoundChoice[] = [correct];
-    const seen = new Set([correct.value]);
+    const seenValues = new Set([correct.value]);
+    const seenIdentities = new Set([correctIdentity]);
     const weightedPool = rankedDistractors.filter((entry) => entry.score >= minimumScore);
     while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
       const weights = weightedPool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
@@ -913,16 +1085,29 @@ export class RoomStore {
         }
       }
       const selected = weightedPool.splice(selectedIndex, 1)[0];
-      if (!selected || seen.has(selected.choice.value)) continue;
+      if (
+        !selected ||
+        seenValues.has(selected.choice.value) ||
+        seenIdentities.has(selected.identity)
+      ) {
+        continue;
+      }
       uniqueOptions.push(selected.choice);
-      seen.add(selected.choice.value);
+      seenValues.add(selected.choice.value);
+      seenIdentities.add(selected.identity);
     }
 
     if (uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
       for (const distractor of rankedDistractors.sort((left, right) => right.score - left.score)) {
-        if (seen.has(distractor.choice.value)) continue;
+        if (
+          seenValues.has(distractor.choice.value) ||
+          seenIdentities.has(distractor.identity)
+        ) {
+          continue;
+        }
         uniqueOptions.push(distractor.choice);
-        seen.add(distractor.choice.value);
+        seenValues.add(distractor.choice.value);
+        seenIdentities.add(distractor.identity);
         if (uniqueOptions.length >= MCQ_REQUIRED_CHOICES) break;
       }
     }
@@ -1012,7 +1197,7 @@ export class RoomStore {
 
   private async buildAniListUnionTrackPool(session: RoomSession, requestedRounds: number) {
     const safeRounds = Math.max(1, requestedRounds);
-    const targetCandidateSize = this.targetCandidatePoolSize(safeRounds);
+    const targetCandidateSize = this.targetAniListCandidatePoolSize(safeRounds);
     const userIds = [...session.players.values()]
       .map((player) => player.userId)
       .filter((userId): userId is string => typeof userId === "string" && userId.length > 0);
@@ -1082,70 +1267,248 @@ export class RoomStore {
           ? "and tv.theme_type = 'ED'"
           : "";
 
-    const rowLimit = Math.max(targetCandidateSize * 2, safeRounds + 8);
-    const selected = await pool.query<{
-      video_key: string;
-      webm_url: string;
-      theme_type: string;
-      theme_number: number | null;
-      title_romaji: string;
-      title_english: string | null;
-      song_title: string | null;
-      song_artists: string[] | null;
-      aliases: string[] | null;
-    }>(
-      `
-        with best_theme_video as (
-          select distinct on (tv.anime_id, tv.theme_type, coalesce(tv.theme_number, 0))
-            tv.video_key,
-            tv.webm_url,
-            tv.theme_type,
-            tv.theme_number,
-            aa.title_romaji,
-            aa.title_english,
-            tv.song_title,
-            tv.song_artists,
-            (
-              select array_agg(distinct al.alias)
-              from anime_catalog_alias al
-              where al.anime_id = tv.anime_id
-            ) as aliases
-          from anime_theme_videos tv
-          join anime_catalog_anime aa on aa.id = tv.anime_id
-          where tv.is_playable = true
-            and tv.webm_url like 'https://v.animethemes.moe/%'
-            and tv.anime_id = any($1::bigint[])
-            ${themeCondition}
-          order by
-            tv.anime_id,
-            tv.theme_type,
-            coalesce(tv.theme_number, 0),
-            tv.updated_at desc,
-            tv.is_creditless desc,
-            case
-              when coalesce(tv.resolution, 0) = 720 then 0
-              when coalesce(tv.resolution, 0) = 1080 then 1
-              when coalesce(tv.resolution, 0) > 1080 then 2
-              when coalesce(tv.resolution, 0) = 480 then 3
-              when coalesce(tv.resolution, 0) > 0 then 4
-              else 5
-            end asc,
-            coalesce(tv.resolution, 0) desc,
-            tv.video_key desc
-        )
-        select video_key, webm_url, theme_type, theme_number, title_romaji, title_english, song_title, song_artists, aliases
-        from best_theme_video
-        order by random()
-        limit $2
-      `,
-      [animeIds, rowLimit],
+    const rowLimit = Math.max(targetCandidateSize * 2, safeRounds + 24);
+    const contentFilters = normalizeRoomContentFilters(session.contentFilters);
+    const contentFilterSql = contentFilterSqlCondition(contentFilters, { startIndex: 3 });
+    const needsPopularityMetadata = session.difficultyFilter !== "all";
+    const needsYearMetadata = contentFilters.decades.length > 0;
+    const needsGenresMetadata = contentFilters.genres.length > 0;
+    const needsRoomFilterMetadata = needsPopularityMetadata || needsYearMetadata || needsGenresMetadata;
+    const selectAniListRows = async (difficultyFilter: RoomDifficultyFilter) =>
+      await pool.query<{
+        anime_id: number;
+        video_key: string;
+        webm_url: string;
+        theme_type: string;
+        theme_number: number | null;
+        title_romaji: string;
+        title_english: string | null;
+        song_title: string | null;
+        song_artists: string[] | null;
+        aliases: string[] | null;
+      }>(
+        `
+          with best_theme_video as (
+            select distinct on (tv.anime_id, tv.theme_type, coalesce(tv.theme_number, 0))
+              aa.id as anime_id,
+              tv.video_key,
+              tv.webm_url,
+              tv.theme_type,
+              tv.theme_number,
+              aa.title_romaji,
+              aa.title_english,
+              tv.song_title,
+              tv.song_artists,
+              (
+                select array_agg(distinct al.alias)
+                from anime_catalog_alias al
+                where al.anime_id = tv.anime_id
+              ) as aliases
+            from anime_theme_videos tv
+            join anime_catalog_anime aa on aa.id = tv.anime_id
+            where tv.is_playable = true
+              and tv.webm_url like 'https://v.animethemes.moe/%'
+              and tv.anime_id = any($1::bigint[])
+              ${themeCondition}
+              ${difficultySqlCondition(difficultyFilter)}
+              ${contentFilterSql.sql}
+            order by
+              tv.anime_id,
+              tv.theme_type,
+              coalesce(tv.theme_number, 0),
+              tv.updated_at desc,
+              tv.is_creditless desc,
+              case
+                when coalesce(tv.resolution, 0) = 720 then 0
+                when coalesce(tv.resolution, 0) = 1080 then 1
+                when coalesce(tv.resolution, 0) > 1080 then 2
+                when coalesce(tv.resolution, 0) = 480 then 3
+                when coalesce(tv.resolution, 0) > 0 then 4
+                else 5
+              end asc,
+              coalesce(tv.resolution, 0) desc,
+              tv.video_key desc
+          )
+          select anime_id, video_key, webm_url, theme_type, theme_number, title_romaji, title_english, song_title, song_artists, aliases
+          from best_theme_video
+          order by random()
+          limit $2
+        `,
+        [animeIds, rowLimit, ...contentFilterSql.params],
+      );
+
+    const backfillAniListMetadata = async (limit: number, offset = 0) => {
+      const missingPopularityRows = await pool.query<{
+        anime_id: number;
+        title_romaji: string;
+      }>(
+        `
+          select a.id as anime_id, a.title_romaji
+          from unnest($1::bigint[]) with ordinality as ids(id, ord)
+          join anime_catalog_anime a on a.id = ids.id
+          where (
+            ($4::boolean and a.anilist_popularity is null)
+            or ($5::boolean and a.year is null)
+            or ($6::boolean and coalesce(array_length(a.genres, 1), 0) <= 0)
+          )
+          order by ids.ord asc
+          limit $2
+          offset $3
+        `,
+        [animeIds, limit, offset, needsPopularityMetadata, needsYearMetadata, needsGenresMetadata],
+      );
+      if (missingPopularityRows.rows.length <= 0) {
+        return { attemptedCount: 0, updatedCount: 0 };
+      }
+
+      const updates: Array<{
+        animeId: number;
+        titleEnglish: string | null;
+        popularity: number | null;
+        year: number | null;
+        genres: string[];
+      }> = [];
+
+      for (
+        let index = 0;
+        index < missingPopularityRows.rows.length;
+        index += ANILIST_ENGLISH_BACKFILL_BATCH_SIZE
+      ) {
+        const batch = missingPopularityRows.rows.slice(index, index + ANILIST_ENGLISH_BACKFILL_BATCH_SIZE);
+        const metadataByTitle = await fetchAniListMediaMetadataBySearchBatch(
+          batch.map((row) => row.title_romaji),
+        );
+        for (const row of batch) {
+          const metadata = metadataByTitle.get(row.title_romaji) ?? null;
+          if (!metadata) continue;
+          updates.push({
+            animeId: row.anime_id,
+            titleEnglish: metadata.englishTitle,
+            popularity: metadata.popularity,
+            year: metadata.year,
+            genres: metadata.genres,
+          });
+        }
+      }
+
+      if (updates.length <= 0) {
+        return {
+          attemptedCount: missingPopularityRows.rows.length,
+          updatedCount: 0,
+        };
+      }
+
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let index = 1;
+      for (const update of updates) {
+        placeholders.push(
+          `($${index}, $${index + 1}::text, $${index + 2}::integer, $${index + 3}::integer, $${index + 4}::text[])`,
+        );
+        values.push(update.animeId, update.titleEnglish, update.popularity, update.year, update.genres);
+        index += 5;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = coalesce(v.title_english, a.title_english),
+            anilist_popularity = coalesce(v.anilist_popularity, a.anilist_popularity),
+            year = coalesce(v.year, a.year),
+            genres = case
+              when coalesce(array_length(v.genres, 1), 0) > 0 then v.genres
+              else a.genres
+            end,
+            updated_at = now()
+          from (
+            values ${placeholders.join(", ")}
+          ) as v(id, title_english, anilist_popularity, year, genres)
+          where a.id = v.id::bigint
+        `,
+        values,
+      );
+
+      return {
+        attemptedCount: missingPopularityRows.rows.length,
+        updatedCount: updates.filter((update) => update.popularity !== null).length,
+      };
+    };
+
+    let selected = await selectAniListRows(session.difficultyFilter);
+    const desiredFilteredRows = Math.min(rowLimit, Math.max(targetCandidateSize, safeRounds));
+    if (needsRoomFilterMetadata && selected.rows.length < desiredFilteredRows) {
+      const maxBackfillAttempts = Math.min(
+        animeIds.length,
+        Math.max(ANILIST_DIFFICULTY_START_BACKFILL_LIMIT, desiredFilteredRows * 2),
+      );
+      const backfill = await backfillAniListMetadata(maxBackfillAttempts);
+      if (backfill.attemptedCount > 0) {
+        selected = await selectAniListRows(session.difficultyFilter);
+      }
+
+      if (selected.rows.length < desiredFilteredRows) {
+        logEvent("warn", "anilist_room_filter_metadata_incomplete", {
+          roomCode: session.roomCode,
+          difficultyFilter: session.difficultyFilter,
+          contentFilters,
+          requestedRounds: safeRounds,
+          desiredFilteredRows,
+          selectedRows: selected.rows.length,
+          attemptedBackfills: backfill.attemptedCount,
+          updatedBackfills: backfill.updatedCount,
+          maxBackfillAttempts,
+        });
+      }
+    }
+
+    const englishTitleBackfills = new Map<number, string>();
+    const missingEnglishRows = Array.from(
+      new Map(
+        selected.rows
+          .filter((row) => (row.title_english?.trim() ?? "").length <= 0)
+          .map((row) => [row.anime_id, row] as const),
+      ).values(),
     );
 
+    for (let index = 0; index < missingEnglishRows.length; index += ANILIST_ENGLISH_BACKFILL_BATCH_SIZE) {
+        const batch = missingEnglishRows.slice(index, index + ANILIST_ENGLISH_BACKFILL_BATCH_SIZE);
+        const metadataByTitle = await fetchAniListMediaMetadataBySearchBatch(
+          batch.map((row) => row.title_romaji),
+        );
+      for (const row of batch) {
+        const englishTitle = metadataByTitle.get(row.title_romaji)?.englishTitle;
+        if (!englishTitle) continue;
+        englishTitleBackfills.set(row.anime_id, englishTitle);
+      }
+    }
+
+    if (englishTitleBackfills.size > 0) {
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let index = 1;
+      for (const [animeId, englishTitle] of englishTitleBackfills) {
+        placeholders.push(`($${index}, $${index + 1}::text)`);
+        values.push(animeId, englishTitle);
+        index += 2;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = v.title_english,
+            updated_at = now()
+          from (values ${placeholders.join(", ")}) as v(id, title_english)
+          where a.id = v.id::bigint
+            and coalesce(nullif(a.title_english, ''), '') = ''
+        `,
+        values,
+      );
+    }
+
     const tracks: MusicTrack[] = selected.rows.map((row) => {
+      const englishTitle = englishTitleBackfills.get(row.anime_id) ?? row.title_english;
       const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
       const answerAliases = Array.from(
         new Set(
-          [row.title_english, ...(row.aliases ?? [])]
+          [englishTitle, ...(row.aliases ?? [])]
             .map((value) => value?.trim() ?? "")
             .filter((value) => value.length > 0),
         ),
@@ -1164,7 +1527,7 @@ export class RoomStore {
         videoUrl: proxyUrl,
         answer: {
           canonical: row.title_romaji,
-          englishTitle: row.title_english,
+          englishTitle,
           aliases: answerAliases,
         },
       } satisfies MusicTrack;
@@ -1428,7 +1791,7 @@ export class RoomStore {
   }
 
   private activePlayerIds(session: RoomSession) {
-    return this.sortedPlayers(session).map((player) => player.id);
+    return this.activePlayers(session).map((player) => player.id);
   }
 
   private trackForRound(session: RoomSession, round: number) {
@@ -1615,6 +1978,16 @@ export class RoomStore {
     >();
 
     for (const player of session.players.values()) {
+      if (this.isPlayerSpectating(session, player)) {
+        player.lastRoundScore = 0;
+        playerRoundResults.set(player.id, {
+          answer: null,
+          submitted: false,
+          isCorrect: false,
+        });
+        continue;
+      }
+
       const submitted = round.answers.get(player.id);
       const isCorrect = submitted ? this.isAnswerCorrect(roundMode, submitted.value, track) : false;
       const responseMs =
@@ -1635,6 +2008,11 @@ export class RoomStore {
       if (isCorrect) {
         player.correctAnswers += 1;
         player.totalResponseMs += responseMs;
+      } else if (session.livesMode) {
+        player.lives = Math.max(0, player.lives - 1);
+        if (player.lives <= 0) {
+          player.isEliminated = true;
+        }
       }
 
       playerRoundResults.set(player.id, {
@@ -1681,6 +2059,15 @@ export class RoomStore {
           playerAnswers: revealAnswers,
         }
       : null;
+
+    const activePlayerCount = this.activePlayers(session).length;
+    if (
+      session.livesMode &&
+      (activePlayerCount <= 0 || (session.players.size > 1 && activePlayerCount === 1))
+    ) {
+      session.totalRounds = Math.min(session.totalRounds, round.round);
+      session.manager.setTotalRounds(session.totalRounds);
+    }
   }
 
   createRoom(options: { isPublic?: boolean; categoryQuery?: string } = {}) {
@@ -1720,7 +2107,11 @@ export class RoomStore {
       distractorTrackPool: [],
       sourceMode: initialSourceMode,
       themeMode: "mix",
+      difficultyFilter: "all",
+      contentFilters: defaultRoomContentFilters(),
       answerMode: "mixed",
+      livesMode: false,
+      maxLives: DEFAULT_MAX_LIVES,
       roomRoundConfig: {
         maxRounds: this.config.maxRounds,
         playingMs: this.config.playingMs,
@@ -1786,6 +2177,8 @@ export class RoomStore {
       maxStreak: 0,
       totalResponseMs: 0,
       correctAnswers: 0,
+      lives: DEFAULT_MAX_LIVES,
+      isEliminated: false,
       library: defaultPlayerLibraryState(),
     };
 
@@ -1948,6 +2341,69 @@ export class RoomStore {
     session.themeMode = mode;
     this.resetReadyStates(session);
     return { status: "ok" as const, mode: session.themeMode };
+  }
+
+  setRoomDifficultyFilter(roomCode: string, playerId: string, filter: RoomDifficultyFilter) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.difficultyFilter = filter;
+    this.resetReadyStates(session);
+    return { status: "ok" as const, filter: session.difficultyFilter };
+  }
+
+  setRoomContentFilters(
+    roomCode: string,
+    playerId: string,
+    contentFilters: Partial<RoomContentFilters>,
+  ) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.contentFilters = normalizeRoomContentFilters(contentFilters);
+    this.resetReadyStates(session);
+    return { status: "ok" as const, contentFilters: session.contentFilters };
+  }
+
+  setRoomLivesMode(
+    roomCode: string,
+    playerId: string,
+    config: { livesMode?: boolean; maxLives?: number },
+  ) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    if (typeof config.livesMode === "boolean") {
+      session.livesMode = config.livesMode;
+    }
+    if (typeof config.maxLives === "number" && Number.isFinite(config.maxLives)) {
+      session.maxLives = Math.max(1, Math.min(10, Math.floor(config.maxLives)));
+    }
+    if (!session.livesMode) {
+      session.maxLives = Math.max(1, session.maxLives);
+    }
+    for (const player of session.players.values()) {
+      player.lives = session.maxLives;
+      player.isEliminated = false;
+    }
+    this.resetReadyStates(session);
+    return {
+      status: "ok" as const,
+      livesMode: session.livesMode,
+      maxLives: session.maxLives,
+    };
   }
 
   setRoomRoundConfig(
@@ -2181,7 +2637,11 @@ export class RoomStore {
     session.chatMessages = [];
     session.sourceMode = "anilist_union";
     session.themeMode = "mix";
+    session.difficultyFilter = "all";
+    session.contentFilters = defaultRoomContentFilters();
     session.answerMode = "mixed";
+    session.livesMode = false;
+    session.maxLives = DEFAULT_MAX_LIVES;
     session.roomRoundConfig = {
       maxRounds: this.config.maxRounds,
       playingMs: this.config.playingMs,
@@ -2209,6 +2669,8 @@ export class RoomStore {
       player.maxStreak = 0;
       player.totalResponseMs = 0;
       player.correctAnswers = 0;
+      player.lives = session.maxLives;
+      player.isEliminated = false;
       player.library.includeInPool.spotify =
         player.library.linkedProviders.spotify === "linked" || this.hasSyncedLibraryTracks(player, "spotify");
       player.library.includeInPool.deezer =
@@ -2572,6 +3034,8 @@ export class RoomStore {
       player.maxStreak = 0;
       player.totalResponseMs = 0;
       player.correctAnswers = 0;
+      player.lives = session.maxLives;
+      player.isEliminated = false;
       player.isReady = false;
     }
 
@@ -2616,12 +3080,22 @@ export class RoomStore {
   skipCurrentRound(roomCode: string, playerId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    const player = session.players.get(playerId);
+    if (!player) return { status: "player_not_found" as const };
 
     const nowMs = this.now();
     this.progressSession(session, nowMs);
     const state = session.manager.state();
     if (state === "playing") {
+      if (this.isPlayerSpectating(session, player)) {
+        return {
+          status: "ok" as const,
+          accepted: false,
+          state,
+          round: session.manager.round(),
+          deadlineMs: session.manager.deadlineMs(),
+        };
+      }
       const result = session.manager.skipGuessForPlayer(playerId, nowMs);
       if (result.accepted) {
         this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
@@ -2635,6 +3109,15 @@ export class RoomStore {
       };
     }
     if (state === "reveal") {
+      if (this.isPlayerSpectating(session, player)) {
+        return {
+          status: "ok" as const,
+          accepted: false,
+          state,
+          round: session.manager.round(),
+          deadlineMs: session.manager.deadlineMs(),
+        };
+      }
       const result = session.manager.skipRevealForPlayer(playerId, nowMs);
       if (result.accepted) {
         this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
@@ -2710,7 +3193,8 @@ export class RoomStore {
   reportMediaPrepared(roomCode: string, playerId: string, trackId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    const player = session.players.get(playerId);
+    if (!player) return { status: "player_not_found" as const };
 
     const nowMs = this.now();
     this.progressSession(session, nowMs);
@@ -2721,6 +3205,16 @@ export class RoomStore {
     const currentRound = session.manager.round();
     const activeTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
     if (!activeTrack || activeTrack.provider !== "animethemes" || activeTrack.id !== trackId) {
+      return {
+        status: "ok" as const,
+        accepted: false,
+        state: session.manager.state(),
+        round: session.manager.round(),
+        deadlineMs: session.manager.deadlineMs(),
+      };
+    }
+
+    if (this.isPlayerSpectating(session, player)) {
       return {
         status: "ok" as const,
         accepted: false,
@@ -2753,6 +3247,9 @@ export class RoomStore {
 
     const player = session.players.get(playerId);
     if (!player) return { status: "player_not_found" as const };
+    if (this.isPlayerSpectating(session, player)) {
+      return { status: "ok" as const, accepted: false };
+    }
 
     const result = session.manager.submitAnswer(playerId, answer, nowMs);
     if (result.accepted) {
@@ -2770,6 +3267,9 @@ export class RoomStore {
 
     const player = session.players.get(playerId);
     if (!player) return { status: "player_not_found" as const };
+    if (this.isPlayerSpectating(session, player)) {
+      return { status: "ok" as const, accepted: false };
+    }
 
     const normalized = answer.trim().slice(0, 120);
     const result = session.manager.setDraftAnswer(playerId, normalized, nowMs);
@@ -2829,8 +3329,13 @@ export class RoomStore {
       playerId: player.id,
       displayName: player.displayName,
       isReady: player.isReady,
-      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(player.id) : false,
+      hasAnsweredCurrentRound:
+        state === "playing" && !this.isPlayerSpectating(session, player)
+          ? session.manager.hasGuessDone(player.id)
+          : false,
       isHost: player.id === hostPlayerId,
+      lives: player.lives,
+      isEliminated: player.isEliminated,
       canContributeLibrary: Boolean(player.userId),
       libraryContribution: {
         includeInPool: {
@@ -2858,7 +3363,7 @@ export class RoomStore {
         ...entry,
         hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(entry.playerId) : false,
       }));
-    const activePlayerIds = players.map((player) => player.playerId);
+    const activePlayerIds = this.activePlayerIds(session);
     const roundSync = session.roundSync.snapshot();
     const guessTotalCount = state === "playing" ? activePlayerIds.length : 0;
     const guessDoneCount =
@@ -2946,10 +3451,17 @@ export class RoomStore {
       categoryQuery: session.categoryQuery,
       sourceMode: session.sourceMode,
       answerMode: session.answerMode,
+      livesMode: session.livesMode,
+      maxLives: session.maxLives,
       roomRoundConfig: session.roomRoundConfig,
       sourceConfig: {
         mode: session.sourceMode,
         themeMode: session.themeMode,
+        difficultyFilter: session.difficultyFilter,
+        contentFilters: {
+          decades: [...session.contentFilters.decades],
+          genres: [...session.contentFilters.genres],
+        },
         publicPlaylist: session.publicPlaylistSelection
           ? {
               provider: session.publicPlaylistSelection.provider,
