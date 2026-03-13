@@ -5,14 +5,25 @@
 - [x] Valider un design minimal et elegant pour le nouveau mode.
 - [x] Ecrire le design dans `docs/plans/2026-03-13-random-anime-blindtest-design.md`.
 - [x] Ecrire le plan d'implementation dans `docs/plans/2026-03-13-random-anime-blindtest.md`.
-- [ ] Implementer le mode approuve.
-- [ ] Verifier avec tests cibles et revue finale.
+- [x] Implementer le mode approuve.
+- [x] Verifier avec tests cibles et revue finale.
 
 ## Review
 
 - Design valide: nouveau mode anime aleatoire classique hors bibliotheques AniList des joueurs, avec tirage frais par partie depuis une source distante puis mapping AnimeThemes.
 - Contrainte clef validee: l'aleatoire prime sur tout fallback de pool; aucun pool preconstruit ne doit etre reutilise entre parties pour ce mode.
 - Contrainte produit supplementaire: l'aleatoire doit rester une priorite sur l'ensemble de l'application, y compris pour les tirages AniList existants.
+- Root cause (synthese): le besoin etait de verrouiller une verification finale complete du mode `random_classic` apres implementation des taches precedentes, avec preuve de non-regression sur les suites ciblees.
+- Implementation finale (synthese): le mode `random_classic` est bien expose bout-en-bout (settings room, parsing/resolution source, construction de pool aleatoire AniList fraiche par partie) et la verification finale a ete executee sans modifier le code feature.
+- Verification executee:
+  - `bun test apps/api/tests/room-anime-mode.spec.ts apps/api/tests/room-routes.spec.ts apps/api/tests/anilist-random-anime-source.spec.ts apps/api/tests/track-source-resolver.spec.ts` ✅ PASS (19 tests).
+  - `bun test apps/api/tests/room-store.spec.ts -t "random_classic|unbiased AniList random draw"` ✅ PASS (3 tests).
+  - `bun test apps/web/src/lib/userGameSettingsMemory.spec.ts apps/web/src/routes` ✅ PASS (13 tests).
+  - `npx playwright test apps/web/e2e/live-blindtest.spec.ts --grep "random classic"` ✅ PASS (1 test).
+  - `bun run lint` ✅ PASS avec warnings pre-existants (`Found 49 warnings and 0 errors`).
+  - `bun test` ⚠️ ECHEC pour des sujets non lies a cette tache:
+    - `apps/api/tests/room-store-romaji.spec.ts` -> `RoomStore romaji answer matching > accepts text answers written in romaji for japanese tracks` (attendu `mcq`, recu `text`).
+    - Erreurs Playwright d'initialisation pendant `bun test` sur `apps/web/e2e/toast-feedback.spec.ts`, `apps/web/e2e/core-flow.spec.ts`, `apps/web/e2e/live-blindtest.spec.ts` (`Playwright Test did not expect test() to be called here`).
 
 # Gameplay Scrollbar Fix
 
