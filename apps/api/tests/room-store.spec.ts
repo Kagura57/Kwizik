@@ -2460,6 +2460,116 @@ describe("RoomStore gameplay progression", () => {
     }
   });
 
+  it("replayRoom preserves random_classic source mode and categoryQuery", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const getRandomAniListAnimeIds = vi.fn().mockResolvedValue([101, 102, 103, 104]);
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(12),
+    } as never);
+
+    let nowMs = 0;
+    try {
+      const store = new RoomStore({
+        getRandomAniListAnimeIds,
+        now: () => nowMs,
+        config: {
+          maxRounds: 1,
+          countdownMs: 5,
+          loadingMs: 0,
+          playingMs: 20,
+          revealMs: 5,
+          leaderboardMs: 5,
+        },
+      } as never);
+      const created = store.createRoom();
+      const host = store.joinRoom(created.roomCode, "Host");
+      expect(host.status).toBe("ok");
+      if (host.status !== "ok") return;
+
+      store.setRoomSourceMode(created.roomCode, host.value.playerId, "random_classic" as never);
+      store.setPlayerReady(created.roomCode, host.value.playerId, true);
+      const started = await store.startGame(created.roomCode, host.value.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "random_classic" });
+
+      // Advance through countdown → playing → reveal → leaderboard → results
+      for (let step = 0; step < 20; step += 1) {
+        nowMs += 10;
+        const snapshot = store.roomState(created.roomCode);
+        if (snapshot?.state === "results") break;
+      }
+      expect(store.roomState(created.roomCode)?.state).toBe("results");
+
+      const replay = store.replayRoom(created.roomCode, host.value.playerId);
+      expect(replay.status).toBe("ok");
+      if (replay.status !== "ok") return;
+
+      expect(replay.categoryQuery).toBe("anilist:random:classic");
+
+      const lobby = store.roomState(created.roomCode);
+      expect(lobby?.state).toBe("waiting");
+      expect(lobby?.sourceMode).toBe("random_classic");
+      expect(lobby?.categoryQuery).toBe("anilist:random:classic");
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("setRoomSourceMode clears trackPool consistently across all mode transitions", () => {
+    const store = new RoomStore({});
+
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    // random_classic → anilist_union: trackPool must be cleared
+    store.setRoomSourceMode(created.roomCode, host.value.playerId, "random_classic" as never);
+    expect(store.roomState(created.roomCode)).toMatchObject({
+      sourceMode: "random_classic",
+      categoryQuery: "anilist:random:classic",
+      poolSize: 0,
+    });
+
+    store.setRoomSourceMode(created.roomCode, host.value.playerId, "anilist_union" as never);
+    expect(store.roomState(created.roomCode)).toMatchObject({
+      sourceMode: "anilist_union",
+      categoryQuery: "anilist:linked:union",
+      poolSize: 0,
+    });
+
+    // anilist_union → players_liked: trackPool must be cleared
+    store.setRoomSourceMode(created.roomCode, host.value.playerId, "players_liked" as never);
+    expect(store.roomState(created.roomCode)).toMatchObject({
+      sourceMode: "players_liked",
+      categoryQuery: "players:liked",
+      poolSize: 0,
+    });
+
+    // players_liked → public_playlist: trackPool must be cleared
+    store.setRoomSourceMode(created.roomCode, host.value.playerId, "public_playlist" as never);
+    expect(store.roomState(created.roomCode)).toMatchObject({
+      sourceMode: "public_playlist",
+      poolSize: 0,
+    });
+  });
+
   it("uses a larger AniList candidate draw to reduce repeated easy-mode openings and qcm choices", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;

@@ -2346,6 +2346,7 @@ export class RoomStore {
     session.sourceMode = mode;
     if (mode === "public_playlist") {
       session.playersLikedPool = [];
+      session.trackPool = [];
       session.distractorTrackPool = [];
       this.roomLikedPoolRebuildRequested.delete(roomCode);
       session.poolBuild = {
@@ -2365,6 +2366,8 @@ export class RoomStore {
       }
     } else if (isLegacyPlayersLikedSource(mode)) {
       session.publicPlaylistSelection = null;
+      session.trackPool = [];
+      session.distractorTrackPool = [];
       session.categoryQuery = "players:liked";
       for (const player of session.players.values()) {
         for (const provider of ["spotify", "deezer"] as const) {
@@ -2393,6 +2396,7 @@ export class RoomStore {
     } else {
       session.publicPlaylistSelection = null;
       session.playersLikedPool = [];
+      session.trackPool = [];
       session.distractorTrackPool = [];
       this.roomLikedPoolRebuildRequested.delete(roomCode);
       session.poolBuild = {
@@ -2703,6 +2707,8 @@ export class RoomStore {
     if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
     if (session.manager.state() !== "results") return { status: "invalid_state" as const };
 
+    const prevSourceMode = session.sourceMode;
+
     this.stopPreloadJob(roomCode);
     this.stopPlayersLikedPoolJob(roomCode);
     this.roomLikedPoolRebuildRequested.delete(roomCode);
@@ -2716,7 +2722,6 @@ export class RoomStore {
     session.roundChoices.clear();
     session.latestReveal = null;
     session.chatMessages = [];
-    session.sourceMode = "anilist_union";
     session.themeMode = "mix";
     session.difficultyFilter = "all";
     session.contentFilters = defaultRoomContentFilters();
@@ -2740,7 +2745,13 @@ export class RoomStore {
     };
     session.isResolvingTracks = false;
     session.trackResolutionJobsInFlight = 0;
-    session.categoryQuery = "anilist:linked:union";
+    if (prevSourceMode === "random_classic") {
+      session.sourceMode = "random_classic";
+      session.categoryQuery = "anilist:random:classic";
+    } else {
+      session.sourceMode = "anilist_union";
+      session.categoryQuery = "anilist:linked:union";
+    }
     this.resetReadyStates(session);
 
     for (const player of session.players.values()) {
