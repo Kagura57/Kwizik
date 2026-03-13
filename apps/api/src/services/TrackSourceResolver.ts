@@ -53,6 +53,12 @@ export type ParsedTrackSource =
       original: string;
       query: string;
       payload: null;
+    }
+  | {
+      type: "anilist_random_classic";
+      original: string;
+      query: string;
+      payload: null;
     };
 
 const SPOTIFY_PLAYLIST_PREFIX = "spotify:playlist:";
@@ -61,6 +67,7 @@ const DEEZER_PLAYLIST_PREFIX = "deezer:playlist:";
 const DEEZER_CHART_PREFIX = "deezer:chart";
 const ANILIST_USERS_PREFIX = "anilist:users:";
 const ANILIST_LINKED_UNION_PREFIX = "anilist:linked:union";
+const ANILIST_RANDOM_CLASSIC_PREFIX = "anilist:random:classic";
 
 function parseUsers(raw: string) {
   return raw
@@ -160,6 +167,15 @@ export function parseTrackSource(categoryQuery: string): ParsedTrackSource {
   if (lower === ANILIST_LINKED_UNION_PREFIX) {
     return {
       type: "anilist_linked_union",
+      original: categoryQuery,
+      query: "",
+      payload: null,
+    };
+  }
+
+  if (lower === ANILIST_RANDOM_CLASSIC_PREFIX) {
+    return {
+      type: "anilist_random_classic",
       original: categoryQuery,
       query: "",
       payload: null,
@@ -1168,6 +1184,11 @@ export async function resolveTrackPoolFromSource(
         categoryQuery: options.categoryQuery,
         requestedSize: safeSize,
       });
+      return [];
+    }
+
+    if (parsed.type === "anilist_random_classic") {
+      // This source is currently resolved through RoomStore's AniList random flow.
       return [];
     }
 

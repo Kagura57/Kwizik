@@ -72,6 +72,7 @@ describe("room snapshot", () => {
       ok: true;
       mode: string;
     };
+    expect(modePayload.ok).toBe(true);
     expect(modePayload.mode).toBe("random_classic");
 
     const stateRes = await app.handle(new Request(`http://localhost/room/${created.roomCode}/state`));

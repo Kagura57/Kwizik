@@ -227,7 +227,12 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
       set.status = 400;
       return { ok: false, error: "INVALID_PAYLOAD" };
     }
-    if (mode !== "public_playlist" && mode !== "players_liked" && mode !== "anilist_union") {
+    if (
+      mode !== "public_playlist" &&
+      mode !== "players_liked" &&
+      mode !== "anilist_union" &&
+      mode !== "random_classic"
+    ) {
       set.status = 400;
       return { ok: false, error: "INVALID_MODE" };
     }
