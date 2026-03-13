@@ -14,7 +14,7 @@ const originalFetch = globalThis.fetch;
 
 function mockAniListFetch(
   resolver: (request: AniListRequest, callIndex: number) => {
-    ids: number[];
+    ids: unknown[];
     hasNextPage?: boolean;
   },
 ) {
@@ -179,5 +179,20 @@ describe("AniListRandomAnimeSource", () => {
 
     expect(first).toEqual([1, 2, 3, 4]);
     expect(second).toEqual([101, 102, 103, 104]);
+  });
+
+  it("filters AniList media IDs to only positive finite integers", async () => {
+    mockAniListFetch(() => ({
+      ids: [0, -5, 1.5, "2", null, 7, 8],
+      hasNextPage: false,
+    }));
+
+    const ids = await fetchRandomAniListAnimeIds({
+      seed: "id-filter-seed",
+      desiredCount: 7,
+      themeMode: "mix",
+    });
+
+    expect(ids).toEqual([7, 8]);
   });
 });

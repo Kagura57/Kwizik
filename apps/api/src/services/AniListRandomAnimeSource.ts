@@ -143,7 +143,7 @@ export async function fetchRandomAniListAnimeIds(input: {
         fetchedPageCount += 1;
         const ids = (payload?.data?.Page?.media ?? [])
           .map((entry) => entry?.id)
-          .filter((id): id is number => typeof id === "number" && Number.isFinite(id));
+          .filter((id): id is number => typeof id === "number" && Number.isFinite(id) && Number.isInteger(id) && id > 0);
         const hasNextPage = payload?.data?.Page?.pageInfo?.hasNextPage === true;
         const response = { ids, hasNextPage };
         requestMemo.set(requestKey, response);
