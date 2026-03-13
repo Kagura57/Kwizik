@@ -108,7 +108,7 @@ export type RoomState = {
   isResolvingTracks: boolean;
   poolSize: number;
   categoryQuery: string;
-  sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+  sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
   answerMode: "mcq_only" | "text_only" | "mixed";
   livesMode: boolean;
   maxLives: number;
@@ -118,7 +118,7 @@ export type RoomState = {
     revealMs: number;
   };
   sourceConfig: {
-    mode: "public_playlist" | "players_liked" | "anilist_union";
+    mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
     themeMode: "op_only" | "ed_only" | "mix";
     difficultyFilter: RoomDifficultyFilter;
     contentFilters: RoomContentFilters;
@@ -252,7 +252,7 @@ export type PublicRoomSummary = {
   categoryQuery: string;
   createdAtMs: number;
   canJoin: boolean;
-  sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+  sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
   playlistName: string | null;
   deadlineMs: number | null;
   serverNowMs: number;
@@ -538,7 +538,7 @@ export async function startRoom(input: { roomCode: string; playerId: string }) {
         state: string;
         poolSize: number;
         categoryQuery: string;
-        sourceMode?: "public_playlist" | "players_liked" | "anilist_union";
+        sourceMode?: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
         totalRounds: number;
         deadlineMs: number | null;
       }
@@ -563,9 +563,9 @@ export async function setRoomSource(input: { roomCode: string; playerId: string;
 export async function setRoomSourceMode(input: {
   roomCode: string;
   playerId: string;
-  mode: "public_playlist" | "players_liked" | "anilist_union";
+  mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 }) {
-  return requestJson<{ ok: true; mode: "public_playlist" | "players_liked" | "anilist_union" }>("/quiz/source/mode", {
+  return requestJson<{ ok: true; mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic" }>("/quiz/source/mode", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -651,7 +651,7 @@ export async function setRoomPublicPlaylist(input: {
 }) {
   return requestJson<{
     ok: true;
-    sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+    sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
     categoryQuery: string;
   }>("/quiz/source/public-playlist", {
     method: "POST",

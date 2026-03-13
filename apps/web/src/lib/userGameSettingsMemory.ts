@@ -1,9 +1,11 @@
 import type { RoomContentFilters, RoomDifficultyFilter, RoomState } from "./api";
 
+type SourceMode = "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 type ThemeMode = "op_only" | "ed_only" | "mix";
 type AnswerMode = "mcq_only" | "text_only" | "mixed";
 
 export type RememberedGameSettings = {
+  sourceMode: SourceMode;
   themeMode: ThemeMode;
   difficultyFilter: RoomDifficultyFilter;
   contentFilters: RoomContentFilters;
@@ -17,12 +19,14 @@ export type RememberedGameSettings = {
   };
 };
 
-const STORAGE_KEY = "kwizik:user-game-settings:v1";
+const STORAGE_KEY = "kwizik:user-game-settings:v2";
+const VALID_SOURCE_MODES = new Set<SourceMode>(["public_playlist", "players_liked", "anilist_union", "random_classic"]);
 const VALID_THEME_MODES = new Set<ThemeMode>(["op_only", "ed_only", "mix"]);
 const VALID_DIFFICULTY_FILTERS = new Set<RoomDifficultyFilter>(["all", "easy", "medium", "hard"]);
 const VALID_ANSWER_MODES = new Set<AnswerMode>(["mcq_only", "text_only", "mixed"]);
 
 export const DEFAULT_USER_GAME_SETTINGS: RememberedGameSettings = {
+  sourceMode: "anilist_union",
   themeMode: "mix",
   difficultyFilter: "all",
   contentFilters: {
@@ -73,6 +77,7 @@ export function normalizeRememberedGameSettings(raw: unknown): RememberedGameSet
   const value =
     raw && typeof raw === "object"
       ? (raw as {
+          sourceMode?: unknown;
           themeMode?: unknown;
           difficultyFilter?: unknown;
           contentFilters?: unknown;
@@ -86,6 +91,9 @@ export function normalizeRememberedGameSettings(raw: unknown): RememberedGameSet
           };
         })
       : {};
+  const sourceMode = VALID_SOURCE_MODES.has(value.sourceMode as SourceMode)
+    ? (value.sourceMode as SourceMode)
+    : DEFAULT_USER_GAME_SETTINGS.sourceMode;
   const themeMode = VALID_THEME_MODES.has(value.themeMode as ThemeMode)
     ? (value.themeMode as ThemeMode)
     : DEFAULT_USER_GAME_SETTINGS.themeMode;
@@ -126,6 +134,7 @@ export function normalizeRememberedGameSettings(raw: unknown): RememberedGameSet
       : DEFAULT_USER_GAME_SETTINGS.roundConfig.revealMs;
 
   return {
+    sourceMode,
     themeMode,
     difficultyFilter,
     contentFilters: normalizeContentFilters(value.contentFilters),
@@ -176,9 +185,10 @@ export function isDefaultRememberedGameSettings(settings: RememberedGameSettings
 }
 
 export function roomStateToRememberedGameSettings(
-  state: Pick<RoomState, "sourceConfig" | "answerMode" | "livesMode" | "maxLives" | "roomRoundConfig">,
+  state: Pick<RoomState, "sourceMode" | "sourceConfig" | "answerMode" | "livesMode" | "maxLives" | "roomRoundConfig">,
 ): RememberedGameSettings {
   return normalizeRememberedGameSettings({
+    sourceMode: state.sourceMode,
     themeMode: state.sourceConfig.themeMode,
     difficultyFilter: state.sourceConfig.difficultyFilter,
     contentFilters: state.sourceConfig.contentFilters,

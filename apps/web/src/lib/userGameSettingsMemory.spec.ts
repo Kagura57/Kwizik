@@ -47,10 +47,11 @@ function restoreWindow() {
 
 function buildRoomState(
   overrides: Partial<
-    Pick<RoomState, "sourceConfig" | "answerMode" | "livesMode" | "maxLives" | "roomRoundConfig">
+    Pick<RoomState, "sourceMode" | "sourceConfig" | "answerMode" | "livesMode" | "maxLives" | "roomRoundConfig">
   > = {},
-): Pick<RoomState, "sourceConfig" | "answerMode" | "livesMode" | "maxLives" | "roomRoundConfig"> {
+): Pick<RoomState, "sourceMode" | "sourceConfig" | "answerMode" | "livesMode" | "maxLives" | "roomRoundConfig"> {
   return {
+    sourceMode: overrides.sourceMode ?? "anilist_union",
     sourceConfig: {
       mode: "anilist_union",
       themeMode: "mix",
@@ -83,6 +84,7 @@ describe("user game settings memory", () => {
     stubWindowWithStorage();
 
     persistRememberedGameSettings({
+      sourceMode: "anilist_union",
       themeMode: "ed_only",
       difficultyFilter: "hard",
       contentFilters: {
@@ -100,6 +102,7 @@ describe("user game settings memory", () => {
     });
 
     expect(loadRememberedGameSettings()).toEqual({
+      sourceMode: "anilist_union",
       themeMode: "ed_only",
       difficultyFilter: "hard",
       contentFilters: {
@@ -146,6 +149,7 @@ describe("user game settings memory", () => {
     );
 
     expect(settings).toEqual({
+      sourceMode: "anilist_union",
       themeMode: "op_only",
       difficultyFilter: "medium",
       contentFilters: {
@@ -196,5 +200,36 @@ describe("user game settings memory", () => {
     ).toBe(false);
 
     expect(shouldRestoreRememberedGameSettings(DEFAULT_USER_GAME_SETTINGS, null)).toBe(false);
+  });
+
+  it("includes sourceMode in remembered settings when mapped from room state", () => {
+    const settings = roomStateToRememberedGameSettings(
+      buildRoomState({ sourceMode: "random_classic" }),
+    );
+    expect(settings).toMatchObject({ sourceMode: "random_classic" });
+  });
+
+  it("persists and reloads sourceMode from local storage", () => {
+    stubWindowWithStorage();
+
+    persistRememberedGameSettings({
+      ...DEFAULT_USER_GAME_SETTINGS,
+      sourceMode: "random_classic",
+    });
+
+    expect(loadRememberedGameSettings()).toMatchObject({ sourceMode: "random_classic" });
+  });
+
+  it("triggers restore when sourceMode differs from default", () => {
+    const remembered = normalizeRememberedGameSettings({
+      ...DEFAULT_USER_GAME_SETTINGS,
+      sourceMode: "random_classic",
+    });
+    expect(
+      shouldRestoreRememberedGameSettings(
+        roomStateToRememberedGameSettings(buildRoomState()),
+        remembered,
+      ),
+    ).toBe(true);
   });
 });

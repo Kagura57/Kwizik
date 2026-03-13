@@ -66,7 +66,7 @@ const ANIME_MEDIA_WARMUP_VERIFY_TIMEOUT_MS = 4_000;
 const MEDIA_READY_RETRY_DELAY_MS = 350;
 const MEDIA_READY_RETRY_MAX_ATTEMPTS = 4;
 
-type SourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type SourceMode = "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 type ThemeMode = "op_only" | "ed_only" | "mix";
 type DifficultyFilter = RoomDifficultyFilter;
 type AnswerMode = "mcq_only" | "text_only" | "mixed";
@@ -115,6 +115,7 @@ function hostOnlyMessage(action: string) {
 
 function sourceModeLabel(mode: SourceMode) {
   if (mode === "anilist_union") return "AniList synchronise";
+  if (mode === "random_classic") return "Blindtest classique";
   if (mode === "players_liked") return "Liked Songs joueurs";
   return "Playlist publique";
 }
@@ -414,7 +415,7 @@ function lobbyReadyStatusLabel(
         poolBuild: {
           status: "idle" | "building" | "ready" | "failed";
         };
-        sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+        sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
         sourceConfig: {
           publicPlaylist: {
             sourceQuery: string;
@@ -1359,6 +1360,7 @@ export function RoomPlayPage() {
         }
       : currentRoundConfig;
     return {
+      sourceMode: overrides.sourceMode ?? sourceMode,
       themeMode: overrides.themeMode ?? themeMode,
       difficultyFilter: overrides.difficultyFilter ?? difficultyFilter,
       contentFilters: overrides.contentFilters ?? contentFilters,
@@ -1381,6 +1383,13 @@ export function RoomPlayPage() {
     mutationFn: async (settings: RememberedGameSettings) => {
       if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
 
+      if (settings.sourceMode !== DEFAULT_USER_GAME_SETTINGS.sourceMode) {
+        await setRoomSourceMode({
+          roomCode,
+          playerId: session.playerId,
+          mode: settings.sourceMode,
+        });
+      }
       if (settings.themeMode !== DEFAULT_USER_GAME_SETTINGS.themeMode) {
         await setRoomThemeMode({
           roomCode,
@@ -1471,7 +1480,7 @@ export function RoomPlayPage() {
       return;
     }
     rememberedSettingsRestoreAttemptedRef.current = true;
-    restoreRememberedSettingsMutation.mutate(rememberedSettings);
+    restoreRememberedSettingsMutation.mutate(rememberedSettings!);
   }, [
     currentRoomSettings,
     isHost,
@@ -2898,6 +2907,14 @@ export function RoomPlayPage() {
                     >
                       <strong>AniList synchronise</strong>
                       <span>Union des listes des joueurs connectés</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`source-preset-btn${sourceMode === "random_classic" ? " active" : ""}`}
+                      onClick={() => onSelectSourceMode("random_classic")}
+                    >
+                      <strong>Blindtest aléatoire classique</strong>
+                      <span>Tirage anime global frais à chaque partie</span>
                     </button>
                   </div>
 
