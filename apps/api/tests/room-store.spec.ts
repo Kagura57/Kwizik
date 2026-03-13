@@ -2419,7 +2419,9 @@ describe("RoomStore gameplay progression", () => {
     process.env.DATABASE_URL = "postgres://test";
     process.env.BETTER_AUTH_URL = "https://api.example.test";
     const getRandomAniListAnimeIds = vi.fn().mockResolvedValue([101, 102, 103, 104]);
-    const perUserSpy = vi.spyOn(userAnimeLibraryRepository, "animeIdsForUser").mockResolvedValue([101, 102, 103, 104]);
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
     const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
       rows: makeAniListThemeRows(12),
     } as never);

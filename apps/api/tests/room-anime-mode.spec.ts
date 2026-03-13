@@ -21,6 +21,7 @@ describe("room anime source mode", () => {
     const store = new RoomStore();
     const created = store.createRoom();
     const joined = store.joinRoom(created.roomCode, "Host");
+    expect(joined.status).toBe("ok");
     if (joined.status !== "ok") return;
 
     const result = store.setRoomSourceMode(created.roomCode, joined.value.playerId, "random_classic" as never);
