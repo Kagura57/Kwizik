@@ -25,5 +25,6 @@ describe("room anime source mode", () => {
 
     const result = store.setRoomSourceMode(created.roomCode, joined.value.playerId, "random_classic" as never);
     expect(result).toMatchObject({ status: "ok", mode: "random_classic" });
+    expect(store.roomState(created.roomCode)?.categoryQuery).toBe("anilist:random:classic");
   });
 });
