@@ -2413,6 +2413,51 @@ describe("RoomStore gameplay progression", () => {
     }
   });
 
+  it("starts random_classic without requiring linked AniList players", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const getRandomAniListAnimeIds = vi.fn().mockResolvedValue([101, 102, 103, 104]);
+    const perUserSpy = vi.spyOn(userAnimeLibraryRepository, "animeIdsForUser").mockResolvedValue([101, 102, 103, 104]);
+    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
+      rows: makeAniListThemeRows(12),
+    } as never);
+
+    try {
+      const store = new RoomStore({ getRandomAniListAnimeIds } as never);
+      const created = store.createRoom();
+      const host = store.joinRoom(created.roomCode, "Host");
+      expect(host.status).toBe("ok");
+      if (host.status !== "ok") return;
+
+      const modeSet = store.setRoomSourceMode(created.roomCode, host.value.playerId, "random_classic" as never);
+      expect(modeSet).toMatchObject({ status: "ok", mode: "random_classic" });
+
+      const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+      expect(ready.status).toBe("ok");
+
+      const started = await store.startGame(created.roomCode, host.value.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "random_classic" });
+      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(1);
+      expect(perUserSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
   it("uses a larger AniList candidate draw to reduce repeated easy-mode openings and qcm choices", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;

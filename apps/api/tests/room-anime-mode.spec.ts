@@ -16,4 +16,14 @@ describe("room anime source mode", () => {
 
     expect(result.mode).toBe("anilist_union");
   });
+
+  it("allows host to switch to random_classic mode", () => {
+    const store = new RoomStore();
+    const created = store.createRoom();
+    const joined = store.joinRoom(created.roomCode, "Host");
+    if (joined.status !== "ok") return;
+
+    const result = store.setRoomSourceMode(created.roomCode, joined.value.playerId, "random_classic" as never);
+    expect(result).toMatchObject({ status: "ok", mode: "random_classic" });
+  });
 });
