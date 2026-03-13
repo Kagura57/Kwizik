@@ -1,3 +1,19 @@
+# Blindtest Anime Aleatoire Global
+
+- [x] Explorer le flux existant des modes source, des reglages de room et du demarrage de partie.
+- [x] Clarifier le comportement exact attendu pour le mode blindtest anime aleatoire hors listes utilisateurs.
+- [x] Valider un design minimal et elegant pour le nouveau mode.
+- [x] Ecrire le design dans `docs/plans/2026-03-13-random-anime-blindtest-design.md`.
+- [ ] Ecrire le plan d'implementation dans `docs/plans/2026-03-13-random-anime-blindtest.md`.
+- [ ] Implementer le mode approuve.
+- [ ] Verifier avec tests cibles et revue finale.
+
+## Review
+
+- Design valide: nouveau mode anime aleatoire classique hors bibliotheques AniList des joueurs, avec tirage frais par partie depuis une source distante puis mapping AnimeThemes.
+- Contrainte clef validee: l'aleatoire prime sur tout fallback de pool; aucun pool preconstruit ne doit etre reutilise entre parties pour ce mode.
+- Contrainte produit supplementaire: l'aleatoire doit rester une priorite sur l'ensemble de l'application, y compris pour les tirages AniList existants.
+
 # Gameplay Scrollbar Fix
 
 - [x] Confirm the room gameplay layout pieces that contribute to document scrolling.

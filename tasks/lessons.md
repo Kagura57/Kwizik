@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-03-13
+
+- Quand un utilisateur demande un mode "simplement aleatoire", ne pas supposer que le catalogue deja synchronise en base est acceptable; verifier explicitement s'il attend un tirage depuis une source distante/globalement fraiche plutot qu'un pool local.
+- Pour un mode distant "classique", ne pas proposer un echec utilisateur ou un fallback permanent comme comportement normal; dimensionner le chemin principal pour remplir suffisamment le pool jouable, et n'utiliser le cache que pour accelerer ce meme chemin.
+- Si l'utilisateur dit que l'aleatoire parfait prime sur la robustesse cachee, ne reutiliser aucun pool preconstruit entre parties; garder un tirage frais par partie et limiter le cache aux metadonnees techniques qui n'influencent pas la selection.
+- Quand un utilisateur dit que l'aleatoire est le point clef du blindtest, propager cette contrainte au-dela du nouveau mode: verifier aussi que les autres tirages anime de l'application restent larges, non repetitifs et non biaises par des pools trop petits.
+
 ## 2026-03-12
 
 - When a user reports that a previously fixed display preference still does not work, verify every screen that renders the same data path, not just the player view that was changed first.
@@ -18,3 +25,4 @@
 - For anime MCQ rounds, deduplicate choices by the same canonical anime identity used for answer acceptance, not by the rendered `anime - OP/ED` label, or multiple openings from one series can appear as separate "correct" options.
 - For lives mode, never apply the "stop when one survivor remains" rule to rooms that started effectively solo; otherwise a single-player lives game collapses to `1/1` on the first reveal even before elimination matters.
 - For solo lives mode, distinguish "one active survivor" from "zero active players": a solo room should keep playing while the lone player still has lives, but must end immediately once that player is eliminated.
+- When the user explicitly names a required skill, switch to that skill's workflow immediately and avoid re-asking a requirement the user has already confirmed.
