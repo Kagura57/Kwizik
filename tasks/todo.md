@@ -216,3 +216,75 @@
 - `bun test apps/api/tests/room-store.spec.ts -t "eliminates players in lives mode, excludes spectators from later rounds, and ends early with one survivor"` passed.
 - `bun test apps/api/tests/room-store.spec.ts -t "does not collapse a solo lives-mode game while the player is still alive"` passed.
 - `bun test apps/api/tests/room-store.spec.ts -t "ends a solo lives-mode game when the last player is eliminated"` passed.
+
+# SEO Bilingue Blind Test Anime
+
+- [x] Explorer l'architecture web actuelle, les routes publiques et les signaux SEO existants.
+- [x] Clarifier la priorite SEO dominante avec l'utilisateur.
+- [x] Proposer 2-3 approches SEO compatibles avec la contrainte SPA et recommander la meilleure.
+- [x] Valider le perimetre SEO principal: `/` cible d'acquisition, pages utilitaires/dynamiques hors indexation.
+- [x] Valider la strategie bilingue exacte (FR/EN) pour l'interface et l'indexation.
+- [x] Finaliser le design SEO/i18n cible par route publique.
+- [x] Ecrire le design dans `docs/plans/2026-03-16-seo-bilingual-design.md`.
+- [x] Ecrire le plan d'implementation dans `docs/plans/2026-03-16-seo-bilingual.md`.
+- [x] Implementer les optimisations SEO et i18n retenues.
+- [x] Verifier avec build, tests cibles et revue finale.
+
+## Review
+
+- Design valide: application bilingue complete FR/EN sous `/fr/...` et `/en/...`, avec `/` comme point d'entree neutre et crawlable.
+- SEO cible valide: `/fr/` et `/en/` servent de landing pages principales pour les requetes de blind test anime; les pages utilitaires et dynamiques restent traduites mais hors indexation.
+- Livrables de planification crees:
+  - `docs/plans/2026-03-16-seo-bilingual-design.md`
+  - `docs/plans/2026-03-16-seo-bilingual.md`
+- Implementation livree:
+  - routes localisees sous `/$locale`
+  - page racine neutre `/`
+  - helpers de locale et generation de paths alternatifs
+  - shell, `home`, `join`, `auth` branches sur la locale active
+  - couche SEO client-side avec `title`, `description`, canonical, `hreflang`, robots et JSON-LD
+  - `robots.txt`, `sitemap.xml`, `site.webmanifest` publies dans `apps/web/public`
+  - passe i18n runtime completee pour `settings`, `room/$roomCode/play` et `room/$roomCode/view`, avec harmonisation FR/EN des libelles, toasts et textes gameplay visibles
+- Verification executee:
+  - `bun test apps/web/src/i18n/locale.spec.ts apps/web/src/lib/runtimeOrigin.spec.ts apps/web/src/routes/layout.spec.tsx apps/web/src/routes/routes.spec.tsx apps/web/src/routes/seo.spec.tsx` ✅ PASS
+  - `bun run --cwd apps/web build` ✅ PASS
+  - verification des artefacts `apps/web/dist/robots.txt`, `apps/web/dist/sitemap.xml`, `apps/web/dist/site.webmanifest` ✅
+  - build et tests rerun apres la passe i18n runtime `settings` + gameplay ✅ PASS
+
+# Optimisation Globale Application
+
+- [x] Explorer l'architecture actuelle, les scripts, les flux critiques et l'historique recent.
+- [x] Clarifier la priorite d'optimisation dominante avec l'utilisateur.
+- [x] Proposer 2-3 approches d'optimisation globale avec compromis et recommandation.
+- [x] Valider un design cible d'optimisation par domaine.
+- [x] Ecrire le design dans `docs/plans/2026-03-16-app-optimization-design.md`.
+- [x] Ecrire le plan d'implementation dans `docs/plans/2026-03-16-app-optimization.md`.
+- [x] Implementer les optimisations retenues.
+- [x] Verifier avec mesures, tests cibles et revue finale.
+
+## Review
+
+- Design valide: approche ROI equilibre avec refactors structurels cibles sur les hotspots backend/frontend, sans changer le comportement produit.
+- Documentation ecrite:
+  - `docs/plans/2026-03-16-app-optimization-design.md`
+  - `docs/plans/2026-03-16-app-optimization.md`
+- Backend:
+  - extraction de la projection de snapshot room dans `apps/api/src/services/roomSnapshot.ts`
+  - extraction du builder MCQ / titres anglais dans `apps/api/src/services/roundChoiceBuilder.ts`
+  - `RoomStore` allégé et aligne sur des types room partages minimaux
+- Frontend:
+  - ajout de `apps/web/src/routes/room/$roomCode/useSnapshotRefresh.ts` pour deduper les refreshs snapshot
+  - ajout de `apps/web/src/routes/room/$roomCode/useRoomActionMutation.ts` pour factoriser les mutations room repetitives
+  - `apps/web/src/routes/room/$roomCode/play.tsx` simplifie sur les chemins de succes/refresh
+- Types partages:
+  - ajout de `packages/shared/src/room.ts` et export via `packages/shared/src/index.ts`
+  - `apps/web/src/lib/api.ts` et `apps/api/src/services/roomSnapshot.ts` consomment maintenant les primitives room partagees
+- Verification:
+  - `bun test apps/api/tests/room-store.spec.ts` ✅ PASS (54 tests)
+  - `bun test packages/shared/src apps/web/src/routes apps/web/src/lib` ✅ PASS (27 tests)
+  - `cd apps/web && bun run build` ✅ PASS
+  - `bun run lint` ✅ PASS avec warnings existants/non bloquants; total observe apres refactor: 46 warnings, 0 errors
+- Mesure observable:
+  - build web apres changements: `index` 162.35 kB, `tanstack` 119.73 kB, `vendor` 264.61 kB
+- Risque residuel:
+  - les warnings React hooks / a11y existants dans `play.tsx` et `view.tsx` restent un chantier distinct

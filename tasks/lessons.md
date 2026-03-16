@@ -11,6 +11,10 @@
 - Si l'utilisateur se plaint que les memes animes reapparaissent en bons et mauvais choix, inspecter si les distractors reutilisent des reponses futures; un mode MCQ anime doit privilegier un pool de distractors dedie plutot que recycler les answers des rounds suivants.
 - Quand des choix MCQ anime sont deduplices par identite canonique, ne pas s'appuyer uniquement sur une normalisation ASCII; pour les titres CJK, une normalisation qui vide la chaine fait croire que tous les animes japonais sont identiques et casse la selection des distractors.
 
+## 2026-03-16
+
+- Quand un utilisateur recadre une optimisation SEO vers un besoin de traduction, ne pas continuer sur une simple landing monolingue; requalifier explicitement le chantier en SEO bilingue/i18n avant de proposer l'implementation.
+
 ## 2026-03-12
 
 - When a user reports that a previously fixed display preference still does not work, verify every screen that renders the same data path, not just the player view that was changed first.

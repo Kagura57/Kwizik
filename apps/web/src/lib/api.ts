@@ -1,5 +1,14 @@
 import { logClientEvent } from "./logger";
 import { shouldAllowLoopbackFallbacks } from "./runtimeOrigin";
+import type {
+  RoomAnswerMode,
+  RoomMediaProvider,
+  RoomPhase,
+  RoomSourceMode,
+  RoundChoice,
+  RoundMode,
+} from "../../../../packages/shared/src/room";
+
 const ENV_API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 let preferredApiBaseUrl: string | null = null;
 
@@ -60,18 +69,11 @@ export type RoomContentFilters = {
   decades: number[];
   genres: string[];
 };
-export type RoundChoice = {
-  value: string;
-  titleRomaji: string;
-  titleEnglish: string | null;
-  themeLabel: string;
-};
-
 export type RoomState = {
   roomCode: string;
-  state: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
+  state: RoomPhase;
   round: number;
-  mode: "mcq" | "text" | null;
+  mode: RoundMode | null;
   choices: RoundChoice[] | null;
   serverNowMs: number;
   playerCount: number;
@@ -108,8 +110,8 @@ export type RoomState = {
   isResolvingTracks: boolean;
   poolSize: number;
   categoryQuery: string;
-  sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
-  answerMode: "mcq_only" | "text_only" | "mixed";
+  sourceMode: RoomSourceMode;
+  answerMode: RoomAnswerMode;
   livesMode: boolean;
   maxLives: number;
   roomRoundConfig: {
@@ -118,7 +120,7 @@ export type RoomState = {
     revealMs: number;
   };
   sourceConfig: {
-    mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
+    mode: RoomSourceMode;
     themeMode: "op_only" | "ed_only" | "mix";
     difficultyFilter: RoomDifficultyFilter;
     contentFilters: RoomContentFilters;
@@ -163,13 +165,13 @@ export type RoomState = {
   revealSkipTotalCount: number;
   previewUrl: string | null;
   media: {
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
+    provider: RoomMediaProvider;
     trackId: string;
     sourceUrl: string | null;
     embedUrl: string | null;
   } | null;
   nextMedia: {
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
+    provider: RoomMediaProvider;
     trackId: string;
     sourceUrl: string | null;
     embedUrl: string | null;
@@ -177,7 +179,7 @@ export type RoomState = {
   reveal: {
     round: number;
     trackId: string;
-    provider: "spotify" | "deezer" | "apple-music" | "tidal" | "youtube" | "animethemes";
+    provider: RoomMediaProvider;
     title: string;
     titleRomaji: string | null;
     artist: string;
@@ -185,7 +187,7 @@ export type RoomState = {
     songTitle: string | null;
     songArtists: string[];
     acceptedAnswer: string;
-    mode: "mcq" | "text";
+    mode: RoundMode;
     previewUrl: string | null;
     sourceUrl: string | null;
     embedUrl: string | null;
@@ -222,7 +224,7 @@ export type RoomState = {
 export type RoomResults = {
   roomCode: string;
   categoryQuery: string;
-  state: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
+  state: RoomPhase;
   round: number;
   ranking: Array<{
     rank: number;
@@ -245,14 +247,14 @@ export type RealtimeRoomSnapshot = {
 export type PublicRoomSummary = {
   roomCode: string;
   isPublic: boolean;
-  state: "waiting" | "countdown" | "loading" | "playing" | "reveal" | "leaderboard" | "results";
+  state: RoomPhase;
   round: number;
   totalRounds: number;
   playerCount: number;
   categoryQuery: string;
   createdAtMs: number;
   canJoin: boolean;
-  sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
+  sourceMode: RoomSourceMode;
   playlistName: string | null;
   deadlineMs: number | null;
   serverNowMs: number;

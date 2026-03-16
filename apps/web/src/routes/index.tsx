@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
+import { usePageSeo } from "../i18n/seo";
+import { useCurrentLocale } from "../i18n/useLocale";
 import { createRoom, getPublicRooms, joinRoom } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
@@ -13,16 +15,21 @@ function withRomajiLabel(value: string) {
   return romaji;
 }
 
-function joinErrorMessage(error: unknown) {
-  if (!(error instanceof Error)) return "Impossible de rejoindre cette room.";
-  if (error.message === "ROOM_NOT_JOINABLE") {
-    return "La room est terminée et n’accepte plus de nouveaux joueurs.";
+function joinErrorMessage(error: unknown, locale: "fr" | "en") {
+  if (!(error instanceof Error)) {
+    return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
   }
-  return "Impossible de rejoindre cette room.";
+  if (error.message === "ROOM_NOT_JOINABLE") {
+    return locale === "en"
+      ? "This room is finished and no longer accepts new players."
+      : "La room est terminée et n’accepte plus de nouveaux joueurs.";
+  }
+  return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
 }
 
 export function HomePage() {
   const navigate = useNavigate();
+  const locale = useCurrentLocale();
   const setSession = useGameStore((state) => state.setSession);
   const session = useGameStore((state) => state.session);
   const account = useGameStore((state) => state.account);
@@ -30,6 +37,158 @@ export function HomePage() {
   const [joinDisplayName, setJoinDisplayName] = useState("Player One");
   const [joinRoomCode, setJoinRoomCode] = useState("");
   const [isPublicRoom, setIsPublicRoom] = useState(true);
+  const copy =
+    locale === "en"
+      ? {
+          joinTitle: "Join a room",
+          joinSubtitle: "The first player in a room becomes the lobby host.",
+          roomCode: "Room code",
+          nickname: "Nickname",
+          nicknamePlaceholder: "Your nickname",
+          joining: "Joining...",
+          enterRoom: "Enter the room",
+          createTitle: "Create a room",
+          createSubtitle: "Create a lobby in one click, choose visibility, then launch the game.",
+          syncHint:
+            "Tip: sign in, then add your AniList username in Settings to sync your anime library.",
+          visibility: "Visibility",
+          publicGame: "Public game",
+          publicGameHint: "Visible in the public list",
+          privateGame: "Private game",
+          privateGameHint: "Accessible with the room code",
+          hostHint: "The host configures the AniList mode and themes, then starts when everyone is ready.",
+          creating: "Creating...",
+          createRoom: "Create a room",
+          publicRooms: "Public rooms",
+          players: "players",
+          mode: "Mode",
+          synchronizedAniList: "Synced AniList",
+          anime: "Anime",
+          joinPublicRoom: "Join",
+          closed: "Closed",
+          roomCreated: "Room created.",
+          roomJoined: "Joined room.",
+          createError: "Unable to create the room.",
+          promptNickname: "Choose a nickname to join this room",
+          seoH1: "Anime Blind Test Online for Multiplayer Rooms",
+          seoLead:
+            "Kwizik lets you create a live anime blind test room, challenge friends on openings and endings, and launch the game instantly in your browser.",
+          howItWorksTitle: "How Kwizik works",
+          howItWorksBody:
+            "Create a room, pick your anime source, invite players with a short code, then start a real-time blind test with shared playback and live scoring.",
+          whyTitle: "Why anime fans use Kwizik",
+          whyBody:
+            "Kwizik mixes public rooms, private lobbies, AniList-based playlists, and live multiplayer gameplay for anime quiz nights with friends or communities.",
+          faqTitle: "FAQ",
+          faqQ1: "Can I play an anime blind test with friends online?",
+          faqA1:
+            "Yes. Create a room, share the code, and everyone can join from their browser before the host starts the match.",
+          faqQ2: "Does Kwizik support anime openings and endings?",
+          faqA2:
+            "Yes. Hosts can configure the theme mode and build games around openings, endings, or mixed anime theme rounds.",
+        }
+      : {
+          joinTitle: "Rejoindre une room",
+          joinSubtitle: "Le premier joueur de la room devient host du lobby.",
+          roomCode: "Code room",
+          nickname: "Pseudo",
+          nicknamePlaceholder: "Ton pseudo",
+          joining: "Connexion...",
+          enterRoom: "Entrer dans la room",
+          createTitle: "Créer une room",
+          createSubtitle: "Crée un lobby en un clic, choisis la visibilité, puis lance la partie.",
+          syncHint:
+            "Astuce: connecte-toi puis renseigne ton pseudo AniList dans Settings pour synchroniser ta liste anime.",
+          visibility: "Visibilité",
+          publicGame: "Partie publique",
+          publicGameHint: "Visible dans la liste publique",
+          privateGame: "Partie privée",
+          privateGameHint: "Accessible avec le code room",
+          hostHint: "Le host configure le mode AniList et les themes, puis lance quand tout le monde est pret.",
+          creating: "Création...",
+          createRoom: "Créer une room",
+          publicRooms: "Rooms publiques",
+          players: "joueurs",
+          mode: "Mode",
+          synchronizedAniList: "AniList synchronise",
+          anime: "Anime",
+          joinPublicRoom: "Rejoindre",
+          closed: "Fermée",
+          roomCreated: "Room créée.",
+          roomJoined: "Room rejointe.",
+          createError: "Impossible de créer la room.",
+          promptNickname: "Choisis un pseudo pour rejoindre cette room",
+          seoH1: "Blind Test Anime en ligne pour jouer en multijoueur",
+          seoLead:
+            "Kwizik te permet de créer une room de blind test anime, de défier tes amis sur des openings et endings, puis de lancer la partie directement dans le navigateur.",
+          howItWorksTitle: "Comment fonctionne Kwizik",
+          howItWorksBody:
+            "Crée une room, choisis la source anime, invite les joueurs avec un code court, puis lance un blind test en direct avec lecture synchronisée et score live.",
+          whyTitle: "Pourquoi utiliser Kwizik",
+          whyBody:
+            "Kwizik combine rooms publiques, lobbies privés, playlists AniList et gameplay multijoueur en direct pour organiser facilement un quiz anime entre amis ou en communauté.",
+          faqTitle: "FAQ",
+          faqQ1: "Peut-on jouer a un blind test anime en ligne avec des amis ?",
+          faqA1:
+            "Oui. Cree une room, partage le code, puis chacun peut rejoindre depuis son navigateur avant que le host lance la partie.",
+          faqQ2: "Kwizik gere-t-il les openings et endings d'anime ?",
+          faqA2:
+            "Oui. Le host peut configurer le mode de themes pour jouer sur les openings, les endings, ou un mix des deux.",
+        };
+  usePageSeo({
+    title:
+      locale === "en"
+        ? "Anime Blind Test Online Multiplayer | Kwizik"
+        : "Blind Test Anime en ligne multijoueur | Kwizik",
+    description:
+      locale === "en"
+        ? "Create an anime blind test room online, challenge friends on openings and endings, and play live with synchronized multiplayer scoring."
+        : "Cree une room de blind test anime en ligne, defie tes amis sur des openings et endings, puis joue en multijoueur avec score en direct.",
+    locale,
+    path: "/",
+    jsonLd: [
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        name: "Kwizik",
+        url: locale === "en" ? "https://kwizik.app/en" : "https://kwizik.app/fr",
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        name: "Kwizik",
+        applicationCategory: "GameApplication",
+        operatingSystem: "Web",
+        inLanguage: locale,
+        description:
+          locale === "en"
+            ? "Multiplayer anime blind test rooms in the browser."
+            : "Rooms de blind test anime multijoueur dans le navigateur.",
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        mainEntity: [
+          {
+            "@type": "Question",
+            name: copy.faqQ1,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: copy.faqA1,
+            },
+          },
+          {
+            "@type": "Question",
+            name: copy.faqQ2,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: copy.faqA2,
+            },
+          },
+        ],
+      },
+    ],
+  });
 
   const publicRoomsQuery = useQuery({
     queryKey: ["public-rooms"],
@@ -54,7 +213,7 @@ export function HomePage() {
       };
     },
     onSuccess: (result) => {
-      notify.success("Room créée.");
+      notify.success(copy.roomCreated);
       setSession({
         roomCode: result.roomCode,
         playerId: result.playerId,
@@ -62,12 +221,12 @@ export function HomePage() {
         categoryQuery: "",
       });
       navigate({
-        to: "/room/$roomCode/play",
-        params: { roomCode: result.roomCode },
+        to: "/$locale/room/$roomCode/play",
+        params: { locale, roomCode: result.roomCode },
       });
     },
     onError: () => {
-      notify.error("Impossible de créer la room.", {
+      notify.error(copy.createError, {
         key: "room:create:error",
       });
     },
@@ -84,7 +243,7 @@ export function HomePage() {
       const knownRoom = (publicRoomsQuery.data?.rooms ?? []).find(
         (room) => room.roomCode === normalizedCode,
       );
-      notify.success("Room rejointe.");
+      notify.success(copy.roomJoined);
       setSession({
         roomCode: normalizedCode,
         playerId: result.playerId,
@@ -93,12 +252,12 @@ export function HomePage() {
       });
 
       navigate({
-        to: "/room/$roomCode/play",
-        params: { roomCode: normalizedCode },
+        to: "/$locale/room/$roomCode/play",
+        params: { locale, roomCode: normalizedCode },
       });
     },
     onError: (error) => {
-      notify.error(joinErrorMessage(error), {
+      notify.error(joinErrorMessage(error, locale), {
         key: "room:join:error",
       });
     },
@@ -138,7 +297,7 @@ export function HomePage() {
 
     if (!displayName) {
       const prompted = window.prompt(
-        "Choisis un pseudo pour rejoindre cette room",
+        copy.promptNickname,
         suggestedFromInputs || "Player One",
       );
       if (!prompted || prompted.trim().length <= 0) return;
@@ -158,12 +317,12 @@ export function HomePage() {
     <>
       <section className="home-grid home-grid-balanced home-top-grid">
         <article className="panel-card">
-          <h2 className="panel-title">Rejoindre une room</h2>
-          <p className="panel-copy">Le premier joueur de la room devient host du lobby.</p>
+          <h2 className="panel-title">{copy.joinTitle}</h2>
+          <p className="panel-copy">{copy.joinSubtitle}</p>
 
           <form className="panel-form" onSubmit={onJoin}>
             <label>
-              <span>Code room</span>
+              <span>{copy.roomCode}</span>
               <input
                 value={joinRoomCode}
                 onChange={(event) => setJoinRoomCode(event.currentTarget.value)}
@@ -173,12 +332,12 @@ export function HomePage() {
             </label>
 
             <label>
-              <span>Pseudo</span>
+              <span>{copy.nickname}</span>
               <input
                 value={joinDisplayName}
                 onChange={(event) => setJoinDisplayName(event.currentTarget.value)}
                 maxLength={24}
-                placeholder="Ton pseudo"
+                placeholder={copy.nicknamePlaceholder}
               />
             </label>
 
@@ -187,60 +346,50 @@ export function HomePage() {
               type="submit"
               disabled={joinMutation.isPending || createRoomMutation.isPending}
             >
-              {joinMutation.isPending ? "Connexion..." : "Entrer dans la room"}
+              {joinMutation.isPending ? copy.joining : copy.enterRoom}
             </button>
           </form>
         </article>
 
         <article className="panel-card">
-          <h2 className="panel-title">Créer une room</h2>
-          <p className="panel-copy">
-            Crée un lobby en un clic, choisis la visibilité, puis lance la partie.
-          </p>
-          {!account.userId && (
-            <p className="status">
-              Astuce: connecte-toi puis renseigne ton pseudo AniList dans Settings pour synchroniser
-              ta liste anime.
-            </p>
-          )}
+          <h2 className="panel-title">{copy.createTitle}</h2>
+          <p className="panel-copy">{copy.createSubtitle}</p>
+          {!account.userId && <p className="status">{copy.syncHint}</p>}
 
           <div className="panel-form">
             <label>
-              <span>Pseudo</span>
+              <span>{copy.nickname}</span>
               <input
                 value={createDisplayName}
                 onChange={(event) => setCreateDisplayName(event.currentTarget.value)}
                 maxLength={24}
-                placeholder="Ton pseudo"
+                placeholder={copy.nicknamePlaceholder}
               />
             </label>
 
             <div className="field-block">
-              <span className="field-label">Visibilité</span>
+              <span className="field-label">{copy.visibility}</span>
               <div className="source-preset-grid">
                 <button
                   type="button"
                   className={`source-preset-btn${isPublicRoom ? " active" : ""}`}
                   onClick={() => setIsPublicRoom(true)}
                 >
-                  <strong>Partie publique</strong>
-                  <span>Visible dans la liste publique</span>
+                  <strong>{copy.publicGame}</strong>
+                  <span>{copy.publicGameHint}</span>
                 </button>
                 <button
                   type="button"
                   className={`source-preset-btn${!isPublicRoom ? " active" : ""}`}
                   onClick={() => setIsPublicRoom(false)}
                 >
-                  <strong>Partie privée</strong>
-                  <span>Accessible avec le code room</span>
+                  <strong>{copy.privateGame}</strong>
+                  <span>{copy.privateGameHint}</span>
                 </button>
               </div>
             </div>
 
-            <p className="status">
-              Le host configure le mode AniList et les themes, puis lance quand tout le monde est
-              pret.
-            </p>
+            <p className="status">{copy.hostHint}</p>
 
             <button
               id="create-room"
@@ -249,7 +398,7 @@ export function HomePage() {
               onClick={onCreate}
               disabled={createRoomMutation.isPending || joinMutation.isPending}
             >
-              {createRoomMutation.isPending ? "Création..." : "Créer une room"}
+              {createRoomMutation.isPending ? copy.creating : copy.createRoom}
             </button>
           </div>
         </article>
@@ -257,17 +406,20 @@ export function HomePage() {
       <section className="single-panel">
         {(publicRoomsQuery.data?.rooms ?? []).length > 0 && (
           <article className="panel-card room-list-card">
-            <h3 className="panel-title">Rooms publiques</h3>
+            <h3 className="panel-title">{copy.publicRooms}</h3>
             <ul className="public-room-list">
               {(publicRoomsQuery.data?.rooms ?? []).map((room) => (
                 <li key={room.roomCode}>
                   <div>
                     <strong>{room.roomCode}</strong>
                     <p>
-                      {room.state} · {room.playerCount} joueurs
+                      {room.state} · {room.playerCount} {copy.players}
                     </p>
                     <p>
-                      Mode: {room.sourceMode === "anilist_union" ? "AniList synchronise" : "Anime"}
+                      {copy.mode}:{" "}
+                      {room.sourceMode === "anilist_union"
+                        ? copy.synchronizedAniList
+                        : copy.anime}
                       {room.sourceMode === "public_playlist" && room.playlistName
                         ? ` · ${withRomajiLabel(room.playlistName)}`
                         : ""}
@@ -279,13 +431,42 @@ export function HomePage() {
                     disabled={!room.canJoin || joinMutation.isPending}
                     onClick={() => onJoinPublicRoom(room.roomCode)}
                   >
-                    {room.canJoin ? "Rejoindre" : "Fermée"}
+                    {room.canJoin ? copy.joinPublicRoom : copy.closed}
                   </button>
                 </li>
               ))}
             </ul>
           </article>
         )}
+      </section>
+      <section className="single-panel">
+        <article className="panel-card">
+          <h1 className="panel-title">{copy.seoH1}</h1>
+          <p className="panel-copy">{copy.seoLead}</p>
+          <div className="panel-form">
+            <div className="field-block">
+              <h2 className="panel-title">{copy.howItWorksTitle}</h2>
+              <p className="panel-copy">{copy.howItWorksBody}</p>
+            </div>
+            <div className="field-block">
+              <h2 className="panel-title">{copy.whyTitle}</h2>
+              <p className="panel-copy">{copy.whyBody}</p>
+            </div>
+            <div className="field-block">
+              <h2 className="panel-title">{copy.faqTitle}</h2>
+              <p className="status">
+                <strong>{copy.faqQ1}</strong>
+                <br />
+                {copy.faqA1}
+              </p>
+              <p className="status">
+                <strong>{copy.faqQ2}</strong>
+                <br />
+                {copy.faqA2}
+              </p>
+            </div>
+          </div>
+        </article>
       </section>
     </>
   );
