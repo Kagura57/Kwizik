@@ -344,6 +344,27 @@ function chatErrorMessage(error: unknown, locale: "fr" | "en") {
   }
 }
 
+function roomPhaseLabel(phase: string | undefined, locale: "fr" | "en") {
+  switch (phase) {
+    case "waiting":
+      return locale === "en" ? "Lobby" : "Lobby";
+    case "countdown":
+      return locale === "en" ? "Countdown" : "Compte a rebours";
+    case "loading":
+      return locale === "en" ? "Loading" : "Chargement";
+    case "playing":
+      return locale === "en" ? "Live round" : "Manche live";
+    case "reveal":
+      return locale === "en" ? "Reveal" : "Reveal";
+    case "leaderboard":
+      return locale === "en" ? "Leaderboard" : "Classement";
+    case "results":
+      return locale === "en" ? "Results" : "Resultats";
+    default:
+      return locale === "en" ? "Room" : "Room";
+  }
+}
+
 function answerErrorMessage(error: unknown, locale: "fr" | "en") {
   switch (errorCode(error)) {
     case "ANSWER_NOT_ACCEPTED":
@@ -566,6 +587,26 @@ export function RoomPlayPage() {
     locale === "en"
       ? {
           liveLeaderboard: "Live leaderboard",
+          controlRoomKicker: "Control room",
+          controlRoomTitle: "Shape the next match before the music starts",
+          controlRoomBody:
+            "The lobby is where the host defines the anime source, the pace, and the answer rules while players get ready.",
+          liveArenaKicker: "Live arena",
+          liveArenaTitle: "Stay locked on the live round",
+          liveArenaBody:
+            "The media stage stays central, the leaderboard stays readable, and the room rails stay secondary.",
+          roomSnapshot: "Room snapshot",
+          playersPanel: "Players and ready status",
+          startZone: "Ready check and launch",
+          phaseLabel: "Phase",
+          startZoneBody:
+            "This is the final gate before the round starts. Everyone readies here, then the host launches the game.",
+          sourceGroup: "Source and themes",
+          sourceGroupBody: "Choose where the anime pool comes from and how openings and endings should appear.",
+          filterGroup: "Difficulty and filters",
+          filterGroupBody: "Tighten the AniList pool with popularity, decade, and genre filters.",
+          rulesGroup: "Pace and answer rules",
+          rulesGroupBody: "Set lives, rounds, timings, and the answer format players will use.",
           round: "Round",
           room: "Room",
           noAnswer: "No answer",
@@ -687,6 +728,26 @@ export function RoomPlayPage() {
         }
       : {
           liveLeaderboard: "Classement live",
+          controlRoomKicker: "Salle de controle",
+          controlRoomTitle: "Prepare la prochaine partie avant que la musique parte",
+          controlRoomBody:
+            "Le lobby sert a definir la source anime, le rythme et les regles de reponse pendant que les joueurs se preparent.",
+          liveArenaKicker: "Arena live",
+          liveArenaTitle: "Reste concentre sur la manche live",
+          liveArenaBody:
+            "La scene media reste prioritaire, le classement reste lisible, et les panneaux lateraux restent secondaires.",
+          roomSnapshot: "Resume de la room",
+          playersPanel: "Joueurs et statut de pret",
+          startZone: "Validation et lancement",
+          phaseLabel: "Phase",
+          startZoneBody:
+            "C'est la derniere zone avant le debut. Tout le monde se prepare ici, puis le host lance la partie.",
+          sourceGroup: "Source et themes",
+          sourceGroupBody: "Choisis l'origine du pool anime et la facon dont openings et endings apparaissent.",
+          filterGroup: "Difficulte et filtres",
+          filterGroupBody: "Affine le pool AniList avec popularite, decennies et genres.",
+          rulesGroup: "Rythme et regles de reponse",
+          rulesGroupBody: "Definis les vies, le nombre de rounds, les timings et le format de reponse.",
           round: "Manche",
           room: "Room",
           noAnswer: "Pas de réponse",
@@ -2100,6 +2161,7 @@ export function RoomPlayPage() {
     effectivePhase !== "loading" &&
     effectivePhase !== "playing" &&
     state?.state !== "results";
+  const isRevealFocused = revealVideoActive && state?.state === "reveal";
   const isResults = state?.state === "results";
   const isSpectating = Boolean(state?.livesMode && currentPlayer?.isEliminated);
   const hasServerLockedGuess =
@@ -2113,6 +2175,7 @@ export function RoomPlayPage() {
     state?.mode === "text" &&
     (isSpectating || hasServerLockedGuess || (submittedText !== null && submittedText.round === state?.round));
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
+  const phaseLabel = roomPhaseLabel(state?.state, locale);
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
   const hasLockedGuessVote =
     effectivePhase === "playing" &&
@@ -3065,10 +3128,68 @@ export function RoomPlayPage() {
 
   return (
     <section className="blindtest-stage">
-      <article className={`stage-main arena-layout${isResults ? " results-fullscreen" : ""}`}>
+      {isWaitingLobby ? (
+        <section className="room-scene-header lobby">
+          <div className="room-scene-copy">
+            <p className="kicker">{copy.controlRoomKicker}</p>
+            <h1 className="room-scene-title">{copy.controlRoomTitle}</h1>
+            <p className="panel-copy">{copy.controlRoomBody}</p>
+          </div>
+          <div className="room-scene-stats">
+            <div className="room-scene-stat">
+              <span>{copy.room}</span>
+              <strong>{roomCode}</strong>
+            </div>
+            <div className="room-scene-stat">
+              <span>{copy.round}</span>
+              <strong>{roundLabel}</strong>
+            </div>
+            <div className="room-scene-stat">
+              <span>{copy.playersReady}</span>
+              <strong>
+                {state?.readyCount ?? 0}/{state?.players.length ?? 0}
+              </strong>
+            </div>
+            <div className="room-scene-stat">
+              <span>{copy.phaseLabel}</span>
+              <strong>{phaseLabel}</strong>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className={`live-status-bar${isRevealFocused ? " reveal-focus" : ""}`}>
+          <div className="live-status-stats">
+            <div className="room-scene-stat">
+              <span>{copy.room}</span>
+              <strong>{roomCode}</strong>
+            </div>
+            <div className="room-scene-stat">
+              <span>{copy.round}</span>
+              <strong>{roundLabel}</strong>
+            </div>
+            <div className="room-scene-stat">
+              <span>{copy.playersReady}</span>
+              <strong>
+                {state?.readyCount ?? 0}/{state?.players.length ?? 0}
+              </strong>
+            </div>
+            <div className="room-scene-stat">
+              <span>{copy.phaseLabel}</span>
+              <strong>{phaseLabel}</strong>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <article
+        className={`stage-main arena-layout${isResults ? " results-fullscreen" : ""}${isRevealFocused ? " reveal-focus" : ""}`}
+      >
         {!isResults && (
-          <aside className="arena-side leaderboard-side">
-            <h2 className="side-title">{copy.liveLeaderboard}</h2>
+          <aside className="arena-side leaderboard-side room-rail">
+            <div className="room-rail-head">
+              <p className="kicker">{copy.liveLeaderboard}</p>
+              <h2 className="side-title">{copy.liveLeaderboard}</h2>
+            </div>
             {state?.leaderboard && state.leaderboard.length > 0 ? (
               <ol className="leaderboard-list compact">
                 {state.leaderboard.map((entry) => (
@@ -3130,21 +3251,22 @@ export function RoomPlayPage() {
           </aside>
         )}
 
-        <div className={`gameplay-center${isResults ? " results-compact" : ""}`}>
+        <div
+          className={`gameplay-center${isResults ? " results-compact" : ""}${isRevealFocused ? " reveal-focus" : ""}`}
+        >
           {!isResults && (
             <>
-              <div className="round-strip">
-                <span>{copy.room} {roomCode}</span>
-                <strong>{copy.round} {roundLabel}</strong>
-                {state?.livesMode && currentPlayer && (
+              {state?.livesMode && currentPlayer && (
+                <div className="round-strip room-round-strip room-round-strip-lives-only">
+                  <span>{copy.livesMode}</span>
                   <em className={`round-strip-lives${currentPlayer.isEliminated ? " eliminated" : ""}`}>
                     {renderLivesHearts(currentPlayer.lives, state.maxLives)}
                   </em>
-                )}
-              </div>
+                </div>
+              )}
 
               <div
-                className={`sound-visual media-shell${revealVideoActive ? " reveal-active" : ""}`}
+                className={`sound-visual media-shell${revealVideoActive ? " reveal-active" : ""}${isRevealFocused ? " reveal-focus" : ""}`}
               >
                 {activeAnimeVideoSource && (
                   <video
@@ -3219,7 +3341,6 @@ export function RoomPlayPage() {
 
           {state?.state === "waiting" && (
             <div className="waiting-box">
-              <h2>{copy.waitingTitle}</h2>
               {(isResolvingTracks || isPlayersLikedPoolBuilding) && (
                 <div className="resolving-tracks-banner" role="status" aria-live="polite">
                   <span className="resolving-tracks-spinner" aria-hidden="true" />
@@ -3230,356 +3351,405 @@ export function RoomPlayPage() {
                 </div>
               )}
 
-              {isHost ? (
-                <div className="field-block">
-                  <span className="field-label">{copy.sourceModeHost}</span>
-                  <div className="source-preset-grid">
-                    <button
-                      type="button"
-                      className={`source-preset-btn${sourceMode === "anilist_union" ? " active" : ""}`}
-                      onClick={() => onSelectSourceMode("anilist_union")}
-                    >
-                      <strong>{copy.sourceAniListTitle}</strong>
-                      <span>{copy.sourceAniListBody}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`source-preset-btn${sourceMode === "random_classic" ? " active" : ""}`}
-                      onClick={() => onSelectSourceMode("random_classic")}
-                    >
-                      <strong>{copy.sourceRandomTitle}</strong>
-                      <span>{copy.sourceRandomBody}</span>
-                    </button>
-                  </div>
+              <div className="lobby-shell">
+                <div className="lobby-main-column">
+                  {isHost ? (
+                    <div className="lobby-control-grid">
+                      <section className="lobby-group-card">
+                        <div className="lobby-group-head">
+                          <p className="kicker">{copy.sourceGroup}</p>
+                          <h3>{copy.sourceGroup}</h3>
+                          <p className="panel-copy">{copy.sourceGroupBody}</p>
+                        </div>
+                        <div className="field-block">
+                          <span className="field-label">{copy.sourceModeHost}</span>
+                          <div className="source-preset-grid">
+                            <button
+                              type="button"
+                              className={`source-preset-btn${sourceMode === "anilist_union" ? " active" : ""}`}
+                              onClick={() => onSelectSourceMode("anilist_union")}
+                            >
+                              <strong>{copy.sourceAniListTitle}</strong>
+                              <span>{copy.sourceAniListBody}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${sourceMode === "random_classic" ? " active" : ""}`}
+                              onClick={() => onSelectSourceMode("random_classic")}
+                            >
+                              <strong>{copy.sourceRandomTitle}</strong>
+                              <span>{copy.sourceRandomBody}</span>
+                            </button>
+                          </div>
+                        </div>
 
-                  {sourceMode === "anilist_union" && (
-                    <div className="panel-form">
-                      <p className="status">{copy.sourceAniListHint}</p>
+                        {sourceMode === "anilist_union" && (
+                          <div className="panel-form">
+                            <p className="status">{copy.sourceAniListHint}</p>
+                          </div>
+                        )}
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.themeMode}</span>
+                          <div className="source-preset-grid">
+                            <button
+                              type="button"
+                              className={`source-preset-btn${themeMode === "op_only" ? " active" : ""}`}
+                              onClick={() => onSelectThemeMode("op_only")}
+                            >
+                              <strong>{copy.openingsShort}</strong>
+                              <span>{copy.openingsOnly}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${themeMode === "ed_only" ? " active" : ""}`}
+                              onClick={() => onSelectThemeMode("ed_only")}
+                            >
+                              <strong>{copy.endingsShort}</strong>
+                              <span>{copy.endingsOnly}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${themeMode === "mix" ? " active" : ""}`}
+                              onClick={() => onSelectThemeMode("mix")}
+                            >
+                              <strong>{copy.mixed}</strong>
+                              <span>{copy.openingsAndEndings}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </section>
+
+                      <section className="lobby-group-card">
+                        <div className="lobby-group-head">
+                          <p className="kicker">{copy.filterGroup}</p>
+                          <h3>{copy.filterGroup}</h3>
+                          <p className="panel-copy">{copy.filterGroupBody}</p>
+                        </div>
+                        <div className="field-block">
+                          <span className="field-label">{copy.aniListDifficulty}</span>
+                          <div className="source-preset-grid source-preset-grid-four">
+                            <button
+                              type="button"
+                              className={`source-preset-btn${difficultyFilter === "easy" ? " active" : ""}`}
+                              onClick={() => onSelectDifficultyFilter("easy")}
+                            >
+                              <strong>{copy.easy}</strong>
+                              <span>{copy.easyHint}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${difficultyFilter === "medium" ? " active" : ""}`}
+                              onClick={() => onSelectDifficultyFilter("medium")}
+                            >
+                              <strong>{copy.medium}</strong>
+                              <span>{copy.mediumHint}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${difficultyFilter === "hard" ? " active" : ""}`}
+                              onClick={() => onSelectDifficultyFilter("hard")}
+                            >
+                              <strong>{copy.hard}</strong>
+                              <span>{copy.hardHint}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${difficultyFilter === "all" ? " active" : ""}`}
+                              onClick={() => onSelectDifficultyFilter("all")}
+                            >
+                              <strong>{copy.all}</strong>
+                              <span>{copy.allHint}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.decades}</span>
+                          <div className="source-preset-grid source-preset-grid-four">
+                            {CONTENT_FILTER_DECADES.map((entry) => (
+                              <button
+                                key={entry.start}
+                                type="button"
+                                className={`source-preset-btn${contentFilters.decades.includes(entry.start) ? " active" : ""}`}
+                                onClick={() => onToggleContentDecade(entry.start)}
+                              >
+                                <strong>{entry.label}</strong>
+                                <span>{entry.start}-{entry.start + 9}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.genres}</span>
+                          <div className="source-preset-grid source-preset-grid-three">
+                            {CONTENT_FILTER_GENRES.map((genre) => (
+                              <button
+                                key={genre}
+                                type="button"
+                                className={`source-preset-btn${contentFilters.genres.includes(genre) ? " active" : ""}`}
+                                onClick={() => onToggleContentGenre(genre)}
+                              >
+                                <strong>{genre}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </section>
+
+                      <section className="lobby-group-card">
+                        <div className="lobby-group-head">
+                          <p className="kicker">{copy.rulesGroup}</p>
+                          <h3>{copy.rulesGroup}</h3>
+                          <p className="panel-copy">{copy.rulesGroupBody}</p>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.livesMode}</span>
+                          <div className="source-preset-grid source-preset-grid-five">
+                            {LIVES_PRESETS.map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                className={`source-preset-btn${(preset === 0 ? !livesMode : livesMode && maxLives === preset) ? " active" : ""}`}
+                                onClick={() => onSelectLivesPreset(preset)}
+                              >
+                                <strong>{livesPresetLabel(preset, locale)}</strong>
+                                <span>{preset > 0 ? copy.eliminationAtZero : copy.classicScore}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.rounds}</span>
+                          <div className="source-preset-grid">
+                            {[5, 10, 15, 20].map((n) => (
+                              <button
+                                key={n}
+                                type="button"
+                                className={`source-preset-btn${maxRounds === n ? " active" : ""}`}
+                                onClick={() => onSelectMaxRounds(n)}
+                              >
+                                <strong>{n}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.guessDuration}</span>
+                          <div className="source-preset-grid">
+                            {([
+                              [10_000, "10s"],
+                              [15_000, "15s"],
+                              [20_000, "20s"],
+                              [30_000, "30s"],
+                            ] as const).map(([ms, label]) => (
+                              <button
+                                key={ms}
+                                type="button"
+                                className={`source-preset-btn${playingMs === ms ? " active" : ""}`}
+                                onClick={() => onSelectPlayingMs(ms)}
+                              >
+                                <strong>{label}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.revealDuration}</span>
+                          <div className="source-preset-grid">
+                            {([
+                              [5_000, "5s"],
+                              [10_000, "10s"],
+                              [15_000, "15s"],
+                              [20_000, "20s"],
+                            ] as const).map(([ms, label]) => (
+                              <button
+                                key={ms}
+                                type="button"
+                                className={`source-preset-btn${revealMs === ms ? " active" : ""}`}
+                                onClick={() => onSelectRevealMs(ms)}
+                              >
+                                <strong>{label}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="field-block">
+                          <span className="field-label">{copy.answerMode}</span>
+                          <div className="source-preset-grid">
+                            <button
+                              type="button"
+                              className={`source-preset-btn${answerMode === "mcq_only" ? " active" : ""}`}
+                              onClick={() => onSelectAnswerMode("mcq_only")}
+                            >
+                              <strong>{copy.mcq}</strong>
+                              <span>{copy.mcqOnly}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${answerMode === "text_only" ? " active" : ""}`}
+                              onClick={() => onSelectAnswerMode("text_only")}
+                            >
+                              <strong>{copy.text}</strong>
+                              <span>{copy.textOnly}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`source-preset-btn${answerMode === "mixed" ? " active" : ""}`}
+                              onClick={() => onSelectAnswerMode("mixed")}
+                            >
+                              <strong>{copy.mixed}</strong>
+                              <span>{copy.mixedHint}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </section>
+                    </div>
+                  ) : (
+                    <div className="lobby-group-card lobby-passive-card">
+                      <p className="status">{copy.hostOnlyConfig}</p>
                     </div>
                   )}
 
-                  <div className="field-block">
-                    <span className="field-label">{copy.themeMode}</span>
-                    <div className="source-preset-grid">
-                      <button
-                        type="button"
-                        className={`source-preset-btn${themeMode === "op_only" ? " active" : ""}`}
-                        onClick={() => onSelectThemeMode("op_only")}
-                      >
-                        <strong>{copy.openingsShort}</strong>
-                        <span>{copy.openingsOnly}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${themeMode === "ed_only" ? " active" : ""}`}
-                        onClick={() => onSelectThemeMode("ed_only")}
-                      >
-                        <strong>{copy.endingsShort}</strong>
-                        <span>{copy.endingsOnly}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${themeMode === "mix" ? " active" : ""}`}
-                        onClick={() => onSelectThemeMode("mix")}
-                      >
-                        <strong>{copy.mixed}</strong>
-                        <span>{copy.openingsAndEndings}</span>
-                      </button>
+                  <section className="lobby-launch-card">
+                    <div className="lobby-group-head">
+                      <p className="kicker">{copy.startZone}</p>
+                      <h3>{copy.startZone}</h3>
+                      <p className="panel-copy">{copy.startZoneBody}</p>
                     </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.aniListDifficulty}</span>
-                    <div className="source-preset-grid source-preset-grid-four">
+                    <div className="waiting-actions">
                       <button
+                        className={`ghost-btn${currentPlayer?.isReady ? " selected" : ""}`}
                         type="button"
-                        className={`source-preset-btn${difficultyFilter === "easy" ? " active" : ""}`}
-                        onClick={() => onSelectDifficultyFilter("easy")}
+                        disabled={!hasActivePlayerSeat || readyMutation.isPending || isResolvingTracks}
+                        onClick={() => {
+                          if (!currentPlayer) return;
+                          readyMutation.mutate(!currentPlayer.isReady);
+                        }}
                       >
-                        <strong>{copy.easy}</strong>
-                        <span>{copy.easyHint}</span>
+                        {currentPlayer?.isReady ? copy.readyToggleOff : copy.readyToggleOn}
                       </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${difficultyFilter === "medium" ? " active" : ""}`}
-                        onClick={() => onSelectDifficultyFilter("medium")}
-                      >
-                        <strong>{copy.medium}</strong>
-                        <span>{copy.mediumHint}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${difficultyFilter === "hard" ? " active" : ""}`}
-                        onClick={() => onSelectDifficultyFilter("hard")}
-                      >
-                        <strong>{copy.hard}</strong>
-                        <span>{copy.hardHint}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${difficultyFilter === "all" ? " active" : ""}`}
-                        onClick={() => onSelectDifficultyFilter("all")}
-                      >
-                        <strong>{copy.all}</strong>
-                        <span>{copy.allHint}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.decades}</span>
-                    <div className="source-preset-grid source-preset-grid-four">
-                      {CONTENT_FILTER_DECADES.map((entry) => (
+                      {isHost && (
                         <button
-                          key={entry.start}
-                          type="button"
-                          className={`source-preset-btn${contentFilters.decades.includes(entry.start) ? " active" : ""}`}
-                          onClick={() => onToggleContentDecade(entry.start)}
+                          className="solid-btn"
+                          onClick={() => startMutation.mutate()}
+                          disabled={
+                            startMutation.isPending ||
+                            startRetryRemainingMs > 0 ||
+                            !state.canStart ||
+                            isResolvingTracks ||
+                            isPlayersLikedPoolBuilding
+                          }
                         >
-                          <strong>{entry.label}</strong>
-                          <span>{entry.start}-{entry.start + 9}</span>
+                          {startMutation.isPending ? copy.starting : copy.startGame}
                         </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.genres}</span>
-                    <div className="source-preset-grid source-preset-grid-three">
-                      {CONTENT_FILTER_GENRES.map((genre) => (
-                        <button
-                          key={genre}
-                          type="button"
-                          className={`source-preset-btn${contentFilters.genres.includes(genre) ? " active" : ""}`}
-                          onClick={() => onToggleContentGenre(genre)}
-                        >
-                          <strong>{genre}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.livesMode}</span>
-                    <div className="source-preset-grid source-preset-grid-five">
-                      {LIVES_PRESETS.map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          className={`source-preset-btn${(preset === 0 ? !livesMode : livesMode && maxLives === preset) ? " active" : ""}`}
-                          onClick={() => onSelectLivesPreset(preset)}
-                        >
-                          <strong>{livesPresetLabel(preset, locale)}</strong>
-                          <span>
-                            {preset > 0 ? copy.eliminationAtZero : copy.classicScore}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.rounds}</span>
-                    <div className="source-preset-grid">
-                      {[5, 10, 15, 20].map((n) => (
-                        <button
-                          key={n}
-                          type="button"
-                          className={`source-preset-btn${maxRounds === n ? " active" : ""}`}
-                          onClick={() => onSelectMaxRounds(n)}
-                        >
-                          <strong>{n}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.guessDuration}</span>
-                    <div className="source-preset-grid">
-                      {([
-                        [10_000, "10s"],
-                        [15_000, "15s"],
-                        [20_000, "20s"],
-                        [30_000, "30s"],
-                      ] as const).map(([ms, label]) => (
-                        <button
-                          key={ms}
-                          type="button"
-                          className={`source-preset-btn${playingMs === ms ? " active" : ""}`}
-                          onClick={() => onSelectPlayingMs(ms)}
-                        >
-                          <strong>{label}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.revealDuration}</span>
-                    <div className="source-preset-grid">
-                      {([
-                        [5_000, "5s"],
-                        [10_000, "10s"],
-                        [15_000, "15s"],
-                        [20_000, "20s"],
-                      ] as const).map(([ms, label]) => (
-                        <button
-                          key={ms}
-                          type="button"
-                          className={`source-preset-btn${revealMs === ms ? " active" : ""}`}
-                          onClick={() => onSelectRevealMs(ms)}
-                        >
-                          <strong>{label}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="field-block">
-                    <span className="field-label">{copy.answerMode}</span>
-                    <div className="source-preset-grid">
-                      <button
-                        type="button"
-                        className={`source-preset-btn${answerMode === "mcq_only" ? " active" : ""}`}
-                        onClick={() => onSelectAnswerMode("mcq_only")}
-                      >
-                        <strong>{copy.mcq}</strong>
-                        <span>{copy.mcqOnly}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${answerMode === "text_only" ? " active" : ""}`}
-                        onClick={() => onSelectAnswerMode("text_only")}
-                      >
-                        <strong>{copy.text}</strong>
-                        <span>{copy.textOnly}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className={`source-preset-btn${answerMode === "mixed" ? " active" : ""}`}
-                        onClick={() => onSelectAnswerMode("mixed")}
-                      >
-                        <strong>{copy.mixed}</strong>
-                        <span>{copy.mixedHint}</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="status">{copy.hostOnlyConfig}</p>
-              )}
-
-              <div className="room-meta-list">
-                <p>
-                  <span>{copy.sourceModeLabel}</span>
-                  <strong>
-                    {state.sourceMode === "anilist_union"
-                      ? copy.sourceAniListTitle
-                      : state.sourceMode === "random_classic"
-                        ? copy.sourceRandomTitle
-                      : state.sourceMode === "players_liked"
-                        ? sourceModeLabel("players_liked", locale)
-                        : sourceModeLabel("public_playlist", locale)}
-                  </strong>
-                </p>
-                <p>
-                  <span>{copy.playlist}</span>
-                  <strong>
-                    {withRomajiLabel(
-                      state.sourceConfig.publicPlaylist?.name ?? copy.noPlaylist,
-                    )}
-                  </strong>
-                </p>
-                <p>
-                  <span>{copy.themeMode}</span>
-                  <strong>
-                    {state.sourceConfig.themeMode === "op_only"
-                      ? copy.openingsShort
-                      : state.sourceConfig.themeMode === "ed_only"
-                        ? copy.endingsShort
-                        : copy.mixed}
-                  </strong>
-                </p>
-                <p>
-                  <span>{copy.difficulty}</span>
-                  <strong>{difficultyFilterLabel(state.sourceConfig.difficultyFilter, locale)}</strong>
-                </p>
-                <p>
-                  <span>{copy.decades}</span>
-                  <strong>{contentDecadesLabel(state.sourceConfig.contentFilters, locale)}</strong>
-                </p>
-                <p>
-                  <span>{copy.genres}</span>
-                  <strong>{contentGenresLabel(state.sourceConfig.contentFilters, locale)}</strong>
-                </p>
-                <p>
-                  <span>{copy.livesMode}</span>
-                  <strong>{state.livesMode ? livesPresetLabel(state.maxLives, locale) : copy.off}</strong>
-                </p>
-              </div>
-
-              <div className="waiting-actions">
-                <button
-                  className={`ghost-btn${currentPlayer?.isReady ? " selected" : ""}`}
-                  type="button"
-                  disabled={!hasActivePlayerSeat || readyMutation.isPending || isResolvingTracks}
-                  onClick={() => {
-                    if (!currentPlayer) return;
-                    readyMutation.mutate(!currentPlayer.isReady);
-                  }}
-                >
-                  {currentPlayer?.isReady ? copy.readyToggleOff : copy.readyToggleOn}
-                </button>
-                {isHost && (
-                  <button
-                    className="solid-btn"
-                    onClick={() => startMutation.mutate()}
-                    disabled={
-                      startMutation.isPending ||
-                      startRetryRemainingMs > 0 ||
-                      !state.canStart ||
-                      isResolvingTracks ||
-                      isPlayersLikedPoolBuilding
-                    }
-                  >
-                    {startMutation.isPending ? copy.starting : copy.startGame}
-                  </button>
-                )}
-              </div>
-
-              <p className="status">
-                {copy.playersReady}: {state.readyCount}/{state.players.length}
-                {lobbyReadyStatus}
-              </p>
-              <ul className="lobby-player-list">
-                {state.players.map((player) => (
-                  <li key={player.playerId}>
-                    <div>
-                      <strong>{player.displayName}</strong>
-                      <p>
-                        {player.isHost ? copy.host : copy.player} -{" "}
-                        {player.isReady ? copy.readyStatus : copy.waitingStatus}
-                      </p>
-                      {state.livesMode && (
-                        <small className={`lobby-player-lives${player.isEliminated ? " eliminated" : ""}`}>
-                          {renderLivesHearts(player.lives, state.maxLives)}
-                        </small>
                       )}
                     </div>
-                    {isHost && player.playerId !== session.playerId && (
-                      <button
-                        className="ghost-btn"
-                        type="button"
-                        disabled={kickMutation.isPending}
-                        onClick={() => kickMutation.mutate(player.playerId)}
-                      >
-                        {copy.kick}
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
+                    <p className="status">
+                      {copy.playersReady}: {state.readyCount}/{state.players.length}
+                      {lobbyReadyStatus}
+                    </p>
+                  </section>
+                </div>
+
+                <aside className="lobby-side-column">
+                  <section className="lobby-side-card">
+                    <div className="lobby-group-head">
+                      <p className="kicker">{copy.roomSnapshot}</p>
+                      <h3>{copy.roomSnapshot}</h3>
+                    </div>
+                    <div className="room-meta-list">
+                      <p>
+                        <span>{copy.sourceModeLabel}</span>
+                        <strong>
+                          {state.sourceMode === "anilist_union"
+                            ? copy.sourceAniListTitle
+                            : state.sourceMode === "random_classic"
+                              ? copy.sourceRandomTitle
+                              : state.sourceMode === "players_liked"
+                                ? sourceModeLabel("players_liked", locale)
+                                : sourceModeLabel("public_playlist", locale)}
+                        </strong>
+                      </p>
+                      <p>
+                        <span>{copy.playlist}</span>
+                        <strong>
+                          {withRomajiLabel(
+                            state.sourceConfig.publicPlaylist?.name ?? copy.noPlaylist,
+                          )}
+                        </strong>
+                      </p>
+                      <p>
+                        <span>{copy.themeMode}</span>
+                        <strong>
+                          {state.sourceConfig.themeMode === "op_only"
+                            ? copy.openingsShort
+                            : state.sourceConfig.themeMode === "ed_only"
+                              ? copy.endingsShort
+                              : copy.mixed}
+                        </strong>
+                      </p>
+                      <p>
+                        <span>{copy.difficulty}</span>
+                        <strong>{difficultyFilterLabel(state.sourceConfig.difficultyFilter, locale)}</strong>
+                      </p>
+                      <p>
+                        <span>{copy.decades}</span>
+                        <strong>{contentDecadesLabel(state.sourceConfig.contentFilters, locale)}</strong>
+                      </p>
+                      <p>
+                        <span>{copy.genres}</span>
+                        <strong>{contentGenresLabel(state.sourceConfig.contentFilters, locale)}</strong>
+                      </p>
+                      <p>
+                        <span>{copy.livesMode}</span>
+                        <strong>{state.livesMode ? livesPresetLabel(state.maxLives, locale) : copy.off}</strong>
+                      </p>
+                    </div>
+                  </section>
+
+                  <section className="lobby-side-card">
+                    <div className="lobby-group-head">
+                      <p className="kicker">{copy.playersPanel}</p>
+                      <h3>{copy.playersPanel}</h3>
+                    </div>
+                    <ul className="lobby-player-list">
+                      {state.players.map((player) => (
+                        <li key={player.playerId}>
+                          <div>
+                            <strong>{player.displayName}</strong>
+                            <p>
+                              {player.isHost ? copy.host : copy.player} -{" "}
+                              {player.isReady ? copy.readyStatus : copy.waitingStatus}
+                            </p>
+                            {state.livesMode && (
+                              <small className={`lobby-player-lives${player.isEliminated ? " eliminated" : ""}`}>
+                                {renderLivesHearts(player.lives, state.maxLives)}
+                              </small>
+                            )}
+                          </div>
+                          {isHost && player.playerId !== session.playerId && (
+                            <button
+                              className="ghost-btn"
+                              type="button"
+                              disabled={kickMutation.isPending}
+                              onClick={() => kickMutation.mutate(player.playerId)}
+                            >
+                              {copy.kick}
+                            </button>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                </aside>
+              </div>
             </div>
           )}
 
@@ -3773,8 +3943,11 @@ export function RoomPlayPage() {
           )}
         </div>
 
-        <aside className="arena-side meta-side">
-            <h2 className="side-title">{copy.chat}</h2>
+        <aside className="arena-side meta-side room-rail">
+            <div className="room-rail-head">
+              <p className="kicker">{copy.chat}</p>
+              <h2 className="side-title">{copy.chat}</h2>
+            </div>
             <div ref={chatLogRef} className="room-chat-log">
               {chatMessages.map((message) => (
                 <p key={message.id} className="room-chat-message">
@@ -3787,7 +3960,7 @@ export function RoomPlayPage() {
               )}
               <div ref={chatEndRef} className="room-chat-end" />
             </div>
-            <form className="panel-form" onSubmit={onSubmitChat}>
+            <form className="panel-form room-chat-form" onSubmit={onSubmitChat}>
               <label>
                 <span>{copy.message}</span>
                 <input

@@ -48,6 +48,7 @@ export function HomePage() {
   const setSession = useGameStore((state) => state.setSession);
   const session = useGameStore((state) => state.session);
   const account = useGameStore((state) => state.account);
+  const [entryMode, setEntryMode] = useState<"join" | "create">("join");
   const [createDisplayName, setCreateDisplayName] = useState("Player One");
   const [joinDisplayName, setJoinDisplayName] = useState("Player One");
   const [joinRoomCode, setJoinRoomCode] = useState("");
@@ -86,27 +87,41 @@ export function HomePage() {
           createError: "Unable to create the room.",
           promptNickname: "Choose a nickname to join this room",
           heroKicker: "Anime multiplayer rooms",
-          heroPointOne: "Openings and endings",
-          heroPointTwo: "Shared live playback",
-          heroPointThree: "Public and private lobbies",
-          heroPointFour: "AniList-powered playlists",
+          heroTitle: "Anime blind test rooms that go live instantly",
+          heroBody:
+            "Create a lobby, sync your anime taste, invite friends with one code, and launch a real-time opening and ending showdown directly in the browser.",
+          heroActionPrimary: "Create a live lobby",
+          heroActionSecondary: "Join with a code",
+          heroFeatureOneTitle: "Shared playback",
+          heroFeatureOneBody: "Everyone follows the same reveal rhythm with synchronized live audio.",
+          heroFeatureTwoTitle: "Public or private",
+          heroFeatureTwoBody: "Run open community rooms or keep the match invite-only for your group.",
+          heroFeatureThreeTitle: "AniList-ready",
+          heroFeatureThreeBody: "Build broader anime rounds or lean on synced AniList libraries when you want a sharper pool.",
           heroSignalRooms: "Public rooms",
           heroSignalJoinable: "Open to join",
           heroSignalModes: "Playlist modes",
           heroSignalModesValue: "Anime + AniList",
           heroSignalAccess: "Setup",
           heroSignalAccessValue: "Browser only",
-          actionTitle: "Jump into the next match",
+          consoleKicker: "Lobby console",
+          actionTitle: "Launch or join the next room",
           actionSubtitle:
-            "Join with a code in seconds or create a room and host the lobby from the same panel.",
-          joinBlockTitle: "Join with a code",
-          createBlockTitle: "Create your lobby",
+            "One surface to jump into a running lobby or spin up your own room without losing the live-game energy.",
+          joinBlockTitle: "Join room",
+          createBlockTitle: "Create lobby",
+          joinModeHint: "Enter a room code and keep your nickname ready. The first player in becomes host.",
+          createModeHint:
+            "Open a room instantly, choose whether it should be public, then configure the anime source from the lobby.",
+          joinModeMeta: "Fastest path when someone already sent you the code.",
+          createModeMeta: "Best choice when you want to host and shape the match flow yourself.",
           publicRoomsTitle: "Rooms you can join now",
           publicRoomsSubtitle:
-            "See which lobbies are open, how many players are inside, and which source mode they use before jumping in.",
+            "A live queue of public lobbies, with just enough state and mode detail to pick the right room fast.",
           publicRoomsCount: "listed rooms",
           publicRoomsEmpty:
             "No public room is open right now. Create one and it will appear here for the next players.",
+          publicRoomsKicker: "Live room feed",
           seoH1: "Anime Blind Test Online for Multiplayer Rooms",
           seoLead:
             "Kwizik lets you create a live anime blind test room, challenge friends on openings and endings, and launch the game instantly in your browser.",
@@ -156,27 +171,43 @@ export function HomePage() {
           createError: "Impossible de créer la room.",
           promptNickname: "Choisis un pseudo pour rejoindre cette room",
           heroKicker: "Rooms anime multijoueur",
-          heroPointOne: "Openings et endings",
-          heroPointTwo: "Lecture synchronisee en direct",
-          heroPointThree: "Lobbies publics ou prives",
-          heroPointFour: "Playlists basees sur AniList",
+          heroTitle: "Des rooms de blind test anime qui partent en direct instantanement",
+          heroBody:
+            "Cree un lobby, synchronise ton univers anime, invite tes amis avec un code court, puis lance un duel openings et endings en temps reel dans le navigateur.",
+          heroActionPrimary: "Creer un lobby live",
+          heroActionSecondary: "Rejoindre avec un code",
+          heroFeatureOneTitle: "Lecture partagee",
+          heroFeatureOneBody: "Tout le monde suit le meme rythme de reveal avec un audio synchronise en direct.",
+          heroFeatureTwoTitle: "Public ou prive",
+          heroFeatureTwoBody: "Ouvre des rooms communautaires ou garde la partie reservee a ton groupe.",
+          heroFeatureThreeTitle: "Pret pour AniList",
+          heroFeatureThreeBody:
+            "Construis des rounds larges ou appuie-toi sur des bibliotheques AniList synchronisees pour une selection plus pointue.",
           heroSignalRooms: "Rooms publiques",
           heroSignalJoinable: "Ouvertes",
           heroSignalModes: "Modes de playlist",
           heroSignalModesValue: "Anime + AniList",
           heroSignalAccess: "Installation",
           heroSignalAccessValue: "Navigateur uniquement",
-          actionTitle: "Entre rapidement dans la prochaine partie",
+          consoleKicker: "Console de lobby",
+          actionTitle: "Lancer ou rejoindre la prochaine room",
           actionSubtitle:
-            "Rejoins avec un code en quelques secondes ou cree une room et pilote le lobby depuis le meme panneau.",
-          joinBlockTitle: "Rejoindre avec un code",
-          createBlockTitle: "Creer ton lobby",
+            "Une seule surface pour entrer dans un lobby existant ou ouvrir ta propre room sans perdre l'energie live du jeu.",
+          joinBlockTitle: "Rejoindre une room",
+          createBlockTitle: "Creer un lobby",
+          joinModeHint:
+            "Entre un code room et prepare ton pseudo. Le premier joueur qui entre devient host du lobby.",
+          createModeHint:
+            "Ouvre une room instantanement, choisis sa visibilite, puis configure la source anime depuis le lobby.",
+          joinModeMeta: "Le chemin le plus rapide quand quelqu'un t'a deja envoye le code.",
+          createModeMeta: "Le meilleur choix si tu veux host et piloter le rythme de la partie.",
           publicRoomsTitle: "Rooms disponibles maintenant",
           publicRoomsSubtitle:
-            "Vois quels lobbies sont ouverts, combien de joueurs sont presents et quel mode de source ils utilisent avant de rejoindre.",
+            "Une file live de lobbies publics, avec juste assez d'etat et de contexte pour choisir la bonne room rapidement.",
           publicRoomsCount: "rooms listees",
           publicRoomsEmpty:
             "Aucune room publique n'est ouverte pour le moment. Cree-en une et elle apparaitra ici pour les prochains joueurs.",
+          publicRoomsKicker: "File de rooms live",
           seoH1: "Blind Test Anime en ligne pour jouer en multijoueur",
           seoLead:
             "Kwizik te permet de créer une room de blind test anime, de défier tes amis sur des openings et endings, puis de lancer la partie directement dans le navigateur.",
@@ -376,61 +407,77 @@ export function HomePage() {
     });
   }
 
+  function focusConsole(mode: "join" | "create") {
+    setEntryMode(mode);
+    document.getElementById("home-console")?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+    window.requestAnimationFrame(() => {
+      const targetId = mode === "join" ? "join-room-code" : "create-display-name";
+      const element = document.getElementById(targetId) as HTMLInputElement | null;
+      element?.focus();
+    });
+  }
+
   return (
     <>
       <section className="home-landing">
-        <div className="home-hero-shell">
-          <article className="hero-card home-hero-card">
-            <div className="home-hero-copy">
+        <div className="home-premium-shell">
+          <article className="panel-card home-story-card">
+            <div className="home-story-copy">
               <p className="kicker">{copy.heroKicker}</p>
-              <h1 className="hero-title home-hero-title">{copy.seoH1}</h1>
-              <p className="hero-copy">{copy.seoLead}</p>
+              <h1 className="hero-title home-story-title">{copy.heroTitle}</h1>
+              <p className="hero-copy home-story-body">{copy.heroBody}</p>
             </div>
 
-            <div className="hero-chips home-hero-chips" aria-label={copy.heroKicker}>
-              <span>{copy.heroPointOne}</span>
-              <span>{copy.heroPointTwo}</span>
-              <span>{copy.heroPointThree}</span>
-              <span>{copy.heroPointFour}</span>
-            </div>
-
-            <div className="home-signal-grid">
-              <div className="home-signal-card">
-                <span>{copy.heroSignalRooms}</span>
-                <strong>{publicRoomCountLabel}</strong>
-              </div>
-              <div className="home-signal-card">
-                <span>{copy.heroSignalJoinable}</span>
-                <strong>{joinableRoomCountLabel}</strong>
-              </div>
-              <div className="home-signal-card">
-                <span>{copy.heroSignalModes}</span>
-                <strong>{copy.heroSignalModesValue}</strong>
-              </div>
-              <div className="home-signal-card">
-                <span>{copy.heroSignalAccess}</span>
-                <strong>{copy.heroSignalAccessValue}</strong>
-              </div>
+            <div className="home-story-actions">
+              <button className="solid-btn" type="button" onClick={() => focusConsole("create")}>
+                {copy.heroActionPrimary}
+              </button>
+              <button className="ghost-btn" type="button" onClick={() => focusConsole("join")}>
+                {copy.heroActionSecondary}
+              </button>
             </div>
           </article>
 
-          <aside className="panel-card home-action-card">
-            <div className="home-section-heading">
+          <aside className="panel-card home-console-card" id="home-console">
+            <div className="home-console-head">
+              <p className="kicker">{copy.consoleKicker}</p>
               <h2 className="panel-title">{copy.actionTitle}</h2>
               <p className="panel-copy">{copy.actionSubtitle}</p>
             </div>
 
-            <div className="home-action-stack">
-              <section className="home-action-block">
-                <div className="home-action-header">
+            <div className="home-console-tabs" role="tablist" aria-label={copy.consoleKicker}>
+              <button
+                type="button"
+                className={`home-console-tab${entryMode === "join" ? " active" : ""}`}
+                onClick={() => setEntryMode("join")}
+              >
+                {copy.joinBlockTitle}
+              </button>
+              <button
+                type="button"
+                className={`home-console-tab${entryMode === "create" ? " active" : ""}`}
+                onClick={() => setEntryMode("create")}
+              >
+                {copy.createBlockTitle}
+              </button>
+            </div>
+
+            {entryMode === "join" ? (
+              <section className="home-console-panel">
+                <div className="home-console-copy">
                   <h3 className="panel-title">{copy.joinBlockTitle}</h3>
-                  <p className="panel-copy">{copy.joinSubtitle}</p>
+                  <p className="panel-copy">{copy.joinModeHint}</p>
+                  <p className="status home-console-meta">{copy.joinModeMeta}</p>
                 </div>
 
                 <form className="panel-form" onSubmit={onJoin}>
                   <label>
                     <span>{copy.roomCode}</span>
                     <input
+                      id="join-room-code"
                       value={joinRoomCode}
                       onChange={(event) => setJoinRoomCode(event.currentTarget.value)}
                       maxLength={6}
@@ -457,13 +504,12 @@ export function HomePage() {
                   </button>
                 </form>
               </section>
-
-              <div className="home-action-divider" aria-hidden="true" />
-
-              <section className="home-action-block">
-                <div className="home-action-header">
+            ) : (
+              <section className="home-console-panel">
+                <div className="home-console-copy">
                   <h3 className="panel-title">{copy.createBlockTitle}</h3>
-                  <p className="panel-copy">{copy.createSubtitle}</p>
+                  <p className="panel-copy">{copy.createModeHint}</p>
+                  <p className="status home-console-meta">{copy.createModeMeta}</p>
                 </div>
                 {!account.userId && <p className="status">{copy.syncHint}</p>}
 
@@ -471,6 +517,7 @@ export function HomePage() {
                   <label>
                     <span>{copy.nickname}</span>
                     <input
+                      id="create-display-name"
                       value={createDisplayName}
                       onChange={(event) => setCreateDisplayName(event.currentTarget.value)}
                       maxLength={24}
@@ -513,13 +560,50 @@ export function HomePage() {
                   </button>
                 </div>
               </section>
-            </div>
+            )}
           </aside>
         </div>
+
+        <section className="home-support-strip">
+          <div className="home-story-grid">
+            <article className="home-story-feature">
+              <strong>{copy.heroFeatureOneTitle}</strong>
+              <p>{copy.heroFeatureOneBody}</p>
+            </article>
+            <article className="home-story-feature">
+              <strong>{copy.heroFeatureTwoTitle}</strong>
+              <p>{copy.heroFeatureTwoBody}</p>
+            </article>
+            <article className="home-story-feature">
+              <strong>{copy.heroFeatureThreeTitle}</strong>
+              <p>{copy.heroFeatureThreeBody}</p>
+            </article>
+          </div>
+
+          <div className="home-signal-grid">
+            <div className="home-signal-card">
+              <span>{copy.heroSignalRooms}</span>
+              <strong>{publicRoomCountLabel}</strong>
+            </div>
+            <div className="home-signal-card">
+              <span>{copy.heroSignalJoinable}</span>
+              <strong>{joinableRoomCountLabel}</strong>
+            </div>
+            <div className="home-signal-card">
+              <span>{copy.heroSignalModes}</span>
+              <strong>{copy.heroSignalModesValue}</strong>
+            </div>
+            <div className="home-signal-card">
+              <span>{copy.heroSignalAccess}</span>
+              <strong>{copy.heroSignalAccessValue}</strong>
+            </div>
+          </div>
+        </section>
       </section>
-      <section className="panel-card home-public-section">
+      <section className="panel-card home-public-section" id="home-live-rooms">
         <div className="home-section-head">
           <div className="home-section-heading">
+            <p className="kicker">{copy.publicRoomsKicker}</p>
             <h2 className="panel-title">{copy.publicRoomsTitle}</h2>
             <p className="panel-copy">{copy.publicRoomsSubtitle}</p>
           </div>
@@ -542,7 +626,9 @@ export function HomePage() {
                 <div className="home-room-main">
                   <div className="home-room-topline">
                     <strong className="home-room-code">{room.roomCode}</strong>
-                    <span className="home-room-state">{formatRoomState(room.state, locale)}</span>
+                    <span className={`home-room-state home-room-state-${room.state}`}>
+                      {formatRoomState(room.state, locale)}
+                    </span>
                   </div>
                   <div className="home-room-meta">
                     <span>

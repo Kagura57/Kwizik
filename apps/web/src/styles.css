@@ -50,7 +50,7 @@ html.game-active .stage-main {
 }
 
 html.game-active .stage-main.arena-layout {
-  align-items: stretch;
+  align-items: start;
 }
 
 html.game-active .arena-side {
@@ -64,7 +64,7 @@ html.game-active .gameplay-center {
 }
 
 html.game-active .media-shell {
-  max-height: clamp(180px, 42vh, 400px);
+  max-height: clamp(180px, 34vh, 320px);
 }
 
 body {
@@ -109,8 +109,8 @@ a {
 
 .room-topbar {
   width: calc(100% - 36px);
-  margin: 14px auto 0;
-  padding: 10px 14px;
+  margin: 10px auto 0;
+  padding: 8px 12px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--panel-strong);
@@ -220,7 +220,9 @@ a {
 }
 
 .choice-btn {
-  background: rgba(255, 255, 255, 0.04);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03)),
+    rgba(8, 14, 25, 0.86);
   color: var(--text);
   min-height: 62px;
   border-color: rgba(255, 255, 255, 0.16);
@@ -329,56 +331,99 @@ a {
 
 .home-landing {
   display: grid;
-  gap: 22px;
+  gap: 24px;
 }
 
-.home-hero-shell {
+.home-premium-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(360px, 0.95fr);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.88fr);
+  gap: 22px;
   align-items: stretch;
 }
 
-.home-hero-card {
-  min-height: 100%;
-  padding: clamp(24px, 4vw, 34px);
+.home-story-card {
+  padding: clamp(24px, 4vw, 36px);
   background:
-    radial-gradient(circle at top left, rgba(255, 140, 55, 0.16), transparent 32%),
-    radial-gradient(circle at 84% 12%, rgba(54, 214, 180, 0.14), transparent 28%),
-    linear-gradient(180deg, rgba(6, 11, 20, 0.96), rgba(8, 14, 25, 0.9));
+    radial-gradient(circle at top left, rgba(255, 140, 55, 0.18), transparent 30%),
+    radial-gradient(circle at 78% 14%, rgba(54, 214, 180, 0.14), transparent 26%),
+    linear-gradient(180deg, rgba(6, 11, 20, 0.98), rgba(7, 12, 22, 0.93));
+  gap: 20px;
 }
 
-.home-hero-copy {
+.home-story-copy {
   display: grid;
   gap: 14px;
-  max-width: 60ch;
+  max-width: 56ch;
 }
 
-.home-hero-title {
-  max-width: 12ch;
-  font-size: clamp(2.9rem, 5.1vw, 4.6rem);
+.home-story-title {
+  max-width: 12.5ch;
+  font-size: clamp(3rem, 5.4vw, 5.2rem);
+  line-height: 0.9;
 }
 
-.home-hero-chips {
-  margin-top: 6px;
+.home-story-body {
+  max-width: 54ch;
+  font-size: 1.02rem;
+  line-height: 1.7;
+}
+
+.home-story-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.home-story-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.home-support-strip {
+  display: grid;
+  gap: 12px;
+}
+
+.home-story-feature {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 14px 15px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 8px;
+}
+
+.home-story-feature strong {
+  font-size: 0.98rem;
+  letter-spacing: 0.01em;
+}
+
+.home-story-feature p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
 }
 
 .home-signal-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  margin-top: auto;
 }
 
 .home-signal-card {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.03);
+  padding: 12px 14px 13px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
   display: grid;
   gap: 6px;
-  min-height: 88px;
-  align-content: start;
+  min-height: 84px;
 }
 
 .home-signal-card span {
@@ -394,41 +439,77 @@ a {
   line-height: 1.1;
 }
 
-.home-action-card {
-  padding: clamp(22px, 3.2vw, 30px);
+.home-console-card {
+  padding: clamp(22px, 3vw, 30px);
   background:
-    linear-gradient(180deg, rgba(6, 11, 20, 0.98), rgba(8, 14, 25, 0.92)),
+    radial-gradient(circle at top right, rgba(255, 140, 55, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(4, 9, 17, 0.98), rgba(8, 14, 25, 0.94)),
     rgba(8, 14, 25, 0.92);
-}
-
-.home-action-stack {
-  display: grid;
   gap: 18px;
 }
 
+.home-console-head,
 .home-section-heading,
-.home-action-header {
+.home-console-copy {
   display: grid;
   gap: 6px;
 }
 
-.home-action-block {
+.home-console-tabs {
   display: grid;
-  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.home-action-block .panel-title {
-  font-size: clamp(1.45rem, 2vw, 1.9rem);
+.home-console-tab {
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
-.home-action-divider {
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+.home-console-tab:hover {
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.home-console-tab.active {
+  background:
+    linear-gradient(130deg, rgba(255, 140, 55, 0.18), rgba(54, 214, 180, 0.14)),
+    rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.home-console-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.home-console-panel .panel-title {
+  font-size: clamp(1.55rem, 2vw, 2rem);
+}
+
+.home-console-meta {
+  margin: 0;
 }
 
 .home-public-section {
-  padding: clamp(22px, 3.2vw, 30px);
-  gap: 18px;
+  padding: clamp(22px, 3.2vw, 32px);
+  gap: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(54, 214, 180, 0.12), transparent 22%),
+    linear-gradient(180deg, rgba(7, 12, 22, 0.94), rgba(8, 14, 25, 0.9));
 }
 
 .home-section-head {
@@ -511,11 +592,11 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  padding: 14px 16px;
+  padding: 16px 18px;
   gap: 14px;
   background:
-    linear-gradient(120deg, rgba(255, 140, 55, 0.07), transparent 26%),
-    rgba(255, 255, 255, 0.03);
+    linear-gradient(120deg, rgba(255, 140, 55, 0.08), transparent 24%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
 }
 
 .public-room-list li p {
@@ -545,13 +626,29 @@ a {
 .home-room-state {
   border-radius: 999px;
   padding: 5px 10px;
-  background: rgba(54, 214, 180, 0.12);
-  border: 1px solid rgba(54, 214, 180, 0.22);
-  color: #baf5e7;
   font-size: 0.75rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.07em;
+}
+
+.home-room-state-waiting {
+  background: rgba(54, 214, 180, 0.12);
+  border: 1px solid rgba(54, 214, 180, 0.22);
+  color: #baf5e7;
+}
+
+.home-room-state-playing {
+  background: rgba(255, 232, 111, 0.12);
+  border: 1px solid rgba(255, 232, 111, 0.26);
+  color: #fff0a6;
+}
+
+.home-room-state-results,
+.home-room-state-finished {
+  background: rgba(146, 162, 191, 0.14);
+  border: 1px solid rgba(146, 162, 191, 0.24);
+  color: #d4deef;
 }
 
 .home-room-meta {
@@ -575,8 +672,8 @@ a {
   margin: 0;
   border: 1px dashed rgba(255, 255, 255, 0.16);
   border-radius: 14px;
-  padding: 18px;
-  background: rgba(255, 255, 255, 0.02);
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .hero-card,
@@ -975,6 +1072,9 @@ select option {
 
 .home-editorial-card {
   min-height: 100%;
+  background:
+    linear-gradient(180deg, rgba(8, 14, 25, 0.84), rgba(8, 14, 25, 0.72)),
+    rgba(8, 14, 25, 0.72);
 }
 
 .home-editorial-card .panel-title {
@@ -1048,6 +1148,15 @@ select option {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  width: min(820px, 100%);
+  justify-self: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(8, 14, 25, 0.9), rgba(8, 14, 25, 0.82)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
 }
 
 .reveal-box {
@@ -1460,6 +1569,135 @@ select option {
     linear-gradient(160deg, var(--bg-0), var(--bg-1) 48%, var(--bg-2));
 }
 
+.room-scene-header {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  padding: clamp(18px, 2.4vw, 26px);
+  background:
+    radial-gradient(circle at top left, rgba(255, 140, 55, 0.16), transparent 28%),
+    radial-gradient(circle at 86% 18%, rgba(54, 214, 180, 0.12), transparent 24%),
+    linear-gradient(180deg, rgba(7, 12, 22, 0.98), rgba(8, 14, 25, 0.9));
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.9fr);
+  gap: 18px;
+  align-items: end;
+}
+
+.live-status-bar {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 4px 8px;
+  background:
+    radial-gradient(circle at 12% 24%, rgba(255, 140, 55, 0.12), transparent 30%),
+    radial-gradient(circle at 84% 24%, rgba(54, 214, 180, 0.1), transparent 26%),
+    linear-gradient(180deg, rgba(7, 12, 22, 0.98), rgba(8, 14, 25, 0.9));
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.live-status-copy {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.live-status-heading {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.live-status-title {
+  margin: 0;
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.04em;
+  line-height: 0.94;
+  font-size: clamp(1.2rem, 2vw, 1.7rem);
+}
+
+.live-status-body {
+  display: none;
+  margin: 0;
+  color: rgba(232, 240, 255, 0.78);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  max-width: 60ch;
+}
+
+.live-status-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.live-status-stats .room-scene-stat {
+  padding: 4px 8px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.live-status-bar.reveal-focus {
+  padding: 3px 7px;
+}
+
+.live-status-bar.reveal-focus .live-status-copy {
+  display: none;
+}
+
+.live-status-bar.reveal-focus .live-status-stats {
+  gap: 4px;
+}
+
+.live-status-bar.reveal-focus .room-scene-stat {
+  padding: 4px 7px;
+}
+
+.room-scene-copy {
+  display: grid;
+  gap: 8px;
+  max-width: 64ch;
+}
+
+.room-scene-title {
+  margin: 0;
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.03em;
+  line-height: 0.92;
+  font-size: clamp(2.3rem, 4.6vw, 4.2rem);
+}
+
+.room-scene-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.room-scene-stat {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  gap: 2px;
+}
+
+.room-scene-stat span {
+  color: var(--muted);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.room-scene-stat strong {
+  font-size: 0.92rem;
+  line-height: 1.05;
+}
+
 .stage-hud {
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -1491,12 +1729,15 @@ select option {
 .projection-center-stage {
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--panel);
-  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(8, 14, 25, 0.92), rgba(8, 14, 25, 0.84)),
+    var(--panel);
+  padding: 20px;
   display: grid;
   gap: 14px;
   align-content: start;
   justify-items: center;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
 }
 
 .stage-main > *,
@@ -1505,9 +1746,14 @@ select option {
 }
 
 .stage-main.arena-layout {
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(220px, 280px);
+  grid-template-columns: minmax(190px, 232px) minmax(0, 1fr) minmax(180px, 228px);
   align-items: start;
   justify-items: stretch;
+  gap: 16px;
+}
+
+.stage-main.arena-layout.reveal-focus {
+  grid-template-columns: minmax(168px, 208px) minmax(0, 1fr) minmax(168px, 208px);
 }
 
 .stage-main.arena-layout.results-fullscreen {
@@ -1518,13 +1764,31 @@ select option {
 
 .arena-side {
   border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 12px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+  padding: 14px;
   display: grid;
-  gap: 10px;
+  gap: 12px;
   align-content: start;
-  min-height: 100%;
+  min-height: 0;
+  align-self: start;
+}
+
+.room-rail {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+
+.room-rail-head {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.room-rail-head .kicker {
+  font-size: 0.68rem;
 }
 
 .side-title {
@@ -1567,12 +1831,26 @@ select option {
   text-align: center;
 }
 
+.meta-side {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.meta-side > * {
+  min-width: 0;
+}
+
 .gameplay-center {
-  width: min(980px, 100%);
+  width: min(1040px, 100%);
   margin: 0 auto;
   display: grid;
-  gap: 14px;
+  gap: 16px;
   align-content: start;
+}
+
+.gameplay-center.reveal-focus {
+  width: min(1120px, 100%);
+  gap: 6px;
 }
 
 .gameplay-center.results-compact {
@@ -1588,13 +1866,15 @@ select option {
 
 .round-strip {
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 12px;
-  padding: 8px 12px;
+  border-radius: 16px;
+  padding: 10px 14px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.03);
 }
 
 .round-strip span,
@@ -1607,6 +1887,10 @@ select option {
 
 .round-strip strong {
   font-size: 0.95rem;
+}
+
+.room-round-strip-lives-only {
+  justify-content: flex-start;
 }
 
 .round-strip-lives {
@@ -1641,6 +1925,13 @@ select option {
   min-height: 260px;
 }
 
+.sound-visual.reveal-focus {
+  border-color: rgba(255, 232, 111, 0.62);
+  box-shadow:
+    0 0 0 2px rgba(255, 232, 111, 0.14),
+    0 22px 52px rgba(0, 0, 0, 0.34);
+}
+
 .media-shell {
   position: relative;
   width: 100%;
@@ -1650,6 +1941,18 @@ select option {
   display: grid;
   align-content: end;
   padding: clamp(10px, 1.6vw, 16px);
+}
+
+.media-shell.reveal-focus {
+  aspect-ratio: auto;
+  min-height: clamp(300px, 49vh, 520px);
+  max-height: none;
+  padding: 6px;
+}
+
+.media-shell.reveal-focus .anime-video-layer {
+  object-fit: contain;
+  background: #000;
 }
 
 .media-video-layer {
@@ -1777,6 +2080,7 @@ select option {
   border-radius: 12px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.03);
+  margin-top: -2px;
 }
 
 .phase-skip-panel .ghost-btn {
@@ -1789,17 +2093,63 @@ select option {
 }
 
 .waiting-box {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.03);
+  padding: clamp(16px, 2vw, 22px);
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .waiting-box h2 {
   margin: 0;
   font-size: clamp(1.1rem, 2vw, 1.35rem);
+}
+
+.lobby-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.8fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.lobby-main-column,
+.lobby-side-column,
+.lobby-control-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.lobby-group-card,
+.lobby-launch-card,
+.lobby-side-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 12px;
+}
+
+.lobby-group-head {
+  display: grid;
+  gap: 4px;
+}
+
+.lobby-group-head h3 {
+  margin: 0;
+  font-family: "Bebas Neue", sans-serif;
+  font-size: clamp(1.5rem, 2.1vw, 2rem);
+  letter-spacing: 0.03em;
+}
+
+.lobby-passive-card {
+  min-height: 120px;
+  align-content: center;
 }
 
 .resolving-tracks-banner {
@@ -1838,6 +2188,10 @@ select option {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.lobby-launch-card .waiting-actions {
+  margin-top: 4px;
 }
 
 .provider-link-card {
@@ -1946,12 +2300,13 @@ select option {
 
 .room-chat-log {
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 10px;
+  border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
-  padding: 8px;
+  padding: 10px;
   min-height: 180px;
   max-height: 280px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1978,6 +2333,8 @@ select option {
 
 .room-chat-message span {
   color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .room-chat-empty {
@@ -1990,6 +2347,17 @@ select option {
   height: 1px;
 }
 
+.room-chat-form,
+.room-chat-form label {
+  min-width: 0;
+}
+
+.room-chat-form input,
+.room-chat-form .solid-btn {
+  width: 100%;
+  max-width: 100%;
+}
+
 .lobby-player-list {
   margin: 0;
   padding: 0;
@@ -2000,9 +2368,11 @@ select option {
 
 .lobby-player-list li {
   border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 14px;
+  padding: 12px 13px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.03);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2144,6 +2514,13 @@ select option {
   width: min(720px, 100%);
   max-width: 720px;
   justify-self: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(8, 14, 25, 0.9), rgba(8, 14, 25, 0.82)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
 }
 
 .spectator-banner {
@@ -2264,6 +2641,35 @@ select option {
     radial-gradient(circle at 86% 84%, rgba(54, 214, 180, 0.18), transparent 44%),
     rgba(12, 20, 34, 0.72);
   backdrop-filter: blur(10px);
+}
+
+.gameplay-center.reveal-focus .reveal-glass {
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 6px;
+  padding: 5px 8px;
+}
+
+.gameplay-center.reveal-focus .reveal-cover {
+  width: 64px;
+  height: 64px;
+}
+
+.gameplay-center.reveal-focus .reveal-title {
+  font-size: clamp(1.1rem, 2vw, 1.6rem);
+  line-height: 0.94;
+}
+
+.gameplay-center.reveal-focus .reveal-song-title,
+.gameplay-center.reveal-focus .reveal-artist {
+  font-size: 0.82rem;
+}
+
+.gameplay-center.reveal-focus .phase-skip-panel {
+  padding: 3px 8px;
+}
+
+.gameplay-center.reveal-focus .reveal-content {
+  gap: 4px;
 }
 
 .reveal-cover {
@@ -2394,11 +2800,15 @@ select option {
 @media (max-width: 980px) {
   .home-grid,
   .room-grid,
-  .home-hero-shell,
-  .home-editorial-grid {
+  .home-premium-shell,
+  .home-editorial-grid,
+  .room-scene-header,
+  .live-status-bar,
+  .lobby-shell {
     grid-template-columns: 1fr;
   }
 
+  .home-story-grid,
   .home-signal-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2420,6 +2830,50 @@ select option {
   .stage-main.arena-layout.results-fullscreen {
     grid-template-columns: 1fr;
     min-height: auto;
+  }
+
+  .gameplay-center {
+    order: 1;
+    width: 100%;
+  }
+
+  .leaderboard-side {
+    order: 2;
+  }
+
+  .meta-side {
+    order: 3;
+  }
+
+  .arena-side {
+    min-height: auto;
+  }
+
+  .live-status-copy {
+    align-items: start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  html.game-active,
+  html.game-active body {
+    height: auto;
+    overflow: auto;
+  }
+
+  html.game-active .game-shell,
+  html.game-active .blindtest-stage {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  html.game-active .stage-main {
+    overflow: visible;
+  }
+
+  html.game-active .arena-side {
+    overflow-y: visible;
   }
 
   .topbar {
@@ -2450,18 +2904,24 @@ select option {
     gap: 18px;
   }
 
-  .home-hero-card,
-  .home-action-card,
+  .home-story-card,
+  .home-console-card,
   .home-public-section {
     padding: 18px;
   }
 
+  .home-story-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .home-story-grid,
   .home-signal-grid,
   .home-editorial-grid {
     grid-template-columns: 1fr;
   }
 
-  .home-hero-title {
+  .home-story-title {
     max-width: none;
   }
 
@@ -2485,6 +2945,22 @@ select option {
 
   .home-room-actions .solid-btn {
     width: 100%;
+  }
+
+  .room-scene-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .room-scene-header,
+  .live-status-bar,
+  .waiting-box,
+  .arena-side,
+  .stage-main {
+    padding: 16px;
+  }
+
+  .live-status-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .reveal-answer-item {

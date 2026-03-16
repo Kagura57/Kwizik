@@ -1,3 +1,176 @@
+# Room Live Vertical Density Fix
+
+- [x] Confirm from the latest screenshots that the top stats cards still waste vertical space and that reveal can still clip the lower action strip.
+- [x] Compress the live stats cards further by tightening padding, gaps, and line heights instead of only changing the overall banner container.
+- [x] Compress the reveal metadata/action area again so the lower action strip is more consistently visible.
+- [x] Verify against the reported room routes and document the result.
+
+## Review
+
+- Root cause: the top banner still looked too tall because the remaining height was mostly inside each `room-scene-stat` card, not in the outer `live-status-bar`. The reveal area also still lost vertical space to the metadata block when titles or artist lines grew.
+- Fix delivered:
+  - `apps/web/src/styles.css` now tightens live-banner card padding, gaps, and line-heights instead of only shrinking the outer strip;
+  - `apps/web/src/styles.css` now compresses the reveal metadata block and skip strip again so the lower reveal controls fit more reliably;
+  - the reveal media height remains meaningful, but the surrounding vertical chrome is leaner.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright check on `/fr/room/4QMN9K/play` after the density pass ✅ PASS
+
+# Room Live Banner Unification
+
+- [x] Confirm that the compact reveal stats strip is the better live-banner pattern overall.
+- [x] Apply the compact stats-only live banner to all active phases, not just reveal.
+- [x] Reclaim a bit more vertical space in reveal so the lower action strip stays visible more reliably.
+- [x] Verify in browser and document the result.
+
+## Review
+
+- Root cause: the compact stats-only banner was already better in reveal, but keeping a different live banner elsewhere preserved unnecessary chrome and cost vertical space across the whole room. Long reveal titles could also still push the lower reveal area too far down.
+- Follow-up fix delivered:
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now uses the compact live banner structure for all active room phases;
+  - `apps/web/src/styles.css` now treats the compact stats strip as the default live banner and only tightens it a little further during reveal;
+  - `apps/web/src/styles.css` now reduces reveal title/metadata size again so long titles consume less height and the lower reveal action strip has more chance to stay visible.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright reveal check on `/fr/room/KREKZY/play` after the compact-banner unification ✅ PASS
+
+# Room Reveal Dominance Follow-up
+
+- [x] Reassess the reveal layout after the first reveal-focus pass and confirm that the chrome is still too heavy.
+- [x] Reduce the live chrome more aggressively so the reveal state stops reading like a page layout.
+- [x] Recompose the reveal state so the video becomes the dominant surface and side rails become clearly secondary.
+- [x] Verify on a real reveal screenshot and document the result.
+
+## Review
+
+- Root cause: the first reveal-focus pass still improved mostly width and general composition, while the user issue was really about vertical reveal area. The banner and metadata still consumed too much height, and the reveal video could still feel cramped.
+- Follow-up fix delivered:
+  - `apps/web/src/styles.css` now collapses the live banner to a compact stats-only strip during reveal;
+  - `apps/web/src/styles.css` now gives `media-shell.reveal-focus` a dedicated vertical footprint with a much taller reveal area instead of just widening the center;
+  - `apps/web/src/styles.css` now uses `object-fit: contain` for AnimeThemes reveal playback and compresses the reveal metadata card further so more of the opening remains visible.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright reveal check on `/fr/room/Y396M2/play` after phase transition to reveal ✅ PASS
+  - Visual confirmation: compact top stats row and visibly taller reveal video ✅ PASS
+
+# Room Reveal Focus Follow-up
+
+- [x] Inspect the latest room feedback about the oversized live banner and undersized reveal video.
+- [x] Compact the live status/header chrome so it stops stealing space from the live stage.
+- [x] Add a reveal-focused layout state that gives more usable area to the video when the opening reveal is active.
+- [x] Verify in browser on a real reveal state and document the result.
+
+## Review
+
+- Root cause: even after the previous live cleanup, the room still treated the top live banner as a prominent surface and kept the reveal video inside the same constrained media footprint as the normal guess phase. That left too little usable height for the actual opening clip.
+- Follow-up fix delivered:
+  - `apps/web/src/styles.css` now compresses the `room-topbar` and `live-status-bar` more aggressively and removes the descriptive body text from desktop live play;
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now exposes a `reveal-focus` state for the live arena and gameplay center;
+  - `apps/web/src/styles.css` now widens the center lane during reveal, increases the reveal video ceiling, and slightly compacts the reveal metadata card so the video remains the primary surface.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright live-play check on `/en/room/UBPFF5/play` ✅ PASS
+  - Playwright reveal-state check on `/en/room/UBPFF5/play` with enlarged video and compact banner ✅ PASS
+
+# Room Live UX Regression Follow-up
+
+- [x] Inspect the latest live-room regressions reported from the browser screenshot.
+- [x] Remove the redundant room/round strip content and reclaim vertical space for the live controls.
+- [x] Fix the chat rail so it cannot introduce horizontal scrolling in the live room.
+- [x] Re-verify the live room in browser with MCQ answers visible and the skip panel in frame.
+
+## Review
+
+- Root cause: after the previous compact-header fix, three usage-level issues remained: the chat rail could still create horizontal overflow, the live center still spent too much vertical space above the answer/skip area, and the center strip duplicated the same room/round information already shown in the live status bar.
+- Follow-up fix delivered:
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now removes the redundant room/round strip in normal live play and keeps that strip only for lives mode;
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now marks the chat form with a dedicated `room-chat-form` hook for targeted rail styling;
+  - `apps/web/src/styles.css` now clamps live media height more aggressively, hard-disables horizontal overflow in the chat rail/log, and forces the chat form controls to stay within the rail width.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright browser check on `/en/room/9CLUBC/play` with MCQ answers visible ✅ PASS
+  - Visual confirmation: no horizontal chat scrollbar, no redundant center room/round strip, skip panel fully visible in the viewport ✅ PASS
+
+# Room Live Layout Regression Fix
+
+- [x] Audit the current live room after the premium rework and identify why the gameplay stage still loses visual priority.
+- [x] Lock a gameplay-first correction pass for the live header, center stage, and answer surfaces.
+- [x] Apply the live room layout corrections in `apps/web/src/routes/room/$roomCode/play.tsx` and `apps/web/src/styles.css`.
+- [x] Verify with route tests, build, and a fresh browser screenshot of the live room.
+- [x] Document the review and residual risks.
+
+## Review
+
+- Root cause: the premium room pass still treated the live phase like a page hero. The header consumed too much height, the gameplay stage started too low, and `html.game-active .stage-main.arena-layout` still stretched the side rails so they felt like empty columns fighting the center.
+- Fix delivered:
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now renders a dedicated compact `live-status-bar` for active phases instead of reusing the large lobby header;
+  - `apps/web/src/styles.css` now keeps the live rails at their content height, narrows the side columns, widens the gameplay center slightly, and gives the MCQ/text answer surfaces their own denser panel treatment;
+  - the lobby header remains unchanged, so the gameplay-first correction only affects the live room composition.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright browser check on a live room at `/en/room/VJ34T2/play` after start ✅ PASS
+  - Playwright browser check on a second live room at `/en/room/BGTCVC/play` to recheck the compact header and center-stage balance ✅ PASS
+- Residual note:
+  - local browser console still showed pre-existing warnings/errors during room checks; this pass targeted layout only and did not change those runtime paths.
+
+# Room Page Premium Rework
+
+- [x] Audit the current room surfaces and isolate what makes the lobby and live arena feel overly technical.
+- [x] Write the premium rework plan and lock the target compositions for the lobby control room and the live arena.
+- [x] Refactor the room layout in `play.tsx` so the lobby and live phases each have a stronger, clearer hierarchy.
+- [x] Rebuild the room-specific styles to support the new control-room and arena visual language across breakpoints.
+- [x] Verify with tests, build, and browser checks on room flows.
+
+## Review
+
+- Root cause: the room UI was functionally strong but visually too technical. The lobby stacked host settings into one long wall of controls, while the live phase used three competing columns without enough hierarchy between the center stage and the side rails.
+- Premium room rework delivered:
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now introduces a proper room-scene header, a grouped `control room` lobby, a dedicated launch zone, a clearer room snapshot/player side rail, and stronger rail headers during the live phase;
+  - `apps/web/src/styles.css` now gives the room its own visual system with a premium room header, grouped lobby cards, upgraded arena rails, and mobile behavior that stops the stacked live rails from collapsing into constrained internal panes;
+  - the room logic, realtime flow, mutations, and gameplay behavior remain unchanged.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright browser check: create room -> inspect lobby desktop on `/en/room/NZ473B/play` ✅ PASS
+  - Playwright browser check: start local room and inspect live arena desktop ✅ PASS
+  - Playwright browser check: inspect room live mobile at `390x844` after responsive scroll fix ✅ PASS
+- Browser console notes during local room checks:
+  - observed pre-existing `401` requests on `/api/account/preferences/title` when unauthenticated;
+  - observed local realtime websocket warnings during the session;
+  - these signals were not introduced by the room layout refactor and were left unchanged in this pass.
+
+# Home Page Premium Rework
+
+- [x] Re-evaluate the first home refactor and isolate the remaining issues blocking a premium fold.
+- [x] Write the premium rework plan and lock the intended masthead, hero, console, and live-feed hierarchy.
+- [x] Replace the current home fold with a stronger asymmetrical hero and a tabbed lobby console.
+- [x] Rework the live rooms section and the editorial strip so they support the new visual language.
+- [x] Verify with tests, build, and fresh browser checks on desktop and mobile.
+
+## Review
+
+- Root cause: the first redesign fixed the original chaos but still behaved like an upgraded card layout. The fold remained too heavy, the room-actions area still felt utilitarian, and mobile pushed the actual console too low in the reading order.
+- Premium rework delivered:
+  - `apps/web/src/routes/index.tsx` now uses a sharper story-led hero, explicit CTA buttons, a tabbed `Lobby console`, and a support strip separated from the fold so the main composition reads faster;
+  - `apps/web/src/styles.css` now treats the home as its own visual system with stronger asymmetry, denser console tabs, richer feed rows, and a cleaner responsive collapse;
+  - public rooms keep the same behavior but now read as a real live feed with clearer state badges and better visual priority.
+- Design references consulted for this premium pass:
+  - LogRocket hero-section guidance for fold hierarchy
+  - Landingi game landing-page examples for stronger CTA-led composition
+  - Thunderclap landing-page examples for premium layout rhythm
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright visual check on `http://127.0.0.1:5173/en` at `1365x768` ✅ PASS
+  - Playwright visual check on `http://127.0.0.1:5173/en` at `390x844` ✅ PASS
+  - Playwright console warnings check on the home page ✅ 0 warnings, 0 errors
+
 # Home Page Harmony Refresh
 
 - [x] Audit the current home layout, the relevant CSS, and a few external references to identify the main hierarchy and spacing issues.

@@ -30,3 +30,5 @@ pnpm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+.playwright-cli/
