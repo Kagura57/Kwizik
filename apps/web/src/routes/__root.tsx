@@ -2,6 +2,8 @@ import { MouseEvent, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Toaster } from "sonner";
+import { DEFAULT_LOCALE, localizedPath, switchLocalePath } from "../i18n/locale";
+import { useOptionalLocale } from "../i18n/useLocale";
 import { getAuthSession, leaveRoom as leaveRoomApi, signOutAccount } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
@@ -17,9 +19,42 @@ export function RootLayout() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  const locale = useOptionalLocale();
+  const activeLocale = locale ?? DEFAULT_LOCALE;
   const wasInRoomRef = useRef(false);
   const leavingForHomeRef = useRef(false);
-  const isRoomRoute = /^\/room\/[^/]+\/(play|view)$/.test(pathname);
+  const isRoomRoute = /^\/(fr|en)\/room\/[^/]+\/(play|view)$/.test(pathname);
+  const otherLocale = activeLocale === "fr" ? "en" : "fr";
+  const homePath = localizedPath(activeLocale, "/");
+  const settingsPath = localizedPath(activeLocale, "/settings");
+  const authPath = localizedPath(activeLocale, "/auth");
+  const switchLanguagePath = switchLocalePath(pathname, otherLocale);
+  const copy =
+    activeLocale === "en"
+      ? {
+          home: "Home",
+          settings: "Settings",
+          signIn: "Sign in",
+          signOut: "Sign out",
+          signingOut: "Signing out...",
+          signOutSuccess: "Signed out.",
+          signOutError: "Unable to sign out right now.",
+          subtitle: "Live Anime Blind Test",
+          meta: "Create a room, join with a code, and launch the match live.",
+          languageLabel: "FR",
+        }
+      : {
+          home: "Accueil",
+          settings: "Paramètres",
+          signIn: "Connexion",
+          signOut: "Déconnexion",
+          signingOut: "Déconnexion...",
+          signOutSuccess: "Déconnexion effectuée.",
+          signOutError: "Déconnexion impossible pour le moment.",
+          subtitle: "Live Blindtest Arena",
+          meta: "Crée une room, rejoins en un code, et lance la partie en direct.",
+          languageLabel: "EN",
+        };
 
   const authSessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -35,10 +70,10 @@ export function RootLayout() {
       await queryClient.invalidateQueries({ queryKey: ["auth-session"] });
       await queryClient.invalidateQueries({ queryKey: ["anilist-link-status"] });
       await queryClient.invalidateQueries({ queryKey: ["anilist-sync-status"] });
-      notify.success("Déconnexion effectuée.");
+      notify.success(copy.signOutSuccess);
     },
     onError: () => {
-      notify.error("Déconnexion impossible pour le moment.", {
+      notify.error(copy.signOutError, {
         key: "auth:signout:error",
       });
     },
@@ -69,7 +104,7 @@ export function RootLayout() {
 
     const finish = () => {
       clearSession();
-      navigate({ to: "/" });
+      navigate({ to: homePath });
       leavingForHomeRef.current = false;
     };
 
@@ -100,14 +135,49 @@ export function RootLayout() {
     });
   }, [authSessionQuery.data, authSessionQuery.isSuccess, clearAccount, setAccount]);
 
+  if (locale === null) {
+    return (
+      <>
+        <Toaster
+          className="kwizik-toaster"
+          position="top-right"
+          closeButton
+          visibleToasts={4}
+          expand={false}
+          gap={10}
+          offset={20}
+          mobileOffset={16}
+          containerAriaLabel="Notifications"
+          toastOptions={{
+            classNames: {
+              toast: "kwizik-toast",
+              content: "kwizik-toast-content",
+              title: "kwizik-toast-title",
+              description: "kwizik-toast-description",
+              closeButton: "kwizik-toast-close",
+              actionButton: "kwizik-toast-action",
+              cancelButton: "kwizik-toast-cancel",
+              success: "kwizik-toast-success",
+              error: "kwizik-toast-error",
+              info: "kwizik-toast-info",
+              loading: "kwizik-toast-loading",
+              default: "kwizik-toast-default",
+            },
+          }}
+        />
+        <Outlet />
+      </>
+    );
+  }
+
   const shell = isRoomRoute ? (
     <main className="game-shell">
       <header className="room-topbar">
-        <Link className="brand" to="/" onClick={onRoomHomeClick}>
+        <Link className="brand" to={homePath} onClick={onRoomHomeClick}>
           <img className="brand-lockup" src="/logo.svg" alt="Kwizik" />
         </Link>
-        <Link className="ghost-btn" to="/" onClick={onRoomHomeClick}>
-          Accueil
+        <Link className="ghost-btn" to={homePath} onClick={onRoomHomeClick}>
+          {copy.home}
         </Link>
       </header>
       <Outlet />
@@ -115,21 +185,22 @@ export function RootLayout() {
   ) : (
     <main className="app-shell">
       <header className="topbar">
-        <Link className="brand" to="/">
+        <Link className="brand" to={homePath}>
           <img className="brand-lockup" src="/logo.svg" alt="Kwizik" />
         </Link>
-        <p className="brand-subtitle">Live Blindtest Arena</p>
-        <p className="topbar-meta">
-          Crée une room, rejoins en un code, et lance la partie en direct.
-        </p>
+        <p className="brand-subtitle">{copy.subtitle}</p>
+        <p className="topbar-meta">{copy.meta}</p>
         <nav className="topbar-nav">
-          <Link className="ghost-btn" to="/">
-            Accueil
+          <Link className="ghost-btn" to={homePath}>
+            {copy.home}
           </Link>
+          <a className="ghost-btn" href={switchLanguagePath} hrefLang={otherLocale} lang={otherLocale}>
+            {copy.languageLabel}
+          </a>
           {account.userId ? (
             <>
-              <Link className="ghost-btn" to="/settings">
-                {account.name ?? "Paramètres"}
+              <Link className="ghost-btn" to={settingsPath}>
+                {account.name ?? copy.settings}
               </Link>
               <button
                 className="ghost-btn"
@@ -137,12 +208,12 @@ export function RootLayout() {
                 disabled={signOutMutation.isPending}
                 onClick={() => signOutMutation.mutate()}
               >
-                {signOutMutation.isPending ? "Déconnexion..." : "Déconnexion"}
+                {signOutMutation.isPending ? copy.signingOut : copy.signOut}
               </button>
             </>
           ) : (
-            <Link className="solid-btn" to="/auth">
-              Connexion
+            <Link className="solid-btn" to={authPath}>
+              {copy.signIn}
             </Link>
           )}
         </nav>

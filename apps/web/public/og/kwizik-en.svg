@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Kwizik English social card</title>
+  <desc id="desc">Kwizik anime blind test online multiplayer social preview in English</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08111f" />
+      <stop offset="0.55" stop-color="#10243c" />
+      <stop offset="1" stop-color="#0b1324" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34d399" />
+      <stop offset="1" stop-color="#22d3ee" />
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(220 96) rotate(16) scale(430 310)">
+      <stop offset="0" stop-color="#34d399" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#34d399" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(990 540) rotate(-12) scale(360 250)">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.24" />
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <rect width="1200" height="630" fill="url(#glowA)" />
+  <rect width="1200" height="630" fill="url(#glowB)" />
+  <path d="M0 492C140 446 280 416 404 426c150 12 254 94 416 84 133-8 242-62 380-182v302H0Z" fill="#0d1a2d" opacity="0.86" />
+  <g opacity="0.18">
+    <circle cx="962" cy="108" r="10" fill="#f8fafc" />
+    <circle cx="996" cy="136" r="6" fill="#f8fafc" />
+    <circle cx="930" cy="144" r="5" fill="#f8fafc" />
+    <circle cx="1034" cy="104" r="4" fill="#f8fafc" />
+  </g>
+
+  <g transform="translate(82 74)">
+    <rect x="0" y="0" width="132" height="132" rx="32" fill="#08111f" stroke="rgba(248,250,252,0.1)" />
+    <path d="M44 24v84h16V75l32 33h22L74 66l38-42H90L58 56V24z" fill="#f8fafc" />
+    <rect x="39" y="24" width="5" height="84" rx="2.5" fill="url(#accent)" />
+  </g>
+
+  <g fill="#f8fafc" font-family="Arial, Helvetica, sans-serif">
+    <text x="252" y="134" font-size="34" font-weight="700" letter-spacing="5">KWIZIK</text>
+    <text x="82" y="318" font-size="76" font-weight="700">Anime Blind Test</text>
+    <text x="82" y="394" font-size="76" font-weight="700">Online Multiplayer</text>
+    <text x="82" y="462" font-size="32" opacity="0.86">
+      Create live rooms, challenge friends, and play anime openings and endings.
+    </text>
+  </g>
+
+  <g transform="translate(82 520)">
+    <rect x="0" y="0" width="188" height="52" rx="26" fill="#112338" />
+    <rect x="204" y="0" width="256" height="52" rx="26" fill="#112338" />
+    <rect x="476" y="0" width="262" height="52" rx="26" fill="#112338" />
+    <text x="32" y="34" fill="#dbeafe" font-size="24" font-family="Arial, Helvetica, sans-serif">Live rooms</text>
+    <text x="236" y="34" fill="#d1fae5" font-size="24" font-family="Arial, Helvetica, sans-serif">Anime themes</text>
+    <text x="508" y="34" fill="#cffafe" font-size="24" font-family="Arial, Helvetica, sans-serif">AniList playlists</text>
+  </g>
+</svg>

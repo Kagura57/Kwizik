@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
+import { usePageSeo } from "../../../i18n/seo";
+import { useCurrentLocale } from "../../../i18n/useLocale";
 import {
   getAccountTitlePreference,
   HttpStatusError,
@@ -48,22 +50,28 @@ function errorCode(error: unknown) {
   return error instanceof Error ? error.message : null;
 }
 
-function projectionSnapshotErrorMessage(error: unknown) {
+function projectionSnapshotErrorMessage(error: unknown, locale: "fr" | "en") {
   if (
     error instanceof HttpStatusError &&
     error.status === 404 &&
     error.message === "ROOM_NOT_FOUND"
   ) {
-    return "La room de projection n'est plus disponible.";
+    return locale === "en"
+      ? "This projection room is no longer available."
+      : "La room de projection n'est plus disponible.";
   }
-  return "Synchronisation de la projection impossible.";
+  return locale === "en"
+    ? "Unable to synchronize the projection."
+    : "Synchronisation de la projection impossible.";
 }
 
-function projectionPlaybackErrorMessage(provider: string | null) {
+function projectionPlaybackErrorMessage(provider: string | null, locale: "fr" | "en") {
   if (provider === "youtube" || provider === "animethemes") {
-    return "Lecture video impossible sur l'ecran de projection.";
+    return locale === "en"
+      ? "Video playback failed on the projection screen."
+      : "Lecture video impossible sur l'ecran de projection.";
   }
-  return "Erreur audio sur la piste en cours.";
+  return locale === "en" ? "Audio error on the current track." : "Erreur audio sur la piste en cours.";
 }
 
 const WAVE_BARS = Array.from({ length: 64 }, (_, index) => ({
@@ -130,7 +138,52 @@ function formatProjectionRevealTitle(
 }
 
 export function RoomViewPage() {
-  const { roomCode } = useParams({ from: "/room/$roomCode/view" });
+  const { roomCode } = useParams({ from: "/$locale/room/$roomCode/view" });
+  const locale = useCurrentLocale();
+  const copy =
+    locale === "en"
+      ? {
+          projection: "Projection",
+          round: "Round",
+          playbackTitle: "Projection playback",
+          loadingVideo: "Loading video...",
+          readySync: "Projection ready, waiting for synchronized start...",
+          localPrep: "Preparing projection locally...",
+          buffering: "Buffering...",
+          ready: "ready",
+          textModeHint: "Text mode: find the title or artist",
+          reveal: "Reveal",
+          answerValidated: "Answer validated",
+          noAnswer: "No answer",
+          points: "pts",
+          revealArtworkAlt: "cover art",
+        }
+      : {
+          projection: "Projection",
+          round: "Manche",
+          playbackTitle: "Lecture projection",
+          loadingVideo: "Chargement de la video...",
+          readySync: "Projection prete, attente du depart synchronise...",
+          localPrep: "Preparation locale de la projection...",
+          buffering: "Buffering en cours",
+          ready: "pret",
+          textModeHint: "Mode texte: trouver titre ou artiste",
+          reveal: "Revelation",
+          answerValidated: "Reponse validee",
+          noAnswer: "Pas de réponse",
+          points: "pts",
+          revealArtworkAlt: "illustration",
+        };
+  usePageSeo({
+    title: locale === "en" ? `Projection ${roomCode} | Kwizik` : `Projection ${roomCode} | Kwizik`,
+    description:
+      locale === "en"
+        ? "Projection view for an anime blind test room."
+        : "Vue projection pour une room de blind test anime.",
+    locale,
+    path: `/room/${roomCode}/view`,
+    robots: "noindex,nofollow",
+  });
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -251,10 +304,10 @@ export function RoomViewPage() {
         : (errorCode(error) ?? "UNKNOWN_ERROR");
     if (lastSnapshotErrorToastRef.current === signature) return;
     lastSnapshotErrorToastRef.current = signature;
-    notify.error(projectionSnapshotErrorMessage(error), {
+    notify.error(projectionSnapshotErrorMessage(error, locale), {
       key: `room-view:snapshot:${roomCode}:${signature}`,
     });
-  }, [roomCode, snapshotQuery.error]);
+  }, [locale, roomCode, snapshotQuery.error]);
 
   const remainingMs = useMemo(() => {
     if (!effectiveDeadlineMs) return null;
@@ -789,9 +842,10 @@ export function RoomViewPage() {
     const key = `room-view:playback:${roomCode}:${state?.state ?? "unknown"}:${trackId}:${activeProvider ?? "preview"}`;
     if (lastPlaybackErrorToastRef.current === key) return;
     lastPlaybackErrorToastRef.current = key;
-    notify.error(projectionPlaybackErrorMessage(activeProvider), { key });
+    notify.error(projectionPlaybackErrorMessage(activeProvider, locale), { key });
   }, [
     audioError,
+    locale,
     roomCode,
     state?.media?.provider,
     state?.media?.trackId,
@@ -918,8 +972,8 @@ export function RoomViewPage() {
     <section className="projection-stage">
       <article className="projection-center-stage projection-arena">
         <div className="round-strip">
-          <span>Projection {roomCode}</span>
-          <strong>Manche {roundLabel}</strong>
+          <span>{copy.projection} {roomCode}</span>
+          <strong>{copy.round} {roundLabel}</strong>
         </div>
 
         <div
@@ -946,7 +1000,7 @@ export function RoomViewPage() {
               key={`${stableYoutubePlayback?.key ?? "none"}|${iframeEpoch}`}
               className="media-video-layer youtube-video-layer"
               src={activeYoutubeEmbed}
-              title="Projection playback"
+              title={copy.playbackTitle}
               allow="autoplay; encrypted-media"
               onError={() => {
                 setAudioError(true);
@@ -973,16 +1027,16 @@ export function RoomViewPage() {
           {effectivePhase === "loading" && usingAnimeVideoPlayback && (
             <div className="media-loading-overlay" role="status" aria-live="polite">
               <span className="resolving-tracks-spinner" aria-hidden="true" />
-              <p>Chargement de la video...</p>
+              <p>{copy.loadingVideo}</p>
               <small>
                 {animePlaybackStatus === "ready"
-                  ? "Projection prete, attente du depart synchronise..."
+                  ? copy.readySync
                   : animePlaybackStatus === "warming"
-                    ? "Preparation locale de la projection..."
-                    : "Buffering en cours"}
+                    ? copy.localPrep
+                    : copy.buffering}
               </small>
               <small>
-                {state?.mediaReadyCount ?? 0}/{state?.mediaReadyTotalCount ?? 0} pret
+                {state?.mediaReadyCount ?? 0}/{state?.mediaReadyTotalCount ?? 0} {copy.ready}
                 {(state?.mediaReadyTotalCount ?? 0) > 1 ? "s" : ""}
               </small>
             </div>
@@ -1000,7 +1054,7 @@ export function RoomViewPage() {
         )}
 
         {effectivePhase === "playing" && state?.mode === "text" && (
-          <p className="projection-hint">Mode texte: trouver titre ou artiste</p>
+          <p className="projection-hint">{copy.textModeHint}</p>
         )}
 
         {(state?.state === "reveal" ||
@@ -1010,13 +1064,13 @@ export function RoomViewPage() {
             <div className="reveal-box large reveal-glass">
               <div className="reveal-cover">
                 {revealArtwork ? (
-                  <img src={revealArtwork} alt={`${state.reveal.title} cover`} />
+                  <img src={revealArtwork} alt={`${state.reveal.title} ${copy.revealArtworkAlt}`} />
                 ) : (
                   <div className="reveal-cover-fallback" aria-hidden="true" />
                 )}
               </div>
               <div className="reveal-content">
-                <p className="kicker">Reveal</p>
+                <p className="kicker">{copy.reveal}</p>
                 <h3 className="reveal-title">
                   {formatProjectionRevealTitle(state.reveal, titlePreference)}
                 </h3>
@@ -1041,7 +1095,7 @@ export function RoomViewPage() {
                 <strong className="leaderboard-name">
                   {entry.displayName}
                   {entry.hasAnsweredCurrentRound && (
-                    <i className="answer-check" aria-label="Reponse validee">
+                    <i className="answer-check" aria-label={copy.answerValidated}>
                       ✓
                     </i>
                   )}
@@ -1053,7 +1107,7 @@ export function RoomViewPage() {
                     const label =
                       revealAnswer.submitted && revealAnswer.answer
                         ? withRomajiLabel(revealAnswer.answer)
-                        : "Pas de réponse";
+                        : copy.noAnswer;
                     return (
                       <small
                         className={`leaderboard-reveal-answer${revealAnswer.isCorrect ? " correct" : revealAnswer.submitted ? " wrong" : ""}`}
@@ -1064,7 +1118,7 @@ export function RoomViewPage() {
                   })()}
               </div>
               <div className="leaderboard-score-block">
-                <em>{entry.score} pts</em>
+                <em>{entry.score} {copy.points}</em>
                 <small className="leaderboard-meta">
                   <span className="round-gain">+{entry.lastRoundScore}</span>
                   <span className={`streak-chip${entry.streak > 0 ? " hot" : ""}`}>

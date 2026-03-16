@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { shouldAllowLoopbackFallbacks } from "./runtimeOrigin";
+import { getRuntimeOrigin, shouldAllowLoopbackFallbacks } from "./runtimeOrigin";
 
 const originalWindow = globalThis.window;
 const hadWindow = "window" in globalThis;
@@ -14,6 +14,7 @@ function stubWindow(url: string) {
         protocol: parsed.protocol,
         hostname: parsed.hostname,
         port: parsed.port,
+        origin: parsed.origin,
       },
     },
   });
@@ -49,8 +50,14 @@ describe("runtime origin helpers", () => {
     expect(shouldAllowLoopbackFallbacks()).toBe(false);
   });
 
+  it("returns the current runtime origin when available", () => {
+    stubWindow("https://kwizik.app");
+    expect(getRuntimeOrigin()).toBe("https://kwizik.app");
+  });
+
   it("rejects loopback fallbacks when no browser window exists", () => {
     delete (globalThis as { window?: unknown }).window;
     expect(shouldAllowLoopbackFallbacks()).toBe(false);
+    expect(getRuntimeOrigin()).toBe(null);
   });
 });

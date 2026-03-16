@@ -1,62 +1,85 @@
-import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, notFound } from "@tanstack/react-router";
+import { isSupportedLocale } from "./i18n/locale";
 import { RootLayout } from "./routes/__root";
 import { AuthPage } from "./routes/auth";
 import { HomePage } from "./routes/index";
 import { JoinPage } from "./routes/join";
+import { LocalizedLayout } from "./routes/localized-layout";
 import { RoomPlayPage } from "./routes/room/$roomCode/play";
 import { RoomViewPage } from "./routes/room/$roomCode/view";
+import { RootLanguagePage } from "./routes/root-language";
 import { SettingsPage } from "./routes/settings";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
 });
 
-const homeRoute = createRoute({
+const rootLanguageRoute = createRoute({
   getParentRoute: () => rootRoute,
+  path: "/",
+  component: RootLanguagePage,
+});
+
+const localeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/$locale",
+  beforeLoad: ({ params }) => {
+    if (!isSupportedLocale(params.locale)) {
+      throw notFound();
+    }
+  },
+  component: LocalizedLayout,
+});
+
+const homeRoute = createRoute({
+  getParentRoute: () => localeRoute,
   path: "/",
   component: HomePage,
 });
 
 const joinRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/join",
+  getParentRoute: () => localeRoute,
+  path: "join",
   component: JoinPage,
 });
 
 const authRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/auth",
+  getParentRoute: () => localeRoute,
+  path: "auth",
   component: AuthPage,
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/settings",
+  getParentRoute: () => localeRoute,
+  path: "settings",
   component: SettingsPage,
 });
 
 const roomPlayRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/room/$roomCode/play",
+  getParentRoute: () => localeRoute,
+  path: "room/$roomCode/play",
   component: RoomPlayPage,
 });
 
 const roomViewRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/room/$roomCode/view",
+  getParentRoute: () => localeRoute,
+  path: "room/$roomCode/view",
   component: RoomViewPage,
 });
 
 const routeTree = rootRoute.addChildren([
-  homeRoute,
-  joinRoute,
-  authRoute,
-  settingsRoute,
-  roomPlayRoute,
-  roomViewRoute,
+  rootLanguageRoute,
+  localeRoute.addChildren([
+    homeRoute,
+    joinRoute,
+    authRoute,
+    settingsRoute,
+    roomPlayRoute,
+    roomViewRoute,
+  ]),
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({ routeTree, defaultPreload: "intent" });
 
 declare module "@tanstack/react-router" {
   interface Register {

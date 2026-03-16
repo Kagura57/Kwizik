@@ -2,6 +2,7 @@
 
 ## 2026-03-13
 
+- Quand l'utilisateur dit que la disposition d'une page est "desastreuse", ne pas se limiter a corriger un bloc isole; reevaluer la composition complete (hero, hierarchy, grid, density, breathing room, CTA, responsive balance) avant de proposer un redesign.
 - Quand un utilisateur demande un mode "simplement aleatoire", ne pas supposer que le catalogue deja synchronise en base est acceptable; verifier explicitement s'il attend un tirage depuis une source distante/globalement fraiche plutot qu'un pool local.
 - Pour un mode distant "classique", ne pas proposer un echec utilisateur ou un fallback permanent comme comportement normal; dimensionner le chemin principal pour remplir suffisamment le pool jouable, et n'utiliser le cache que pour accelerer ce meme chemin.
 - Si l'utilisateur dit que l'aleatoire parfait prime sur la robustesse cachee, ne reutiliser aucun pool preconstruit entre parties; garder un tirage frais par partie et limiter le cache aux metadonnees techniques qui n'influencent pas la selection.
@@ -10,6 +11,18 @@
 - Quand un mode recoupe une source distante avec un catalogue local, verifier que les IDs appartiennent bien au meme domaine; ne jamais traiter des `Media.id` AniList comme des cles primaires internes du catalogue SQL.
 - Si l'utilisateur se plaint que les memes animes reapparaissent en bons et mauvais choix, inspecter si les distractors reutilisent des reponses futures; un mode MCQ anime doit privilegier un pool de distractors dedie plutot que recycler les answers des rounds suivants.
 - Quand des choix MCQ anime sont deduplices par identite canonique, ne pas s'appuyer uniquement sur une normalisation ASCII; pour les titres CJK, une normalisation qui vide la chaine fait croire que tous les animes japonais sont identiques et casse la selection des distractors.
+
+## 2026-03-16
+
+- Quand un utilisateur recadre une optimisation SEO vers un besoin de traduction, ne pas continuer sur une simple landing monolingue; requalifier explicitement le chantier en SEO bilingue/i18n avant de proposer l'implementation.
+- Quand un utilisateur dit qu'une refonte visuelle est "deja beaucoup mieux" mais autorise a continuer, ne pas faire une passe cosmetique abstraite; identifier les derniers points faibles concrets (hero trop massif, tension hero/actions, densite de header, rythme vertical) et proposer une deuxieme iteration plus ambitieuse mais toujours coherent avec la direction validee.
+- Quand une refonte room "premium" fait perdre la priorite du gameplay, ne pas s'enteter sur le concept visuel; revenir immediatement a la hierarchie fonctionnelle reelle: scene media et reponses d'abord, meta ensuite, header compact, aucune UI ne doit manger la surface utile du round live.
+- Quand un utilisateur signale une regression de room live apres une passe de design, verifier les details d'usage reels et pas seulement la composition generale: aucun scroll horizontal parasite dans les rails, aucune action critique coupee en bas, et aucune information dupliquee entre header et HUD central.
+- Quand l'utilisateur dit que la video de reveal ne se voit pas assez bien, traiter le reveal comme l'etat prioritaire de la room: compacter encore le bandeau live, reduire les elements narratifs non essentiels, et reserver davantage de hauteur/largeur a la video au moment du reveal.
+- Quand l'utilisateur dit que c'est "encore beaucoup trop gros" malgre une premiere compression, ne pas micro-ajuster; reduire franchement le chrome et adopter une vraie composition reveal-first meme si les rails lateraux deviennent secondaires.
+- Quand l'utilisateur precise que le probleme de reveal est la hauteur et non la largeur, corriger l'axe reel du probleme: recuperer de l'espace vertical et limiter le crop de la video, au lieu de seulement elargir la colonne centrale.
+- Quand l'utilisateur constate qu'une version compacte du bandeau est meilleure, ne pas la reserver a un sous-etat; generaliser le pattern gagnant a tout le live pour retrouver une hierarchie plus coherente et recuperer de la hauteur utile partout.
+- Quand l'utilisateur montre encore du vide vertical dans des cartes compactees, ne pas conclure trop vite que le probleme est regle; comprimer aussi les paddings, gaps et line-heights reels des cartes et revérifier sur des screenshots de production locale.
 
 ## 2026-03-12
 

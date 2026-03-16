@@ -1,28 +1,35 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { localizedPath } from "../i18n/locale";
+import { usePageSeo } from "../i18n/seo";
+import { useCurrentLocale } from "../i18n/useLocale";
 import { HttpStatusError, signInWithEmail, signUpWithEmail } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
 
 type AuthMode = "signin" | "signup";
 
-function authErrorMessage(error: unknown, mode: AuthMode) {
+function authErrorMessage(error: unknown, mode: AuthMode, locale: "fr" | "en") {
   if (error instanceof HttpStatusError) {
     if (error.message === "Invalid email or password" || error.status === 401) {
-      return "Email ou mot de passe invalide.";
+      return locale === "en" ? "Invalid email or password." : "Email ou mot de passe invalide.";
     }
     if (
       error.message === "User already exists" ||
       error.message === "User already exists. Use another email"
     ) {
-      return "Un compte existe déjà avec cet email.";
+      return locale === "en"
+        ? "An account already exists for this email."
+        : "Un compte existe déjà avec cet email.";
     }
     if (error.message === "Password too short") {
-      return "Le mot de passe est trop court.";
+      return locale === "en" ? "Password is too short." : "Le mot de passe est trop court.";
     }
     if (error.message === "Email and password is not enabled") {
-      return "La connexion email/mot de passe est désactivée côté serveur.";
+      return locale === "en"
+        ? "Email/password authentication is disabled on the server."
+        : "La connexion email/mot de passe est désactivée côté serveur.";
     }
     return error.message;
   }
@@ -32,12 +39,17 @@ function authErrorMessage(error: unknown, mode: AuthMode) {
   }
 
   return mode === "signin"
-    ? "Connexion impossible pour le moment."
-    : "Inscription impossible pour le moment.";
+    ? locale === "en"
+      ? "Unable to sign in right now."
+      : "Connexion impossible pour le moment."
+    : locale === "en"
+      ? "Unable to sign up right now."
+      : "Inscription impossible pour le moment.";
 }
 
 export function AuthPage() {
   const queryClient = useQueryClient();
+  const locale = useCurrentLocale();
   const account = useGameStore((state) => state.account);
   const setAccount = useGameStore((state) => state.setAccount);
   const [mode, setMode] = useState<AuthMode>("signin");
@@ -50,11 +62,68 @@ export function AuthPage() {
   });
 
   const redirectTarget = useMemo(() => {
-    if (!locationSearch) return "/settings";
+    if (!locationSearch) return localizedPath(locale, "/settings");
     const value = new URLSearchParams(locationSearch).get("returnTo");
-    if (!value) return "/settings";
-    return value.startsWith("/") ? value : "/settings";
-  }, [locationSearch]);
+    if (!value) return localizedPath(locale, "/settings");
+    if (!value.startsWith("/")) return localizedPath(locale, "/settings");
+    return value.startsWith("/fr") || value.startsWith("/en")
+      ? value
+      : localizedPath(locale, value);
+  }, [locale, locationSearch]);
+  const copy =
+    locale === "en"
+      ? {
+          title: "Kwizik account",
+          subtitle: "Sign in to link your AniList account, sync your library, and manage your profile.",
+          connectedAs: "Signed in as",
+          openSettings: "Open settings",
+          backHome: "Back home",
+          signin: "Sign in",
+          signinDescription: "Access your existing account",
+          signup: "Sign up",
+          signupDescription: "Create a new account",
+          name: "Name",
+          namePlaceholder: "Your nickname",
+          email: "Email",
+          password: "Password",
+          rememberMe: "Keep me signed in",
+          signingIn: "Signing in...",
+          signingUp: "Signing up...",
+          submitSignin: "Sign in",
+          submitSignup: "Create my account",
+          userFallback: "User",
+        }
+      : {
+          title: "Compte Kwizik",
+          subtitle: "Connecte-toi pour lier ton compte AniList, synchroniser ta liste et gerer ton profil.",
+          connectedAs: "Connecté en tant que",
+          openSettings: "Ouvrir mes paramètres",
+          backHome: "Retour accueil",
+          signin: "Connexion",
+          signinDescription: "Accéder à ton compte existant",
+          signup: "Inscription",
+          signupDescription: "Créer un nouveau compte",
+          name: "Nom",
+          namePlaceholder: "Ton pseudo",
+          email: "Email",
+          password: "Mot de passe",
+          rememberMe: "Rester connecté",
+          signingIn: "Connexion...",
+          signingUp: "Inscription...",
+          submitSignin: "Se connecter",
+          submitSignup: "Créer mon compte",
+          userFallback: "Utilisateur",
+        };
+  usePageSeo({
+    title: locale === "en" ? "Kwizik account" : "Compte Kwizik",
+    description:
+      locale === "en"
+        ? "Sign in to sync AniList and manage your Kwizik profile."
+        : "Connecte-toi pour synchroniser AniList et gerer ton profil Kwizik.",
+    locale,
+    path: "/auth",
+    noindex: true,
+  });
 
   const authMutation = useMutation({
     mutationFn: async () => {
@@ -83,7 +152,7 @@ export function AuthPage() {
       window.location.assign(redirectTarget);
     },
     onError: (error) => {
-      notify.error(authErrorMessage(error, mode), {
+      notify.error(authErrorMessage(error, mode, locale), {
         key: `auth:${mode}:error`,
       });
     },
@@ -100,22 +169,20 @@ export function AuthPage() {
   return (
     <section className="single-panel">
       <article className="panel-card">
-        <h2 className="panel-title">Compte Kwizik</h2>
-        <p className="panel-copy">
-          Connecte-toi pour lier ton compte AniList, synchroniser ta liste et gerer ton profil.
-        </p>
+        <h2 className="panel-title">{copy.title}</h2>
+        <p className="panel-copy">{copy.subtitle}</p>
 
         {account.userId ? (
           <div className="panel-form">
             <p className="status">
-              Connecté en tant que {account.name ?? account.email ?? "Utilisateur"}.
+              {copy.connectedAs} {account.name ?? account.email ?? copy.userFallback}.
             </p>
             <div className="waiting-actions">
-              <Link className="solid-btn" to="/settings">
-                Ouvrir mes paramètres
+              <Link className="solid-btn" to={localizedPath(locale, "/settings")}>
+                {copy.openSettings}
               </Link>
-              <Link className="ghost-btn" to="/">
-                Retour accueil
+              <Link className="ghost-btn" to={localizedPath(locale, "/")}>
+                {copy.backHome}
               </Link>
             </div>
           </div>
@@ -127,34 +194,34 @@ export function AuthPage() {
                 className={`source-preset-btn${mode === "signin" ? " active" : ""}`}
                 onClick={() => setMode("signin")}
               >
-                <strong>Connexion</strong>
-                <span>Accéder à ton compte existant</span>
+                <strong>{copy.signin}</strong>
+                <span>{copy.signinDescription}</span>
               </button>
               <button
                 type="button"
                 className={`source-preset-btn${mode === "signup" ? " active" : ""}`}
                 onClick={() => setMode("signup")}
               >
-                <strong>Inscription</strong>
-                <span>Créer un nouveau compte</span>
+                <strong>{copy.signup}</strong>
+                <span>{copy.signupDescription}</span>
               </button>
             </div>
 
             <form className="panel-form" onSubmit={onSubmit}>
               {mode === "signup" && (
                 <label>
-                  <span>Nom</span>
+                  <span>{copy.name}</span>
                   <input
                     value={name}
                     onChange={(event) => setName(event.currentTarget.value)}
                     maxLength={60}
-                    placeholder="Ton pseudo"
+                    placeholder={copy.namePlaceholder}
                   />
                 </label>
               )}
 
               <label>
-                <span>Email</span>
+                <span>{copy.email}</span>
                 <input
                   value={email}
                   onChange={(event) => setEmail(event.currentTarget.value)}
@@ -165,7 +232,7 @@ export function AuthPage() {
               </label>
 
               <label>
-                <span>Mot de passe</span>
+                <span>{copy.password}</span>
                 <input
                   value={password}
                   onChange={(event) => setPassword(event.currentTarget.value)}
@@ -183,18 +250,18 @@ export function AuthPage() {
                     type="checkbox"
                   />
                   <span className="remember-toggle-ui" aria-hidden="true" />
-                  <span>Rester connecté</span>
+                  <span>{copy.rememberMe}</span>
                 </label>
               )}
 
               <button className="solid-btn" type="submit" disabled={authMutation.isPending}>
                 {authMutation.isPending
                   ? mode === "signin"
-                    ? "Connexion..."
-                    : "Inscription..."
+                    ? copy.signingIn
+                    : copy.signingUp
                   : mode === "signin"
-                    ? "Se connecter"
-                    : "Créer mon compte"}
+                    ? copy.submitSignin
+                    : copy.submitSignup}
               </button>
             </form>
           </>
