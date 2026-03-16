@@ -274,19 +274,29 @@ function normalizeAnswer(value: string) {
   return normalizeAnimeText(value);
 }
 
+function normalizeMcqIdentity(value: string) {
+  const normalized = normalizeAnswer(value);
+  if (normalized.length > 0) return normalized;
+  return value
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 function mcqChoiceIdentity(track: Pick<MusicTrack, "provider" | "title" | "artist" | "answer">) {
   const canonical = track.answer?.canonical?.trim() ?? "";
   if (canonical.length > 0) {
-    return normalizeAnswer(canonical);
+    return normalizeMcqIdentity(canonical);
   }
   if (track.provider === "animethemes") {
-    return normalizeAnswer(track.title);
+    return normalizeMcqIdentity(track.title);
   }
-  return normalizeAnswer(asChoiceLabel(track));
+  return normalizeMcqIdentity(asChoiceLabel(track));
 }
 
 function mcqChoiceIdentityForRoundChoice(choice: Pick<RoundChoice, "titleRomaji">) {
-  return normalizeAnswer(choice.titleRomaji);
+  return normalizeMcqIdentity(choice.titleRomaji);
 }
 
 function collectAnswerVariants(track: MusicTrack) {
@@ -1089,7 +1099,9 @@ export class RoomStore {
         previouslyUsedChoiceIdentities.add(mcqChoiceIdentityForRoundChoice(choice));
       }
     }
-    const distractorCandidates = session.distractorTrackPool
+    const canReuseFutureRoundTracksAsDistractors = track.provider !== "animethemes";
+    const futureRoundTracks = canReuseFutureRoundTracksAsDistractors ? session.trackPool.slice(round) : [];
+    const distractorCandidates = [...futureRoundTracks, ...session.distractorTrackPool]
       .filter((candidate) => {
         const candidateIdentity = mcqChoiceIdentity(candidate);
         return (
@@ -1115,20 +1127,59 @@ export class RoomStore {
     const seenValues = new Set([correct.value]);
     const seenIdentities = new Set([correctIdentity]);
     const weightedPool = rankedDistractors.filter((entry) => entry.score >= minimumScore);
-    while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
-      const weights = weightedPool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
+    const pullWeightedCandidate = (
+      pool: Array<(typeof weightedPool)[number]>,
+      fallbackPool?: Array<(typeof weightedPool)[number]>,
+    ) => {
+      const weights = pool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
       const totalWeight = weights.reduce((sum, current) => sum + current, 0);
       const ticket = Math.random() * totalWeight;
       let cumulative = 0;
-      let selectedIndex = weightedPool.length - 1;
-      for (let index = 0; index < weightedPool.length; index += 1) {
+      let selectedIndex = pool.length - 1;
+      for (let index = 0; index < pool.length; index += 1) {
         cumulative += weights[index] ?? 0;
         if (ticket <= cumulative) {
           selectedIndex = index;
           break;
         }
       }
-      const selected = weightedPool.splice(selectedIndex, 1)[0];
+      const selected = pool.splice(selectedIndex, 1)[0];
+      if (selected && fallbackPool) {
+        const fallbackIndex = fallbackPool.findIndex((entry) => entry.identity === selected.identity);
+        if (fallbackIndex >= 0) {
+          fallbackPool.splice(fallbackIndex, 1);
+        }
+      }
+      return selected;
+    };
+    const dominantScriptFamily = (candidate: Pick<MusicTrack, "title" | "artist">) => {
+      const text = `${candidate.title} ${candidate.artist}`;
+      if (JAPANESE_SCRIPT_RE.test(text)) return "japanese" as const;
+      if (KOREAN_SCRIPT_RE.test(text)) return "korean" as const;
+      return "latin" as const;
+    };
+    const sourceScriptFamily = dominantScriptFamily(track);
+    const sameLanguagePool = rankedDistractors.filter((entry) => {
+      if (sourceProfile.language === "french") {
+        return entry.profile.language === "french";
+      }
+      return dominantScriptFamily(entry.track) === sourceScriptFamily;
+    });
+    while (sameLanguagePool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
+      const selected = pullWeightedCandidate(sameLanguagePool, weightedPool);
+      if (
+        !selected ||
+        seenValues.has(selected.choice.value) ||
+        seenIdentities.has(selected.identity)
+      ) {
+        continue;
+      }
+      uniqueOptions.push(selected.choice);
+      seenValues.add(selected.choice.value);
+      seenIdentities.add(selected.identity);
+    }
+    while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
+      const selected = pullWeightedCandidate(weightedPool);
       if (
         !selected ||
         seenValues.has(selected.choice.value) ||

@@ -1350,15 +1350,72 @@ describe("RoomStore gameplay progression", () => {
 
   it("does not use future correct tracks as earlier MCQ distractors", async () => {
     let nowMs = 0;
+    const animeTracks: MusicTrack[] = [
+      {
+        provider: "animethemes",
+        id: "anime-future-1",
+        title: "進撃の巨人",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/anime-future-1.webm",
+        sourceUrl: "https://v.animethemes.moe/anime-future-1.webm",
+        answer: { canonical: "Shingeki no Kyojin", englishTitle: "Attack on Titan", aliases: ["Attack on Titan"] },
+      },
+      {
+        provider: "animethemes",
+        id: "anime-future-2",
+        title: "鋼の錬金術師",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/anime-future-2.webm",
+        sourceUrl: "https://v.animethemes.moe/anime-future-2.webm",
+        answer: { canonical: "Fullmetal Alchemist", englishTitle: "Fullmetal Alchemist", aliases: ["Fullmetal Alchemist"] },
+      },
+      {
+        provider: "animethemes",
+        id: "anime-future-3",
+        title: "BLEACH",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/anime-future-3.webm",
+        sourceUrl: "https://v.animethemes.moe/anime-future-3.webm",
+        answer: { canonical: "Bleach", englishTitle: "Bleach", aliases: ["Bleach"] },
+      },
+      {
+        provider: "animethemes",
+        id: "anime-future-4",
+        title: "NARUTO",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/anime-future-4.webm",
+        sourceUrl: "https://v.animethemes.moe/anime-future-4.webm",
+        answer: { canonical: "Naruto", englishTitle: "Naruto", aliases: ["Naruto"] },
+      },
+      {
+        provider: "animethemes",
+        id: "anime-future-5",
+        title: "DEATH NOTE",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/anime-future-5.webm",
+        sourceUrl: "https://v.animethemes.moe/anime-future-5.webm",
+        answer: { canonical: "Death Note", englishTitle: "Death Note", aliases: ["Death Note"] },
+      },
+      {
+        provider: "animethemes",
+        id: "anime-future-6",
+        title: "Code Geass",
+        artist: "OP1",
+        previewUrl: "https://v.animethemes.moe/anime-future-6.webm",
+        sourceUrl: "https://v.animethemes.moe/anime-future-6.webm",
+        answer: { canonical: "Code Geass", englishTitle: "Code Geass", aliases: ["Code Geass"] },
+      },
+    ];
     const store = new RoomStore({
       now: () => nowMs,
-      getTrackPool: async () => MCQ_NO_REPEAT_DISTRACTOR_TRACKS,
+      getTrackPool: async () => animeTracks,
       config: {
         countdownMs: 5,
+        loadingMs: 0,
         playingMs: 20,
         revealMs: 5,
         leaderboardMs: 5,
-        maxRounds: 3,
+        maxRounds: 2,
       },
     });
 
@@ -1367,7 +1424,7 @@ describe("RoomStore gameplay progression", () => {
     expect(player.status).toBe("ok");
     if (player.status !== "ok") return;
 
-    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "spotify:playlist:dummy");
+    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "anime:no-future-distractor");
     expect(sourceSet.status).toBe("ok");
     const ready = store.setPlayerReady(roomCode, player.value.playerId, true);
     expect(ready.status).toBe("ok");
@@ -1378,12 +1435,22 @@ describe("RoomStore gameplay progression", () => {
       rooms: Map<string, { trackPool: MusicTrack[] }>;
     }).rooms;
     const session = roomMap.get(roomCode);
-    const futureRoundLabel = session?.trackPool[2]
-      ? `${session.trackPool[2].title} - ${session.trackPool[2].artist}`
+    const futureRoundLabel = session?.trackPool[1]
+      ? `${session.trackPool[1].title} - ${session.trackPool[1].artist}`
       : null;
 
+    const advanceTo = (predicate: (state: ReturnType<typeof store.roomState>) => boolean, maxSteps = 12) => {
+      for (let step = 0; step < maxSteps; step += 1) {
+        const current = store.roomState(roomCode);
+        if (predicate(current)) return current;
+        const deadline = current?.deadlineMs ?? null;
+        nowMs = deadline !== null ? deadline + 1 : nowMs + 20;
+      }
+      return store.roomState(roomCode);
+    };
+
     nowMs = 5;
-    const round1Playing = store.roomState(roomCode);
+    const round1Playing = advanceTo((state) => state?.state === "playing" && state.round === 1);
     expect(round1Playing?.state).toBe("playing");
     expect(round1Playing?.mode).toBe("mcq");
     expect((round1Playing?.choices ?? []).some((choice) => choice.value === futureRoundLabel)).toBe(false);

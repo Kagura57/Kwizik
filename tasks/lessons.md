@@ -9,6 +9,7 @@
 - Quand un mode aleatoire distant doit ensuite recouper un catalogue jouable local (ex. AniList -> AnimeThemes), ne jamais plafonner la decouverte distante a un petit nombre fixe d'IDs; tester explicitement le cas ou un premier tirage frais n'a aucun match jouable et doit etre elargi avant d'echouer.
 - Quand un mode recoupe une source distante avec un catalogue local, verifier que les IDs appartiennent bien au meme domaine; ne jamais traiter des `Media.id` AniList comme des cles primaires internes du catalogue SQL.
 - Si l'utilisateur se plaint que les memes animes reapparaissent en bons et mauvais choix, inspecter si les distractors reutilisent des reponses futures; un mode MCQ anime doit privilegier un pool de distractors dedie plutot que recycler les answers des rounds suivants.
+- Quand des choix MCQ anime sont deduplices par identite canonique, ne pas s'appuyer uniquement sur une normalisation ASCII; pour les titres CJK, une normalisation qui vide la chaine fait croire que tous les animes japonais sont identiques et casse la selection des distractors.
 
 ## 2026-03-12
 
