@@ -241,6 +241,30 @@ export class UserAnimeLibraryRepository {
 
     return result.rows.map((row) => row.anime_id);
   }
+
+  async animeIdsForUser(userId: string, limit = 20_000): Promise<number[]> {
+    const cleanUserId = userId.trim();
+    if (cleanUserId.length <= 0) return [];
+    const safeLimit = Math.max(1, Math.min(limit, 50_000));
+
+    if (!isDbEnabled()) {
+      const rows = this.memoryActiveByUser.get(cleanUserId) ?? [];
+      return rows.slice(0, safeLimit).map((row) => row.animeId);
+    }
+
+    const result = await pool.query<{ anime_id: number }>(
+      `
+        select anime_id
+        from user_anime_library_active
+        where user_id = $1
+        order by random()
+        limit $2
+      `,
+      [cleanUserId, safeLimit],
+    );
+
+    return result.rows.map((row) => row.anime_id);
+  }
 }
 
 export const userAnimeLibraryRepository = new UserAnimeLibraryRepository();

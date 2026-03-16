@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAnimeAcronym,
   collectAniListAliasCandidates,
+  collectAniListCatalogMetadata,
   normalizeAniListListStatus,
   parseAnimeCatalogId,
 } from "../src/services/jobs/anilist-sync-worker";
@@ -38,6 +39,28 @@ describe("anilist sync worker", () => {
       "AOT",
       "SnK",
     ]);
+  });
+
+  it("collects catalog metadata for popularity, year, and genres", () => {
+    const metadata = collectAniListCatalogMetadata({
+      media: {
+        title: {
+          english: "Attack on Titan",
+          native: "進撃の巨人",
+        },
+        popularity: 523456.2,
+        seasonYear: 2013,
+        genres: ["Action", "Drama", "Action", "  "],
+      },
+    });
+
+    expect(metadata).toEqual({
+      titleEnglish: "Attack on Titan",
+      titleNative: "進撃の巨人",
+      popularity: 523456,
+      year: 2013,
+      genres: ["Action", "Drama"],
+    });
   });
 
   it("parses anime catalog ids from bigint-like query values", () => {

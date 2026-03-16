@@ -14,8 +14,25 @@ import { pool } from "../db/client";
 import { readEnvVar } from "../lib/env";
 import { userAnimeLibraryRepository } from "../repositories/UserAnimeLibraryRepository";
 import { userLikedTrackRepository } from "../repositories/UserLikedTrackRepository";
+import {
+  contentFilterSqlCondition,
+  difficultySqlCondition,
+  normalizeRoomContentFilters,
+  type RoomContentFilters,
+  type RoomDifficultyFilter,
+} from "./AniListRoomFilters";
 import { normalizeAnimeText } from "./AnimeTextNormalization";
+import {
+  fetchAniListMediaMetadataBySearchBatch,
+} from "./AniListTitleLookup";
+import {
+  fetchRandomAniListAnimeCandidates,
+  AniListRemoteFailureError,
+  MAX_RANDOM_ANIME_DISCOVERY_IDS,
+  type AniListRandomAnimeCandidate,
+} from "./AniListRandomAnimeSource";
 import { animeThemesProxyCache } from "./AnimeThemesProxyCache";
+import { normalizeAnimeAlias } from "./AnimeThemesCatalogService";
 import { RoundSyncCoordinator } from "./RoundSyncCoordinator";
 
 type RoundMode = "mcq" | "text";
@@ -25,8 +42,9 @@ type RoundChoice = {
   titleEnglish: string | null;
   themeLabel: string;
 };
-type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type RoomSourceMode = "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 type RoomThemeMode = "op_only" | "ed_only" | "mix";
+type RoomAnswerMode = "mcq_only" | "text_only" | "mixed";
 type LibraryProvider = "spotify" | "deezer";
 type ProviderLinkStatus = "linked" | "not_linked" | "expired";
 type PoolBuildStatus = "idle" | "building" | "ready" | "failed";
@@ -51,6 +69,8 @@ type Player = {
   maxStreak: number;
   totalResponseMs: number;
   correctAnswers: number;
+  lives: number;
+  isEliminated: boolean;
   library: PlayerLibraryState;
 };
 
@@ -76,6 +96,16 @@ type RoomSession = {
   distractorTrackPool: MusicTrack[];
   sourceMode: RoomSourceMode;
   themeMode: RoomThemeMode;
+  difficultyFilter: RoomDifficultyFilter;
+  contentFilters: RoomContentFilters;
+  answerMode: RoomAnswerMode;
+  livesMode: boolean;
+  maxLives: number;
+  roomRoundConfig: {
+    maxRounds: number;
+    playingMs: number;
+    revealMs: number;
+  };
   publicPlaylistSelection: {
     provider: "deezer";
     id: string;
@@ -108,6 +138,7 @@ type RoomSession = {
     trackId: string;
     title: string;
     titleRomaji: string | null;
+    titleEnglish: string | null;
     artist: string;
     artistRomaji: string | null;
     songTitle: string | null;
@@ -145,6 +176,9 @@ const DEFAULT_ROUND_CONFIG = {
 const TRACK_POOL_TARGET_MULTIPLIER = 5;
 const TRACK_POOL_MIN_CANDIDATES = 24;
 const TRACK_POOL_MAX_CANDIDATES = 100;
+const ANILIST_TRACK_POOL_TARGET_MULTIPLIER = 8;
+const ANILIST_TRACK_POOL_MIN_CANDIDATES = 48;
+const ANILIST_TRACK_POOL_MAX_CANDIDATES = 240;
 const YOUTUBE_RANDOM_START_MIN_SEC = 18;
 const YOUTUBE_RANDOM_START_END_BUFFER_SEC = 20;
 const YOUTUBE_RANDOM_START_MIN_DURATION_SEC = 45;
@@ -161,6 +195,14 @@ const ROOM_BULK_ANSWER_TRACK_LIMIT = 16_000;
 const ROOM_BULK_ANSWER_SUGGESTION_LIMIT = 24_000;
 const ROUND_SYNC_START_LEAD_MS = 900;
 const ROUND_SYNC_MAX_WAIT_MS = 2_000;
+const ANILIST_ENGLISH_BACKFILL_BATCH_SIZE = 24;
+const ANILIST_DIFFICULTY_START_BACKFILL_LIMIT = 48;
+const RANDOM_CLASSIC_DISCOVERY_ATTEMPTS = 4;
+const DEFAULT_ROOM_CONTENT_FILTERS: RoomContentFilters = {
+  decades: [],
+  genres: [],
+};
+const DEFAULT_MAX_LIVES = 3;
 
 function readApiBaseUrl() {
   const fromBetterAuth = readEnvVar("BETTER_AUTH_URL")?.trim() ?? "";
@@ -194,6 +236,10 @@ function isAniListUnionSource(mode: RoomSourceMode) {
   return mode === "anilist_union";
 }
 
+function isRandomClassicSource(mode: RoomSourceMode) {
+  return mode === "random_classic";
+}
+
 type RoomStoreDependencies = {
   now?: () => number;
   getTrackPool?: (categoryQuery: string, size: number) => Promise<MusicTrack[]>;
@@ -205,6 +251,11 @@ type RoomStoreDependencies = {
   }) => Promise<MusicTrack[]>;
   warmAnimeThemeVideo?: (videoKey: string) => Promise<void>;
   config?: Partial<RoundConfig>;
+  getRandomAniListAnimeCandidates?: (input: {
+    seed: string;
+    desiredCount: number;
+    themeMode: RoomThemeMode;
+  }) => Promise<AniListRandomAnimeCandidate[]>;
 };
 
 function randomRoomCode(length = 6): string {
@@ -221,6 +272,31 @@ function randomRoomCode(length = 6): string {
 
 function normalizeAnswer(value: string) {
   return normalizeAnimeText(value);
+}
+
+function normalizeMcqIdentity(value: string) {
+  const normalized = normalizeAnswer(value);
+  if (normalized.length > 0) return normalized;
+  return value
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function mcqChoiceIdentity(track: Pick<MusicTrack, "provider" | "title" | "artist" | "answer">) {
+  const canonical = track.answer?.canonical?.trim() ?? "";
+  if (canonical.length > 0) {
+    return normalizeMcqIdentity(canonical);
+  }
+  if (track.provider === "animethemes") {
+    return normalizeMcqIdentity(track.title);
+  }
+  return normalizeMcqIdentity(asChoiceLabel(track));
+}
+
+function mcqChoiceIdentityForRoundChoice(choice: Pick<RoundChoice, "titleRomaji">) {
+  return normalizeMcqIdentity(choice.titleRomaji);
 }
 
 function collectAnswerVariants(track: MusicTrack) {
@@ -269,7 +345,16 @@ function averageResponseMs(player: Player) {
   return player.totalResponseMs / player.correctAnswers;
 }
 
-function modeForRound(round: number): RoundMode {
+function defaultRoomContentFilters(): RoomContentFilters {
+  return {
+    decades: [...DEFAULT_ROOM_CONTENT_FILTERS.decades],
+    genres: [...DEFAULT_ROOM_CONTENT_FILTERS.genres],
+  };
+}
+
+function modeForRound(round: number, answerMode: RoomAnswerMode): RoundMode {
+  if (answerMode === "mcq_only") return "mcq";
+  if (answerMode === "text_only") return "text";
   return round % 2 === 1 ? "mcq" : "text";
 }
 
@@ -277,11 +362,111 @@ function asChoiceLabel(track: MusicTrack) {
   return `${track.title} - ${track.artist}`;
 }
 
+const ENGLISH_TITLE_CUE_WORDS = new Set([
+  "adventure",
+  "arc",
+  "chapter",
+  "district",
+  "entertainment",
+  "final",
+  "kingdom",
+  "movie",
+  "part",
+  "root",
+  "season",
+  "special",
+  "story",
+]);
+
+const SPINOFF_TITLE_CUE_WORDS = new Set([
+  "film",
+  "kingdom",
+  "moon",
+  "movie",
+  "ova",
+  "princess",
+  "prison",
+  "snow",
+  "special",
+  "tower",
+ ]);
+
+function englishAliasScore(alias: string, trackTitle: string) {
+  const normalizedAlias = normalizeChoiceText(alias).replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  const normalizedTrackTitle = normalizeChoiceText(trackTitle)
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalizedAlias || normalizedAlias === normalizedTrackTitle) return Number.NEGATIVE_INFINITY;
+  if (JAPANESE_SCRIPT_RE.test(alias) || KOREAN_SCRIPT_RE.test(alias)) return Number.NEGATIVE_INFINITY;
+
+  const tokens = normalizedAlias.split(" ").filter((token) => token.length > 0);
+  if (tokens.length <= 0) return Number.NEGATIVE_INFINITY;
+
+  const titleTokens = new Set(
+    normalizedTrackTitle.split(" ").filter((token) => token.length >= 3),
+  );
+  const englishHits = tokens.filter(
+    (token) => ENGLISH_WORD_HINTS.has(token) || ENGLISH_TITLE_CUE_WORDS.has(token),
+  ).length;
+  const frenchHits = tokens.filter((token) => FRENCH_WORD_HINTS.has(token)).length;
+  const sharedTokenHits = tokens.filter((token) => titleTokens.has(token)).length;
+  const extraTokenHits = tokens.filter((token) => !titleTokens.has(token)).length;
+  const spinoffHits = tokens.filter((token) => SPINOFF_TITLE_CUE_WORDS.has(token)).length;
+  const aliasContainsTrackTitle =
+    normalizedTrackTitle.length > 0 &&
+    (normalizedAlias === normalizedTrackTitle ||
+      normalizedAlias.startsWith(`${normalizedTrackTitle} `) ||
+      normalizedAlias.includes(` ${normalizedTrackTitle} `));
+
+  let score = 0;
+  score += englishHits * 5;
+  score -= frenchHits * 5;
+  score += sharedTokenHits * 2;
+  score -= extraTokenHits;
+  if (/^[\x00-\x7f]+$/.test(alias)) score += 2;
+  if (tokens.length >= 2) score += 1;
+  if (/^[A-Z0-9' -]{2,8}$/.test(alias.trim())) score -= 6;
+  if (/[^\x00-\x7f]/.test(alias)) score -= 2;
+  if (aliasContainsTrackTitle) score -= spinoffHits * 6;
+
+  return score;
+}
+
+function englishAliasForTrack(track: MusicTrack) {
+  const aliases = track.answer?.aliases ?? [];
+  const normalizedTrackTitle = normalizeAnswer(track.title);
+  const hasExactCanonicalAlias = aliases.some(
+    (alias) => normalizeAnswer(alias) === normalizedTrackTitle,
+  );
+  let best: { value: string; score: number } | null = null;
+
+  for (const alias of aliases) {
+    const candidate = alias.trim();
+    if (candidate.length <= 0) continue;
+    const normalizedCandidate = normalizeAnswer(candidate);
+    const candidateExtendsCanonicalTitle =
+      hasExactCanonicalAlias &&
+      normalizedCandidate !== normalizedTrackTitle &&
+      (normalizedCandidate.startsWith(`${normalizedTrackTitle} `) ||
+        normalizedCandidate.includes(` ${normalizedTrackTitle} `));
+    if (candidateExtendsCanonicalTitle) continue;
+    const score = englishAliasScore(candidate, track.title);
+    if (!Number.isFinite(score) || score < 4) continue;
+    if (!best || score > best.score) {
+      best = { value: candidate, score };
+    }
+  }
+
+  return best?.value ?? null;
+}
+
 function englishTitleForTrack(track: MusicTrack) {
   const raw = track.answer?.englishTitle?.trim() ?? "";
-  if (raw.length <= 0) return null;
-  if (normalizeAnswer(raw) === normalizeAnswer(track.title)) return null;
-  return raw;
+  if (raw.length > 0 && normalizeAnswer(raw) !== normalizeAnswer(track.title)) {
+    return raw;
+  }
+  return englishAliasForTrack(track);
 }
 
 function buildRoundChoice(track: MusicTrack): RoundChoice {
@@ -721,6 +906,11 @@ export class RoomStore {
     allowExternalResolve?: boolean;
   }) => Promise<MusicTrack[]>;
   private readonly warmAnimeThemeVideo: (videoKey: string) => Promise<void>;
+  private readonly getRandomAniListAnimeCandidates: (input: {
+    seed: string;
+    desiredCount: number;
+    themeMode: RoomThemeMode;
+  }) => Promise<AniListRandomAnimeCandidate[]>;
   private readonly config: RoundConfig;
 
   constructor(dependencies: RoomStoreDependencies = {}) {
@@ -730,6 +920,8 @@ export class RoomStore {
     this.getPlayerLikedTracks = dependencies.getPlayerLikedTracks ?? fetchSyncedUserLikedTracksForProviders;
     this.warmAnimeThemeVideo = dependencies.warmAnimeThemeVideo ?? ((videoKey) =>
       animeThemesProxyCache.warmByVideoKey(videoKey).then(() => undefined));
+    this.getRandomAniListAnimeCandidates =
+      dependencies.getRandomAniListAnimeCandidates ?? fetchRandomAniListAnimeCandidates;
     this.config = {
       ...DEFAULT_ROUND_CONFIG,
       ...(dependencies.config ?? {}),
@@ -755,12 +947,23 @@ export class RoomStore {
     }
   }
 
+  private isPlayerSpectating(session: RoomSession, player: Player | null | undefined) {
+    return Boolean(session.livesMode && player?.isEliminated);
+  }
+
+  private activePlayers(session: RoomSession) {
+    return this.sortedPlayers(session).filter((player) => !this.isPlayerSpectating(session, player));
+  }
+
   private sourceQueryForSession(session: RoomSession) {
     if (session.sourceMode === "public_playlist") {
       return session.publicPlaylistSelection?.sourceQuery?.trim() || session.categoryQuery.trim();
     }
     if (isAniListUnionSource(session.sourceMode)) {
       return "anilist:linked:union";
+    }
+    if (isRandomClassicSource(session.sourceMode)) {
+      return "anilist:random:classic";
     }
     return "players:liked";
   }
@@ -792,6 +995,9 @@ export class RoomStore {
 
     if (session.sourceMode === "public_playlist") {
       return this.sourceQueryForSession(session).length > 0;
+    }
+    if (isRandomClassicSource(session.sourceMode)) {
+      return true;
     }
     if (isAniListUnionSource(session.sourceMode)) {
       return [...session.players.values()].some((player) => player.userId !== null);
@@ -832,6 +1038,8 @@ export class RoomStore {
         lastRoundScore: player.lastRoundScore,
         streak: player.streak,
         maxStreak: player.maxStreak,
+        lives: player.lives,
+        isEliminated: player.isEliminated,
         averageResponseMs: Number.isFinite(averageResponseMs(player))
           ? Math.round(averageResponseMs(player))
           : null,
@@ -846,6 +1054,18 @@ export class RoomStore {
         safeRounds + 3,
         safeRounds * TRACK_POOL_TARGET_MULTIPLIER,
         TRACK_POOL_MIN_CANDIDATES,
+      ),
+    );
+  }
+
+  private targetAniListCandidatePoolSize(requestedRounds: number) {
+    const safeRounds = Math.max(1, requestedRounds);
+    return Math.min(
+      ANILIST_TRACK_POOL_MAX_CANDIDATES,
+      Math.max(
+        safeRounds + 6,
+        safeRounds * ANILIST_TRACK_POOL_TARGET_MULTIPLIER,
+        ANILIST_TRACK_POOL_MIN_CANDIDATES,
       ),
     );
   }
@@ -870,13 +1090,30 @@ export class RoomStore {
     if (!track) return [];
 
     const correct = buildRoundChoice(track);
+    const correctIdentity = mcqChoiceIdentity(track);
     const sourceProfile = buildChoiceProfile(track);
-    const futureRoundTracks = session.trackPool.slice(round);
+    const previouslyUsedChoiceIdentities = new Set<string>();
+    for (const [existingRound, choices] of session.roundChoices.entries()) {
+      if (existingRound >= round) continue;
+      for (const choice of choices) {
+        previouslyUsedChoiceIdentities.add(mcqChoiceIdentityForRoundChoice(choice));
+      }
+    }
+    const canReuseFutureRoundTracksAsDistractors = track.provider !== "animethemes";
+    const futureRoundTracks = canReuseFutureRoundTracksAsDistractors ? session.trackPool.slice(round) : [];
     const distractorCandidates = [...futureRoundTracks, ...session.distractorTrackPool]
-      .filter((candidate) => asChoiceLabel(candidate) !== correct.value)
+      .filter((candidate) => {
+        const candidateIdentity = mcqChoiceIdentity(candidate);
+        return (
+          candidateIdentity !== correctIdentity &&
+          asChoiceLabel(candidate) !== correct.value &&
+          !previouslyUsedChoiceIdentities.has(candidateIdentity)
+        );
+      })
       .map((candidate) => ({
         choice: buildRoundChoice(candidate),
         track: candidate,
+        identity: mcqChoiceIdentity(candidate),
         profile: buildChoiceProfile(candidate),
       }));
     const rankedDistractors = randomShuffle(distractorCandidates)
@@ -887,32 +1124,85 @@ export class RoomStore {
     const minimumScore = minChoiceCoherenceScore(sourceProfile.language);
 
     const uniqueOptions: RoundChoice[] = [correct];
-    const seen = new Set([correct.value]);
+    const seenValues = new Set([correct.value]);
+    const seenIdentities = new Set([correctIdentity]);
     const weightedPool = rankedDistractors.filter((entry) => entry.score >= minimumScore);
-    while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
-      const weights = weightedPool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
+    const pullWeightedCandidate = (
+      pool: Array<(typeof weightedPool)[number]>,
+      fallbackPool?: Array<(typeof weightedPool)[number]>,
+    ) => {
+      const weights = pool.map((entry) => Math.max(1, entry.score - minimumScore + 1));
       const totalWeight = weights.reduce((sum, current) => sum + current, 0);
       const ticket = Math.random() * totalWeight;
       let cumulative = 0;
-      let selectedIndex = weightedPool.length - 1;
-      for (let index = 0; index < weightedPool.length; index += 1) {
+      let selectedIndex = pool.length - 1;
+      for (let index = 0; index < pool.length; index += 1) {
         cumulative += weights[index] ?? 0;
         if (ticket <= cumulative) {
           selectedIndex = index;
           break;
         }
       }
-      const selected = weightedPool.splice(selectedIndex, 1)[0];
-      if (!selected || seen.has(selected.choice.value)) continue;
+      const selected = pool.splice(selectedIndex, 1)[0];
+      if (selected && fallbackPool) {
+        const fallbackIndex = fallbackPool.findIndex((entry) => entry.identity === selected.identity);
+        if (fallbackIndex >= 0) {
+          fallbackPool.splice(fallbackIndex, 1);
+        }
+      }
+      return selected;
+    };
+    const dominantScriptFamily = (candidate: Pick<MusicTrack, "title" | "artist">) => {
+      const text = `${candidate.title} ${candidate.artist}`;
+      if (JAPANESE_SCRIPT_RE.test(text)) return "japanese" as const;
+      if (KOREAN_SCRIPT_RE.test(text)) return "korean" as const;
+      return "latin" as const;
+    };
+    const sourceScriptFamily = dominantScriptFamily(track);
+    const sameLanguagePool = rankedDistractors.filter((entry) => {
+      if (sourceProfile.language === "french") {
+        return entry.profile.language === "french";
+      }
+      return dominantScriptFamily(entry.track) === sourceScriptFamily;
+    });
+    while (sameLanguagePool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
+      const selected = pullWeightedCandidate(sameLanguagePool, weightedPool);
+      if (
+        !selected ||
+        seenValues.has(selected.choice.value) ||
+        seenIdentities.has(selected.identity)
+      ) {
+        continue;
+      }
       uniqueOptions.push(selected.choice);
-      seen.add(selected.choice.value);
+      seenValues.add(selected.choice.value);
+      seenIdentities.add(selected.identity);
+    }
+    while (weightedPool.length > 0 && uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
+      const selected = pullWeightedCandidate(weightedPool);
+      if (
+        !selected ||
+        seenValues.has(selected.choice.value) ||
+        seenIdentities.has(selected.identity)
+      ) {
+        continue;
+      }
+      uniqueOptions.push(selected.choice);
+      seenValues.add(selected.choice.value);
+      seenIdentities.add(selected.identity);
     }
 
     if (uniqueOptions.length < MCQ_REQUIRED_CHOICES) {
       for (const distractor of rankedDistractors.sort((left, right) => right.score - left.score)) {
-        if (seen.has(distractor.choice.value)) continue;
+        if (
+          seenValues.has(distractor.choice.value) ||
+          seenIdentities.has(distractor.identity)
+        ) {
+          continue;
+        }
         uniqueOptions.push(distractor.choice);
-        seen.add(distractor.choice.value);
+        seenValues.add(distractor.choice.value);
+        seenIdentities.add(distractor.identity);
         if (uniqueOptions.length >= MCQ_REQUIRED_CHOICES) break;
       }
     }
@@ -1002,7 +1292,7 @@ export class RoomStore {
 
   private async buildAniListUnionTrackPool(session: RoomSession, requestedRounds: number) {
     const safeRounds = Math.max(1, requestedRounds);
-    const targetCandidateSize = this.targetCandidatePoolSize(safeRounds);
+    const targetCandidateSize = this.targetAniListCandidatePoolSize(safeRounds);
     const userIds = [...session.players.values()]
       .map((player) => player.userId)
       .filter((userId): userId is string => typeof userId === "string" && userId.length > 0);
@@ -1028,7 +1318,32 @@ export class RoomStore {
     }
 
     const animeLookupLimit = Math.min(20_000, Math.max(targetCandidateSize * 30, 2_000));
-    const animeIds = await userAnimeLibraryRepository.unionAnimeIdsForUsers(userIds, animeLookupLimit);
+
+    // Get per-user anime IDs for equitable distribution
+    const perUserLimit = Math.ceil(animeLookupLimit / userIds.length);
+    const perUserAnimeIds = await Promise.all(
+      userIds.map((userId) => userAnimeLibraryRepository.animeIdsForUser(userId, perUserLimit)),
+    );
+
+    // Round-robin interleave to ensure equitable representation
+    const animeIds: number[] = [];
+    const seen = new Set<number>();
+    let added = true;
+    let round = 0;
+    while (added && animeIds.length < animeLookupLimit) {
+      added = false;
+      for (const userAnimeIds of perUserAnimeIds) {
+        if (round < userAnimeIds.length) {
+          const id = userAnimeIds[round];
+          if (!seen.has(id)) {
+            seen.add(id);
+            animeIds.push(id);
+          }
+          added = true;
+        }
+      }
+      round++;
+    }
     if (animeIds.length <= 0) {
       return {
         tracks: [] as MusicTrack[],
@@ -1040,6 +1355,230 @@ export class RoomStore {
       };
     }
 
+    return this.buildAniListTrackPoolFromIds(session, safeRounds, animeIds);
+  }
+
+  private async buildRandomClassicTrackPool(session: RoomSession, requestedRounds: number) {
+    const safeRounds = Math.max(1, requestedRounds);
+    const targetCandidateSize = this.targetAniListCandidatePoolSize(safeRounds);
+
+    if (!(typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.trim().length > 0)) {
+      return {
+        tracks: [] as MusicTrack[],
+        distractorTracks: [] as MusicTrack[],
+        candidateCount: 0,
+        rawTotal: 0,
+        playableTotal: 0,
+        cleanTotal: 0,
+      };
+    }
+
+    const baseDesiredCount = Math.min(MAX_RANDOM_ANIME_DISCOVERY_IDS, Math.max(targetCandidateSize * 30, 2_000));
+    const baseSeed = `${session.roomCode}:${Date.now()}`;
+    const collectedCandidates: AniListRandomAnimeCandidate[] = [];
+    const seenMediaIds = new Set<number>();
+    let desiredCount = baseDesiredCount;
+    let latestBuilt = {
+      tracks: [] as MusicTrack[],
+      distractorTracks: [] as MusicTrack[],
+      candidateCount: 0,
+      rawTotal: 0,
+      playableTotal: 0,
+      cleanTotal: 0,
+    };
+
+    for (let attempt = 0; attempt < RANDOM_CLASSIC_DISCOVERY_ATTEMPTS; attempt += 1) {
+      let discoveredCandidates: AniListRandomAnimeCandidate[];
+      try {
+        discoveredCandidates = await this.getRandomAniListAnimeCandidates({
+          seed: `${baseSeed}:${attempt}`,
+          desiredCount,
+          themeMode: session.themeMode,
+        });
+      } catch (error) {
+        if (error instanceof AniListRemoteFailureError && collectedCandidates.length > 0) {
+          break;
+        }
+        throw error;
+      }
+
+      let addedCount = 0;
+      for (const candidate of discoveredCandidates) {
+        if (seenMediaIds.has(candidate.mediaId)) continue;
+        seenMediaIds.add(candidate.mediaId);
+        collectedCandidates.push(candidate);
+        addedCount += 1;
+      }
+
+      if (collectedCandidates.length > 0) {
+        const catalogAnimeIds = await this.mapAniListCandidatesToCatalogIds(collectedCandidates);
+        latestBuilt = await this.buildAniListTrackPoolFromIds(session, safeRounds, catalogAnimeIds);
+        if (latestBuilt.tracks.length >= safeRounds) {
+          return latestBuilt;
+        }
+      }
+
+      const reachedDiscoveryCeiling = collectedCandidates.length >= MAX_RANDOM_ANIME_DISCOVERY_IDS;
+      const didNotGrow = addedCount <= 0;
+      if (reachedDiscoveryCeiling || didNotGrow) {
+        break;
+      }
+
+      desiredCount = Math.min(
+        MAX_RANDOM_ANIME_DISCOVERY_IDS,
+        Math.max(desiredCount + baseDesiredCount, Math.floor(desiredCount * 1.5)),
+      );
+    }
+
+    return latestBuilt;
+  }
+
+  private async mapAniListCandidatesToCatalogIds(candidates: AniListRandomAnimeCandidate[]) {
+    const aliasesByMediaId = new Map<number, string[]>();
+    const allAliases = new Set<string>();
+
+    for (const candidate of candidates) {
+      const aliases = Array.from(
+        new Set(
+          [
+            candidate.titleRomaji,
+            candidate.titleEnglish,
+            candidate.titleNative,
+            ...candidate.synonyms,
+          ]
+            .map((value) => value?.trim() ?? "")
+            .filter((value) => value.length > 0)
+            .map((value) => normalizeAnimeAlias(value)),
+        ),
+      );
+      if (aliases.length <= 0) continue;
+      aliasesByMediaId.set(candidate.mediaId, aliases);
+      for (const alias of aliases) {
+        allAliases.add(alias);
+      }
+    }
+
+    if (allAliases.size <= 0) {
+      return [];
+    }
+
+    const mapped = await pool.query<{
+      normalized_alias: string;
+      anime_id: number;
+      alias_type: "canonical" | "synonym" | "acronym";
+    }>(
+      `
+        select normalized_alias, anime_id, alias_type
+        from anime_catalog_alias
+        where normalized_alias = any($1::text[])
+        union all
+        select searchable_romaji as normalized_alias, id as anime_id, 'canonical' as alias_type
+        from anime_catalog_anime
+        where searchable_romaji = any($1::text[])
+      `,
+      [[...allAliases]],
+    );
+
+    const mappedByAlias = new Map<
+      string,
+      Array<{
+        animeId: number;
+        aliasType: "canonical" | "synonym" | "acronym";
+      }>
+    >();
+    for (const row of mapped.rows) {
+      const entries = mappedByAlias.get(row.normalized_alias) ?? [];
+      entries.push({
+        animeId: row.anime_id,
+        aliasType: row.alias_type,
+      });
+      entries.sort((left, right) => {
+        const weight = (value: "canonical" | "synonym" | "acronym") =>
+          value === "canonical" ? 0 : value === "synonym" ? 1 : 2;
+        return weight(left.aliasType) - weight(right.aliasType);
+      });
+      mappedByAlias.set(row.normalized_alias, entries);
+    }
+
+    const updates = new Map<
+      number,
+      {
+        titleEnglish: string | null;
+        titleNative: string | null;
+        popularity: number | null;
+        year: number | null;
+        genres: string[];
+      }
+    >();
+    const animeIds: number[] = [];
+    const seenAnimeIds = new Set<number>();
+
+    for (const candidate of candidates) {
+      const aliases = aliasesByMediaId.get(candidate.mediaId) ?? [];
+      let matchedAnimeId: number | null = null;
+      for (const alias of aliases) {
+        const match = mappedByAlias.get(alias)?.[0];
+        if (!match) continue;
+        matchedAnimeId = match.animeId;
+        break;
+      }
+      if (matchedAnimeId === null || seenAnimeIds.has(matchedAnimeId)) continue;
+      seenAnimeIds.add(matchedAnimeId);
+      animeIds.push(matchedAnimeId);
+      updates.set(matchedAnimeId, {
+        titleEnglish: candidate.titleEnglish,
+        titleNative: candidate.titleNative,
+        popularity: candidate.popularity,
+        year: candidate.year,
+        genres: candidate.genres,
+      });
+    }
+
+    if (updates.size > 0) {
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let index = 1;
+      for (const [animeId, update] of updates) {
+        placeholders.push(
+          `($${index}, $${index + 1}::text, $${index + 2}::text, $${index + 3}::integer, $${index + 4}::integer, $${index + 5}::text[])`,
+        );
+        values.push(
+          animeId,
+          update.titleEnglish,
+          update.titleNative,
+          update.popularity,
+          update.year,
+          update.genres,
+        );
+        index += 6;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = coalesce(v.title_english, a.title_english),
+            title_native = coalesce(v.title_native, a.title_native),
+            anilist_popularity = coalesce(v.anilist_popularity, a.anilist_popularity),
+            year = coalesce(v.year, a.year),
+            genres = case
+              when coalesce(array_length(v.genres, 1), 0) > 0 then v.genres
+              else a.genres
+            end,
+            updated_at = now()
+          from (
+            values ${placeholders.join(", ")}
+          ) as v(id, title_english, title_native, anilist_popularity, year, genres)
+          where a.id = v.id::bigint
+        `,
+        values,
+      );
+    }
+
+    return animeIds;
+  }
+
+  private async buildAniListTrackPoolFromIds(session: RoomSession, safeRounds: number, animeIds: number[]) {
+    const targetCandidateSize = this.targetAniListCandidatePoolSize(safeRounds);
+
     const themeCondition =
       session.themeMode === "op_only"
         ? "and tv.theme_type = 'OP'"
@@ -1047,70 +1586,252 @@ export class RoomStore {
           ? "and tv.theme_type = 'ED'"
           : "";
 
-    const rowLimit = Math.max(targetCandidateSize * 2, safeRounds + 8);
-    const selected = await pool.query<{
-      video_key: string;
-      webm_url: string;
-      theme_type: string;
-      theme_number: number | null;
-      title_romaji: string;
-      title_english: string | null;
-      song_title: string | null;
-      song_artists: string[] | null;
-      aliases: string[] | null;
-    }>(
-      `
-        with best_theme_video as (
-          select distinct on (tv.anime_id, tv.theme_type, coalesce(tv.theme_number, 0))
-            tv.video_key,
-            tv.webm_url,
-            tv.theme_type,
-            tv.theme_number,
-            aa.title_romaji,
-            aa.title_english,
-            tv.song_title,
-            tv.song_artists,
-            (
-              select array_agg(distinct al.alias)
-              from anime_catalog_alias al
-              where al.anime_id = tv.anime_id
-            ) as aliases
-          from anime_theme_videos tv
-          join anime_catalog_anime aa on aa.id = tv.anime_id
-          where tv.is_playable = true
-            and tv.webm_url like 'https://v.animethemes.moe/%'
-            and tv.anime_id = any($1::bigint[])
-            ${themeCondition}
-          order by
-            tv.anime_id,
-            tv.theme_type,
-            coalesce(tv.theme_number, 0),
-            tv.updated_at desc,
-            tv.is_creditless desc,
-            case
-              when coalesce(tv.resolution, 0) = 720 then 0
-              when coalesce(tv.resolution, 0) = 1080 then 1
-              when coalesce(tv.resolution, 0) > 1080 then 2
-              when coalesce(tv.resolution, 0) = 480 then 3
-              when coalesce(tv.resolution, 0) > 0 then 4
-              else 5
-            end asc,
-            coalesce(tv.resolution, 0) desc,
-            tv.video_key desc
-        )
-        select video_key, webm_url, theme_type, theme_number, title_romaji, title_english, song_title, song_artists, aliases
-        from best_theme_video
-        order by random()
-        limit $2
-      `,
-      [animeIds, rowLimit],
+    const rowLimit = Math.max(targetCandidateSize * 2, safeRounds + 24);
+    const contentFilters = normalizeRoomContentFilters(session.contentFilters);
+    const contentFilterSql = contentFilterSqlCondition(contentFilters, { startIndex: 3 });
+    const needsPopularityMetadata = session.difficultyFilter !== "all";
+    const needsYearMetadata = contentFilters.decades.length > 0;
+    const needsGenresMetadata = contentFilters.genres.length > 0;
+    const needsRoomFilterMetadata = needsPopularityMetadata || needsYearMetadata || needsGenresMetadata;
+    const selectAniListRows = async (difficultyFilter: RoomDifficultyFilter) =>
+      await pool.query<{
+        anime_id: number;
+        video_key: string;
+        webm_url: string;
+        theme_type: string;
+        theme_number: number | null;
+        title_romaji: string;
+        title_english: string | null;
+        song_title: string | null;
+        song_artists: string[] | null;
+        aliases: string[] | null;
+      }>(
+        `
+          with best_theme_video as (
+            select distinct on (tv.anime_id, tv.theme_type, coalesce(tv.theme_number, 0))
+              aa.id as anime_id,
+              tv.video_key,
+              tv.webm_url,
+              tv.theme_type,
+              tv.theme_number,
+              aa.title_romaji,
+              aa.title_english,
+              tv.song_title,
+              tv.song_artists,
+              (
+                select array_agg(distinct al.alias)
+                from anime_catalog_alias al
+                where al.anime_id = tv.anime_id
+              ) as aliases
+            from anime_theme_videos tv
+            join anime_catalog_anime aa on aa.id = tv.anime_id
+            where tv.is_playable = true
+              and tv.webm_url like 'https://v.animethemes.moe/%'
+              and tv.anime_id = any($1::bigint[])
+              ${themeCondition}
+              ${difficultySqlCondition(difficultyFilter)}
+              ${contentFilterSql.sql}
+            order by
+              tv.anime_id,
+              tv.theme_type,
+              coalesce(tv.theme_number, 0),
+              tv.updated_at desc,
+              tv.is_creditless desc,
+              case
+                when coalesce(tv.resolution, 0) = 720 then 0
+                when coalesce(tv.resolution, 0) = 1080 then 1
+                when coalesce(tv.resolution, 0) > 1080 then 2
+                when coalesce(tv.resolution, 0) = 480 then 3
+                when coalesce(tv.resolution, 0) > 0 then 4
+                else 5
+              end asc,
+              coalesce(tv.resolution, 0) desc,
+              tv.video_key desc
+          )
+          select anime_id, video_key, webm_url, theme_type, theme_number, title_romaji, title_english, song_title, song_artists, aliases
+          from best_theme_video
+          order by random()
+          limit $2
+        `,
+        [animeIds, rowLimit, ...contentFilterSql.params],
+      );
+
+    const backfillAniListMetadata = async (limit: number, offset = 0) => {
+      const missingPopularityRows = await pool.query<{
+        anime_id: number;
+        title_romaji: string;
+      }>(
+        `
+          select a.id as anime_id, a.title_romaji
+          from unnest($1::bigint[]) with ordinality as ids(id, ord)
+          join anime_catalog_anime a on a.id = ids.id
+          where (
+            ($4::boolean and a.anilist_popularity is null)
+            or ($5::boolean and a.year is null)
+            or ($6::boolean and coalesce(array_length(a.genres, 1), 0) <= 0)
+          )
+          order by ids.ord asc
+          limit $2
+          offset $3
+        `,
+        [animeIds, limit, offset, needsPopularityMetadata, needsYearMetadata, needsGenresMetadata],
+      );
+      if (missingPopularityRows.rows.length <= 0) {
+        return { attemptedCount: 0, updatedCount: 0 };
+      }
+
+      const updates: Array<{
+        animeId: number;
+        titleEnglish: string | null;
+        popularity: number | null;
+        year: number | null;
+        genres: string[];
+      }> = [];
+
+      for (
+        let index = 0;
+        index < missingPopularityRows.rows.length;
+        index += ANILIST_ENGLISH_BACKFILL_BATCH_SIZE
+      ) {
+        const batch = missingPopularityRows.rows.slice(index, index + ANILIST_ENGLISH_BACKFILL_BATCH_SIZE);
+        const metadataByTitle = await fetchAniListMediaMetadataBySearchBatch(
+          batch.map((row) => row.title_romaji),
+        );
+        for (const row of batch) {
+          const metadata = metadataByTitle.get(row.title_romaji) ?? null;
+          if (!metadata) continue;
+          updates.push({
+            animeId: row.anime_id,
+            titleEnglish: metadata.englishTitle,
+            popularity: metadata.popularity,
+            year: metadata.year,
+            genres: metadata.genres,
+          });
+        }
+      }
+
+      if (updates.length <= 0) {
+        return {
+          attemptedCount: missingPopularityRows.rows.length,
+          updatedCount: 0,
+        };
+      }
+
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let index = 1;
+      for (const update of updates) {
+        placeholders.push(
+          `($${index}, $${index + 1}::text, $${index + 2}::integer, $${index + 3}::integer, $${index + 4}::text[])`,
+        );
+        values.push(update.animeId, update.titleEnglish, update.popularity, update.year, update.genres);
+        index += 5;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = coalesce(v.title_english, a.title_english),
+            anilist_popularity = coalesce(v.anilist_popularity, a.anilist_popularity),
+            year = coalesce(v.year, a.year),
+            genres = case
+              when coalesce(array_length(v.genres, 1), 0) > 0 then v.genres
+              else a.genres
+            end,
+            updated_at = now()
+          from (
+            values ${placeholders.join(", ")}
+          ) as v(id, title_english, anilist_popularity, year, genres)
+          where a.id = v.id::bigint
+        `,
+        values,
+      );
+
+      return {
+        attemptedCount: missingPopularityRows.rows.length,
+        updatedCount: updates.filter((update) => update.popularity !== null).length,
+      };
+    };
+
+    let selected = await selectAniListRows(session.difficultyFilter);
+    const desiredFilteredRows = Math.min(rowLimit, Math.max(targetCandidateSize, safeRounds));
+    if (needsRoomFilterMetadata && selected.rows.length < desiredFilteredRows) {
+      const maxBackfillAttempts = Math.min(
+        animeIds.length,
+        Math.max(ANILIST_DIFFICULTY_START_BACKFILL_LIMIT, desiredFilteredRows * 2),
+      );
+      const backfill = await backfillAniListMetadata(maxBackfillAttempts);
+      if (backfill.attemptedCount > 0) {
+        selected = await selectAniListRows(session.difficultyFilter);
+      }
+
+      if (selected.rows.length < desiredFilteredRows) {
+        logEvent("warn", "anilist_room_filter_metadata_incomplete", {
+          roomCode: session.roomCode,
+          difficultyFilter: session.difficultyFilter,
+          contentFilters,
+          requestedRounds: safeRounds,
+          desiredFilteredRows,
+          selectedRows: selected.rows.length,
+          attemptedBackfills: backfill.attemptedCount,
+          updatedBackfills: backfill.updatedCount,
+          maxBackfillAttempts,
+        });
+      }
+    }
+
+    const englishTitleBackfills = new Map<number, string>();
+    const missingEnglishRows = Array.from(
+      new Map(
+        selected.rows
+          .filter((row) => (row.title_english?.trim() ?? "").length <= 0)
+          .map((row) => [row.anime_id, row] as const),
+      ).values(),
     );
 
-    const tracks: MusicTrack[] = randomShuffle(selected.rows).map((row) => {
+    for (let index = 0; index < missingEnglishRows.length; index += ANILIST_ENGLISH_BACKFILL_BATCH_SIZE) {
+        const batch = missingEnglishRows.slice(index, index + ANILIST_ENGLISH_BACKFILL_BATCH_SIZE);
+        const metadataByTitle = await fetchAniListMediaMetadataBySearchBatch(
+          batch.map((row) => row.title_romaji),
+        );
+      for (const row of batch) {
+        const englishTitle = metadataByTitle.get(row.title_romaji)?.englishTitle;
+        if (!englishTitle) continue;
+        englishTitleBackfills.set(row.anime_id, englishTitle);
+      }
+    }
+
+    if (englishTitleBackfills.size > 0) {
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let index = 1;
+      for (const [animeId, englishTitle] of englishTitleBackfills) {
+        placeholders.push(`($${index}, $${index + 1}::text)`);
+        values.push(animeId, englishTitle);
+        index += 2;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = v.title_english,
+            updated_at = now()
+          from (values ${placeholders.join(", ")}) as v(id, title_english)
+          where a.id = v.id::bigint
+            and coalesce(nullif(a.title_english, ''), '') = ''
+        `,
+        values,
+      );
+    }
+
+    const uniqueRows = Array.from(
+      new Map(selected.rows.map((row) => [row.anime_id, row] as const)).values(),
+    );
+
+    const tracks: MusicTrack[] = uniqueRows.map((row) => {
+      const englishTitle = englishTitleBackfills.get(row.anime_id) ?? row.title_english;
       const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
       const answerAliases = Array.from(
         new Set(
-          [row.title_english, ...(row.aliases ?? [])]
+          [englishTitle, ...(row.aliases ?? [])]
             .map((value) => value?.trim() ?? "")
             .filter((value) => value.length > 0),
         ),
@@ -1129,13 +1850,16 @@ export class RoomStore {
         videoUrl: proxyUrl,
         answer: {
           canonical: row.title_romaji,
-          englishTitle: row.title_english,
+          englishTitle,
           aliases: answerAliases,
         },
       } satisfies MusicTrack;
     });
 
     const candidateTracks = tracks.filter((track) => isTrackPlayable(track));
+    console.log(
+      `[RoomStore] AniList track pool: ${animeIds.length} anime IDs → ${selected.rows.length} raw → ${candidateTracks.length} playable (need ${safeRounds} rounds)`,
+    );
     const split = this.splitAnswerAndDistractorPools(candidateTracks, safeRounds);
     return {
       tracks: split.tracks,
@@ -1286,7 +2010,7 @@ export class RoomStore {
   }
 
   private refreshRoundPlan(session: RoomSession) {
-    const plannedRounds = Math.min(session.trackPool.length, this.config.maxRounds);
+    const plannedRounds = Math.min(session.trackPool.length, session.roomRoundConfig.maxRounds);
     session.totalRounds = plannedRounds;
     if (plannedRounds <= 0) {
       session.roundModes = [];
@@ -1294,7 +2018,7 @@ export class RoomStore {
     }
 
     for (let round = session.roundModes.length + 1; round <= plannedRounds; round += 1) {
-      session.roundModes.push(modeForRound(round));
+      session.roundModes.push(modeForRound(round, session.answerMode));
     }
     if (session.roundModes.length > plannedRounds) {
       session.roundModes = session.roundModes.slice(0, plannedRounds);
@@ -1390,7 +2114,7 @@ export class RoomStore {
   }
 
   private activePlayerIds(session: RoomSession) {
-    return this.sortedPlayers(session).map((player) => player.id);
+    return this.activePlayers(session).map((player) => player.id);
   }
 
   private trackForRound(session: RoomSession, round: number) {
@@ -1552,8 +2276,8 @@ export class RoomStore {
     const tick = session.manager.tick({
       nowMs,
       loadingMs,
-      roundMs: this.config.playingMs,
-      revealMs: this.config.revealMs,
+      roundMs: session.roomRoundConfig.playingMs,
+      revealMs: session.roomRoundConfig.revealMs,
       leaderboardMs: this.config.leaderboardMs,
     });
 
@@ -1577,6 +2301,16 @@ export class RoomStore {
     >();
 
     for (const player of session.players.values()) {
+      if (this.isPlayerSpectating(session, player)) {
+        player.lastRoundScore = 0;
+        playerRoundResults.set(player.id, {
+          answer: null,
+          submitted: false,
+          isCorrect: false,
+        });
+        continue;
+      }
+
       const submitted = round.answers.get(player.id);
       const isCorrect = submitted ? this.isAnswerCorrect(roundMode, submitted.value, track) : false;
       const responseMs =
@@ -1597,6 +2331,11 @@ export class RoomStore {
       if (isCorrect) {
         player.correctAnswers += 1;
         player.totalResponseMs += responseMs;
+      } else if (session.livesMode) {
+        player.lives = Math.max(0, player.lives - 1);
+        if (player.lives <= 0) {
+          player.isEliminated = true;
+        }
       }
 
       playerRoundResults.set(player.id, {
@@ -1628,6 +2367,7 @@ export class RoomStore {
           trackId: track.id,
           title: track.title,
           titleRomaji: getRomanizedJapaneseCached(track.title),
+          titleEnglish: englishTitleForTrack(track),
           artist: track.artist,
           artistRomaji: getRomanizedJapaneseCached(track.artist),
           songTitle: track.songTitle ?? null,
@@ -1642,6 +2382,15 @@ export class RoomStore {
           playerAnswers: revealAnswers,
         }
       : null;
+
+    const activePlayerCount = this.activePlayers(session).length;
+    if (
+      session.livesMode &&
+      (activePlayerCount <= 0 || (session.players.size > 1 && activePlayerCount === 1))
+    ) {
+      session.totalRounds = Math.min(session.totalRounds, round.round);
+      session.manager.setTotalRounds(session.totalRounds);
+    }
   }
 
   createRoom(options: { isPublic?: boolean; categoryQuery?: string } = {}) {
@@ -1681,6 +2430,16 @@ export class RoomStore {
       distractorTrackPool: [],
       sourceMode: initialSourceMode,
       themeMode: "mix",
+      difficultyFilter: "all",
+      contentFilters: defaultRoomContentFilters(),
+      answerMode: "mixed",
+      livesMode: false,
+      maxLives: DEFAULT_MAX_LIVES,
+      roomRoundConfig: {
+        maxRounds: this.config.maxRounds,
+        playingMs: this.config.playingMs,
+        revealMs: this.config.revealMs,
+      },
       publicPlaylistSelection: null,
       playersLikedRules: {
         minContributors: 1,
@@ -1741,6 +2500,8 @@ export class RoomStore {
       maxStreak: 0,
       totalResponseMs: 0,
       correctAnswers: 0,
+      lives: DEFAULT_MAX_LIVES,
+      isEliminated: false,
       library: defaultPlayerLibraryState(),
     };
 
@@ -1844,6 +2605,7 @@ export class RoomStore {
     session.sourceMode = mode;
     if (mode === "public_playlist") {
       session.playersLikedPool = [];
+      session.trackPool = [];
       session.distractorTrackPool = [];
       this.roomLikedPoolRebuildRequested.delete(roomCode);
       session.poolBuild = {
@@ -1863,6 +2625,8 @@ export class RoomStore {
       }
     } else if (isLegacyPlayersLikedSource(mode)) {
       session.publicPlaylistSelection = null;
+      session.trackPool = [];
+      session.distractorTrackPool = [];
       session.categoryQuery = "players:liked";
       for (const player of session.players.values()) {
         for (const provider of ["spotify", "deezer"] as const) {
@@ -1871,9 +2635,27 @@ export class RoomStore {
           }
         }
       }
+    } else if (isRandomClassicSource(mode)) {
+      session.publicPlaylistSelection = null;
+      session.playersLikedPool = [];
+      session.distractorTrackPool = [];
+      session.trackPool = [];
+      this.roomLikedPoolRebuildRequested.delete(roomCode);
+      session.poolBuild = {
+        status: "idle",
+        contributorsCount: 0,
+        mergedTracksCount: 0,
+        playableTracksCount: 0,
+        lastBuiltAtMs: null,
+        errorCode: null,
+      };
+      session.isResolvingTracks = false;
+      session.trackResolutionJobsInFlight = 0;
+      session.categoryQuery = "anilist:random:classic";
     } else {
       session.publicPlaylistSelection = null;
       session.playersLikedPool = [];
+      session.trackPool = [];
       session.distractorTrackPool = [];
       this.roomLikedPoolRebuildRequested.delete(roomCode);
       session.poolBuild = {
@@ -1903,6 +2685,108 @@ export class RoomStore {
     session.themeMode = mode;
     this.resetReadyStates(session);
     return { status: "ok" as const, mode: session.themeMode };
+  }
+
+  setRoomDifficultyFilter(roomCode: string, playerId: string, filter: RoomDifficultyFilter) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.difficultyFilter = filter;
+    this.resetReadyStates(session);
+    return { status: "ok" as const, filter: session.difficultyFilter };
+  }
+
+  setRoomContentFilters(
+    roomCode: string,
+    playerId: string,
+    contentFilters: Partial<RoomContentFilters>,
+  ) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.contentFilters = normalizeRoomContentFilters(contentFilters);
+    this.resetReadyStates(session);
+    return { status: "ok" as const, contentFilters: session.contentFilters };
+  }
+
+  setRoomLivesMode(
+    roomCode: string,
+    playerId: string,
+    config: { livesMode?: boolean; maxLives?: number },
+  ) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    if (typeof config.livesMode === "boolean") {
+      session.livesMode = config.livesMode;
+    }
+    if (typeof config.maxLives === "number" && Number.isFinite(config.maxLives)) {
+      session.maxLives = Math.max(1, Math.min(10, Math.floor(config.maxLives)));
+    }
+    if (!session.livesMode) {
+      session.maxLives = Math.max(1, session.maxLives);
+    }
+    for (const player of session.players.values()) {
+      player.lives = session.maxLives;
+      player.isEliminated = false;
+    }
+    this.resetReadyStates(session);
+    return {
+      status: "ok" as const,
+      livesMode: session.livesMode,
+      maxLives: session.maxLives,
+    };
+  }
+
+  setRoomRoundConfig(
+    roomCode: string,
+    playerId: string,
+    config: { maxRounds?: number; playingMs?: number; revealMs?: number },
+  ) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    if (typeof config.maxRounds === "number") {
+      session.roomRoundConfig.maxRounds = Math.max(1, Math.min(50, config.maxRounds));
+    }
+    if (typeof config.playingMs === "number") {
+      session.roomRoundConfig.playingMs = Math.max(5_000, Math.min(60_000, config.playingMs));
+    }
+    if (typeof config.revealMs === "number") {
+      session.roomRoundConfig.revealMs = Math.max(3_000, Math.min(30_000, config.revealMs));
+    }
+
+    this.resetReadyStates(session);
+    return { status: "ok" as const, config: session.roomRoundConfig };
+  }
+
+  setRoomAnswerMode(roomCode: string, playerId: string, mode: RoomAnswerMode) {
+    const session = this.rooms.get(roomCode);
+    if (!session) return { status: "room_not_found" as const };
+    this.ensureHost(session);
+    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
+    if (session.manager.state() !== "waiting") return { status: "invalid_state" as const };
+
+    session.answerMode = mode;
+    this.resetReadyStates(session);
+    return { status: "ok" as const, mode: session.answerMode };
   }
 
   setRoomPublicPlaylist(
@@ -2082,6 +2966,8 @@ export class RoomStore {
     if (session.hostPlayerId !== playerId) return { status: "forbidden" as const };
     if (session.manager.state() !== "results") return { status: "invalid_state" as const };
 
+    const prevSourceMode = session.sourceMode;
+
     this.stopPreloadJob(roomCode);
     this.stopPlayersLikedPoolJob(roomCode);
     this.roomLikedPoolRebuildRequested.delete(roomCode);
@@ -2095,8 +2981,17 @@ export class RoomStore {
     session.roundChoices.clear();
     session.latestReveal = null;
     session.chatMessages = [];
-    session.sourceMode = "anilist_union";
     session.themeMode = "mix";
+    session.difficultyFilter = "all";
+    session.contentFilters = defaultRoomContentFilters();
+    session.answerMode = "mixed";
+    session.livesMode = false;
+    session.maxLives = DEFAULT_MAX_LIVES;
+    session.roomRoundConfig = {
+      maxRounds: this.config.maxRounds,
+      playingMs: this.config.playingMs,
+      revealMs: this.config.revealMs,
+    };
     session.publicPlaylistSelection = null;
     session.playersLikedPool = [];
     session.poolBuild = {
@@ -2109,7 +3004,13 @@ export class RoomStore {
     };
     session.isResolvingTracks = false;
     session.trackResolutionJobsInFlight = 0;
-    session.categoryQuery = "anilist:linked:union";
+    if (prevSourceMode === "random_classic") {
+      session.sourceMode = "random_classic";
+      session.categoryQuery = "anilist:random:classic";
+    } else {
+      session.sourceMode = "anilist_union";
+      session.categoryQuery = "anilist:linked:union";
+    }
     this.resetReadyStates(session);
 
     for (const player of session.players.values()) {
@@ -2119,6 +3020,8 @@ export class RoomStore {
       player.maxStreak = 0;
       player.totalResponseMs = 0;
       player.correctAnswers = 0;
+      player.lives = session.maxLives;
+      player.isEliminated = false;
       player.library.includeInPool.spotify =
         player.library.linkedProviders.spotify === "linked" || this.hasSyncedLibraryTracks(player, "spotify");
       player.library.includeInPool.deezer =
@@ -2163,7 +3066,7 @@ export class RoomStore {
         error: "NO_PLAYERS" as const,
       };
     }
-    const poolSize = Math.max(1, this.config.maxRounds);
+    const poolSize = Math.max(1, session.roomRoundConfig.maxRounds);
     if (session.sourceMode === "public_playlist") {
       const sourceQuery = this.sourceQueryForSession(session);
       if (sourceQuery.length <= 0) {
@@ -2180,6 +3083,8 @@ export class RoomStore {
           error: "PLAYERS_LIBRARY_NOT_READY" as const,
         };
       }
+    } else if (isRandomClassicSource(session.sourceMode)) {
+      // random_classic does not require linked players — no validation needed here
     } else {
       const contributors = this.playersLikedContributors(session);
       if (contributors.length < session.playersLikedRules.minContributors) {
@@ -2277,6 +3182,26 @@ export class RoomStore {
         session,
         async () => await this.buildAniListUnionTrackPool(session, poolSize),
       );
+    } else if (isRandomClassicSource(session.sourceMode)) {
+      try {
+        startPoolStats = await this.resolveTracksWithFlag(
+          session,
+          async () => await this.buildRandomClassicTrackPool(session, poolSize),
+        );
+      } catch (error) {
+        if (error instanceof AniListRemoteFailureError) {
+          logEvent("warn", "room_start_anilist_remote_failure", {
+            roomCode,
+            requestedRounds: poolSize,
+            failedFetchCount: error.failedFetchCount,
+          });
+          return {
+            ok: false as const,
+            error: "ANILIST_REMOTE_FAILURE" as const,
+          };
+        }
+        throw error;
+      }
     } else {
       try {
         startPoolStats = await this.resolveTracksWithFlag(
@@ -2482,6 +3407,8 @@ export class RoomStore {
       player.maxStreak = 0;
       player.totalResponseMs = 0;
       player.correctAnswers = 0;
+      player.lives = session.maxLives;
+      player.isEliminated = false;
       player.isReady = false;
     }
 
@@ -2526,12 +3453,22 @@ export class RoomStore {
   skipCurrentRound(roomCode: string, playerId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    const player = session.players.get(playerId);
+    if (!player) return { status: "player_not_found" as const };
 
     const nowMs = this.now();
     this.progressSession(session, nowMs);
     const state = session.manager.state();
     if (state === "playing") {
+      if (this.isPlayerSpectating(session, player)) {
+        return {
+          status: "ok" as const,
+          accepted: false,
+          state,
+          round: session.manager.round(),
+          deadlineMs: session.manager.deadlineMs(),
+        };
+      }
       const result = session.manager.skipGuessForPlayer(playerId, nowMs);
       if (result.accepted) {
         this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
@@ -2545,6 +3482,15 @@ export class RoomStore {
       };
     }
     if (state === "reveal") {
+      if (this.isPlayerSpectating(session, player)) {
+        return {
+          status: "ok" as const,
+          accepted: false,
+          state,
+          round: session.manager.round(),
+          deadlineMs: session.manager.deadlineMs(),
+        };
+      }
       const result = session.manager.skipRevealForPlayer(playerId, nowMs);
       if (result.accepted) {
         this.maybeAdvanceOnUnanimousPhaseCompletion(session, nowMs);
@@ -2620,7 +3566,8 @@ export class RoomStore {
   reportMediaPrepared(roomCode: string, playerId: string, trackId: string) {
     const session = this.rooms.get(roomCode);
     if (!session) return { status: "room_not_found" as const };
-    if (!session.players.has(playerId)) return { status: "player_not_found" as const };
+    const player = session.players.get(playerId);
+    if (!player) return { status: "player_not_found" as const };
 
     const nowMs = this.now();
     this.progressSession(session, nowMs);
@@ -2631,6 +3578,16 @@ export class RoomStore {
     const currentRound = session.manager.round();
     const activeTrack = currentRound > 0 ? session.trackPool[currentRound - 1] ?? null : null;
     if (!activeTrack || activeTrack.provider !== "animethemes" || activeTrack.id !== trackId) {
+      return {
+        status: "ok" as const,
+        accepted: false,
+        state: session.manager.state(),
+        round: session.manager.round(),
+        deadlineMs: session.manager.deadlineMs(),
+      };
+    }
+
+    if (this.isPlayerSpectating(session, player)) {
       return {
         status: "ok" as const,
         accepted: false,
@@ -2663,6 +3620,9 @@ export class RoomStore {
 
     const player = session.players.get(playerId);
     if (!player) return { status: "player_not_found" as const };
+    if (this.isPlayerSpectating(session, player)) {
+      return { status: "ok" as const, accepted: false };
+    }
 
     const result = session.manager.submitAnswer(playerId, answer, nowMs);
     if (result.accepted) {
@@ -2680,6 +3640,9 @@ export class RoomStore {
 
     const player = session.players.get(playerId);
     if (!player) return { status: "player_not_found" as const };
+    if (this.isPlayerSpectating(session, player)) {
+      return { status: "ok" as const, accepted: false };
+    }
 
     const normalized = answer.trim().slice(0, 120);
     const result = session.manager.setDraftAnswer(playerId, normalized, nowMs);
@@ -2739,8 +3702,13 @@ export class RoomStore {
       playerId: player.id,
       displayName: player.displayName,
       isReady: player.isReady,
-      hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(player.id) : false,
+      hasAnsweredCurrentRound:
+        state === "playing" && !this.isPlayerSpectating(session, player)
+          ? session.manager.hasGuessDone(player.id)
+          : false,
       isHost: player.id === hostPlayerId,
+      lives: player.lives,
+      isEliminated: player.isEliminated,
       canContributeLibrary: Boolean(player.userId),
       libraryContribution: {
         includeInPool: {
@@ -2768,7 +3736,7 @@ export class RoomStore {
         ...entry,
         hasAnsweredCurrentRound: state === "playing" ? session.manager.hasGuessDone(entry.playerId) : false,
       }));
-    const activePlayerIds = players.map((player) => player.playerId);
+    const activePlayerIds = this.activePlayerIds(session);
     const roundSync = session.roundSync.snapshot();
     const guessTotalCount = state === "playing" ? activePlayerIds.length : 0;
     const guessDoneCount =
@@ -2855,9 +3823,18 @@ export class RoomStore {
       poolSize: session.trackPool.length,
       categoryQuery: session.categoryQuery,
       sourceMode: session.sourceMode,
+      answerMode: session.answerMode,
+      livesMode: session.livesMode,
+      maxLives: session.maxLives,
+      roomRoundConfig: session.roomRoundConfig,
       sourceConfig: {
         mode: session.sourceMode,
         themeMode: session.themeMode,
+        difficultyFilter: session.difficultyFilter,
+        contentFilters: {
+          decades: [...session.contentFilters.decades],
+          genres: [...session.contentFilters.genres],
+        },
         publicPlaylist: session.publicPlaylistSelection
           ? {
               provider: session.publicPlaylistSelection.provider,

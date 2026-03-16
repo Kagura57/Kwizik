@@ -49,6 +49,7 @@ function buildHealthDetailsPayload() {
         (readEnvVar("ANILIST_ACCESS_TOKEN")?.length ?? 0) > 0,
       configuredSourceExamples: [
         "anilist:linked:union",
+        "anilist:random:classic",
         "anilist:users:userA,userB",
       ],
     },

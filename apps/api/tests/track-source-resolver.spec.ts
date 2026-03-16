@@ -36,6 +36,11 @@ describe("track source resolver", () => {
     expect(parsed.payload).toEqual({ usernames: ["alice", "bob", "charlie"] });
   });
 
+  it("parses the random classic AniList source", () => {
+    const parsed = parseTrackSource("anilist:random:classic");
+    expect(parsed.type).toBe("anilist_random_classic");
+  });
+
   it("falls back to free search source", () => {
     const parsed = parseTrackSource("anime openings");
     expect(parsed.type).toBe("search");

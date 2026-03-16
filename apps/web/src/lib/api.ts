@@ -55,6 +55,11 @@ export class HttpStatusError extends Error {
 }
 
 export type TitlePreference = "romaji" | "english" | "mixed";
+export type RoomDifficultyFilter = "all" | "easy" | "medium" | "hard";
+export type RoomContentFilters = {
+  decades: number[];
+  genres: string[];
+};
 export type RoundChoice = {
   value: string;
   titleRomaji: string;
@@ -77,6 +82,8 @@ export type RoomState = {
     isReady: boolean;
     hasAnsweredCurrentRound: boolean;
     isHost: boolean;
+    lives: number;
+    isEliminated: boolean;
     canContributeLibrary: boolean;
     libraryContribution: {
       includeInPool: {
@@ -101,10 +108,20 @@ export type RoomState = {
   isResolvingTracks: boolean;
   poolSize: number;
   categoryQuery: string;
-  sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+  sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
+  answerMode: "mcq_only" | "text_only" | "mixed";
+  livesMode: boolean;
+  maxLives: number;
+  roomRoundConfig: {
+    maxRounds: number;
+    playingMs: number;
+    revealMs: number;
+  };
   sourceConfig: {
-    mode: "public_playlist" | "players_liked" | "anilist_union";
+    mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
     themeMode: "op_only" | "ed_only" | "mix";
+    difficultyFilter: RoomDifficultyFilter;
+    contentFilters: RoomContentFilters;
     publicPlaylist: {
       provider: "deezer";
       id: string;
@@ -188,6 +205,8 @@ export type RoomState = {
     lastRoundScore: number;
     streak: number;
     maxStreak: number;
+    lives: number;
+    isEliminated: boolean;
     hasAnsweredCurrentRound: boolean;
   }> | null;
   chatMessages: Array<{
@@ -233,7 +252,7 @@ export type PublicRoomSummary = {
   categoryQuery: string;
   createdAtMs: number;
   canJoin: boolean;
-  sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+  sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
   playlistName: string | null;
   deadlineMs: number | null;
   serverNowMs: number;
@@ -273,7 +292,10 @@ function readRetryCount(method: string, retry?: number) {
   return method === "GET" ? 2 : 0;
 }
 
-function readRequestTimeoutMs(method: string) {
+function readRequestTimeoutMs(method: string, path: string) {
+  if (method === "POST" && path === "/quiz/start") {
+    return 20_000;
+  }
   return method === "GET" ? 9_000 : 4_500;
 }
 
@@ -327,7 +349,7 @@ async function requestJson<T>(path: string, init?: RequestOptions): Promise<T> {
         }
         const timeoutId = globalThis.setTimeout(() => {
           timeoutController.abort();
-        }, readRequestTimeoutMs(method));
+        }, readRequestTimeoutMs(method, pathWithSlash));
         let response: Response;
         try {
           response = await fetch(`${base}${pathWithSlash}`, {
@@ -516,13 +538,13 @@ export async function startRoom(input: { roomCode: string; playerId: string }) {
         state: string;
         poolSize: number;
         categoryQuery: string;
-        sourceMode?: "public_playlist" | "players_liked" | "anilist_union";
+        sourceMode?: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
         totalRounds: number;
         deadlineMs: number | null;
       }
     | {
         ok: false;
-        error: "PLAYERS_LIBRARY_SYNCING" | "PLAYLIST_TRACKS_RESOLVING";
+        error: "PLAYERS_LIBRARY_SYNCING" | "PLAYLIST_TRACKS_RESOLVING" | "ANILIST_REMOTE_FAILURE";
         retryAfterMs?: number | null;
       }
   >("/quiz/start", {
@@ -541,9 +563,9 @@ export async function setRoomSource(input: { roomCode: string; playerId: string;
 export async function setRoomSourceMode(input: {
   roomCode: string;
   playerId: string;
-  mode: "public_playlist" | "players_liked" | "anilist_union";
+  mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 }) {
-  return requestJson<{ ok: true; mode: "public_playlist" | "players_liked" | "anilist_union" }>("/quiz/source/mode", {
+  return requestJson<{ ok: true; mode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic" }>("/quiz/source/mode", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -560,6 +582,65 @@ export async function setRoomThemeMode(input: {
   });
 }
 
+export async function setRoomRoundConfig(input: {
+  roomCode: string;
+  playerId: string;
+  maxRounds?: number;
+  playingMs?: number;
+  revealMs?: number;
+}) {
+  return requestJson<{ ok: true; config: { maxRounds: number; playingMs: number; revealMs: number } }>(
+    "/quiz/settings/round-config",
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function setRoomAnswerMode(input: {
+  roomCode: string;
+  playerId: string;
+  mode: "mcq_only" | "text_only" | "mixed";
+}) {
+  return requestJson<{ ok: true; mode: string }>("/quiz/settings/answer-mode", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomDifficulty(input: {
+  roomCode: string;
+  playerId: string;
+  filter: RoomDifficultyFilter;
+}) {
+  return requestJson<{ ok: true; filter: RoomDifficultyFilter }>("/quiz/settings/difficulty", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomContentFilters(input: {
+  roomCode: string;
+  playerId: string;
+  decades: number[];
+  genres: string[];
+}) {
+  return requestJson<{ ok: true; contentFilters: RoomContentFilters }>("/quiz/settings/content-filters", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function setRoomLives(input: {
+  roomCode: string;
+  playerId: string;
+  livesMode: boolean;
+  maxLives: number;
+}) {
+  return requestJson<{ ok: true; livesMode: boolean; maxLives: number }>("/quiz/settings/lives", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function setRoomPublicPlaylist(input: {
   roomCode: string;
   playerId: string;
@@ -570,7 +651,7 @@ export async function setRoomPublicPlaylist(input: {
 }) {
   return requestJson<{
     ok: true;
-    sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+    sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
     categoryQuery: string;
   }>("/quiz/source/public-playlist", {
     method: "POST",

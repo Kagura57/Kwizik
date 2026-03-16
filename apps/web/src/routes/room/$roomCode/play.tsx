@@ -4,6 +4,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import Select, { type InputActionMeta, type SingleValue } from "react-select";
 import { toRomaji } from "wanakana";
 import {
+  getAccountTitlePreference,
   getRoomAnswerSuggestions,
   HttpStatusError,
   kickPlayer,
@@ -14,13 +15,20 @@ import {
   searchPlaylistsAcrossProviders,
   sendRoomChatMessage,
   setPlayerReady,
+  setRoomContentFilters,
+  setRoomDifficulty,
+  setRoomLives,
   setRoomPublicPlaylist,
   setRoomSourceMode,
   setRoomThemeMode,
+  setRoomRoundConfig,
+  setRoomAnswerMode,
   skipRoomRound,
   startRoom,
   submitRoomAnswer,
   submitRoomAnswerDraft,
+  type RoomContentFilters,
+  type RoomDifficultyFilter,
   type RoundChoice,
   type TitlePreference,
   type UnifiedPlaylistOption,
@@ -28,6 +36,15 @@ import {
 import { logClientEvent } from "../../../lib/logger";
 import { notify } from "../../../lib/notify";
 import { fetchLiveRoomState } from "../../../lib/realtime";
+import {
+  DEFAULT_USER_GAME_SETTINGS,
+  isDefaultRememberedGameSettings,
+  loadRememberedGameSettings,
+  persistRememberedGameSettings,
+  roomStateToRememberedGameSettings,
+  shouldRestoreRememberedGameSettings,
+  type RememberedGameSettings,
+} from "../../../lib/userGameSettingsMemory";
 import {
   getEffectiveRoomDeadlineMs,
   getEffectiveRoomPhase,
@@ -49,12 +66,36 @@ const ANIME_MEDIA_WARMUP_VERIFY_TIMEOUT_MS = 4_000;
 const MEDIA_READY_RETRY_DELAY_MS = 350;
 const MEDIA_READY_RETRY_MAX_ATTEMPTS = 4;
 
-type SourceMode = "public_playlist" | "players_liked" | "anilist_union";
+type SourceMode = "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
 type ThemeMode = "op_only" | "ed_only" | "mix";
+type DifficultyFilter = RoomDifficultyFilter;
+type AnswerMode = "mcq_only" | "text_only" | "mixed";
+type LivesPreset = 0 | 1 | 2 | 3 | 5;
 type AnswerSelectOption = {
   value: string;
   label: string;
 };
+const CONTENT_FILTER_DECADES = [
+  { start: 1990, label: "90s" },
+  { start: 2000, label: "2000s" },
+  { start: 2010, label: "2010s" },
+  { start: 2020, label: "2020s" },
+] as const;
+const CONTENT_FILTER_GENRES = [
+  "Action",
+  "Adventure",
+  "Comedy",
+  "Drama",
+  "Fantasy",
+  "Mystery",
+  "Psychological",
+  "Romance",
+  "Sci-Fi",
+  "Slice of Life",
+  "Sports",
+  "Supernatural",
+] as const;
+const LIVES_PRESETS: readonly LivesPreset[] = [0, 1, 2, 3, 5];
 
 function errorCode(error: unknown) {
   return error instanceof Error ? error.message : null;
@@ -74,6 +115,7 @@ function hostOnlyMessage(action: string) {
 
 function sourceModeLabel(mode: SourceMode) {
   if (mode === "anilist_union") return "AniList synchronise";
+  if (mode === "random_classic") return "Blindtest aléatoire classique";
   if (mode === "players_liked") return "Liked Songs joueurs";
   return "Playlist publique";
 }
@@ -82,6 +124,36 @@ function themeModeLabel(mode: ThemeMode) {
   if (mode === "op_only") return "OP only";
   if (mode === "ed_only") return "ED only";
   return "Mix";
+}
+
+function difficultyFilterLabel(filter: DifficultyFilter) {
+  if (filter === "easy") return "Facile";
+  if (filter === "medium") return "Moyen";
+  if (filter === "hard") return "Difficile";
+  return "Tous";
+}
+
+function contentDecadesLabel(filters: RoomContentFilters) {
+  if (filters.decades.length <= 0) return "Toutes";
+  return CONTENT_FILTER_DECADES
+    .filter((entry) => filters.decades.includes(entry.start))
+    .map((entry) => entry.label)
+    .join(", ");
+}
+
+function contentGenresLabel(filters: RoomContentFilters) {
+  if (filters.genres.length <= 0) return "Tous";
+  return filters.genres.join(", ");
+}
+
+function livesPresetLabel(preset: number) {
+  if (preset <= 0) return "Off";
+  return preset === 1 ? "1 vie" : `${preset} vies`;
+}
+
+function renderLivesHearts(lives: number, maxLives: number) {
+  const safeLives = Math.max(0, Math.min(maxLives, lives));
+  return `${"♥".repeat(safeLives)}${"♡".repeat(Math.max(0, maxLives - safeLives))}`;
 }
 
 function snapshotErrorMessage(error: unknown) {
@@ -93,6 +165,8 @@ function snapshotErrorMessage(error: unknown) {
 
 function startErrorMessage(error: unknown, spotifyCooldownRemainingSec: number) {
   switch (errorCode(error)) {
+    case "ANILIST_REMOTE_FAILURE":
+      return "AniList est temporairement indisponible pour ce mode aleatoire. Reessaie dans quelques secondes.";
     case "NO_TRACKS_FOUND":
       return "Aucune chanson jouable trouvee pour le moment. Reessaie dans quelques secondes.";
     case "SPOTIFY_RATE_LIMITED":
@@ -135,6 +209,19 @@ function themeModeErrorMessage(error: unknown) {
       return roomMissingMessage();
     default:
       return "Impossible de mettre a jour le mode themes.";
+  }
+}
+
+function difficultyFilterErrorMessage(error: unknown) {
+  switch (errorCode(error)) {
+    case "HOST_ONLY":
+      return hostOnlyMessage("changer la difficulte");
+    case "PLAYER_NOT_FOUND":
+      return playerSessionExpiredMessage();
+    case "ROOM_NOT_FOUND":
+      return roomMissingMessage();
+    default:
+      return "Impossible de mettre a jour la difficulte.";
   }
 }
 
@@ -268,6 +355,13 @@ function normalizeChoiceLabel(value: string) {
     .trim();
 }
 
+const SEASON_SUFFIX_RE =
+  /\s*(?:(?:Season|Saison|S)\s*\d+|Part\s*\d+|\d+(?:st|nd|rd|th)\s*Season|:\s*(?:.*?(?:Season|Part|Final|Cour).*)$)/i;
+
+function stripSeasonSuffix(title: string) {
+  return title.replace(SEASON_SUFFIX_RE, "").trim();
+}
+
 function formatRoundChoiceLabel(choice: RoundChoice, preference: TitlePreference) {
   const romajiTitle = withRomajiLabel(choice.titleRomaji);
   const englishTitle = choice.titleEnglish?.trim() ?? "";
@@ -282,6 +376,20 @@ function formatRoundChoiceLabel(choice: RoundChoice, preference: TitlePreference
     return `${romajiTitle} (${englishTitle}) - ${choice.themeLabel}`;
   }
   return `${romajiTitle} - ${choice.themeLabel}`;
+}
+
+function formatRevealTitle(
+  reveal: { title: string; titleRomaji: string | null; titleEnglish?: string | null },
+  preference: TitlePreference,
+) {
+  const romaji = withRomajiLabel(reveal.title, reveal.titleRomaji);
+  const english = (reveal.titleEnglish ?? "").trim();
+  const hasDistinctEnglish =
+    english.length > 0 && normalizeChoiceLabel(english) !== normalizeChoiceLabel(reveal.title);
+
+  if (preference === "english" && hasDistinctEnglish) return english;
+  if (preference === "mixed" && hasDistinctEnglish) return `${romaji} (${english})`;
+  return romaji;
 }
 
 function revealArtworkUrl(reveal: {
@@ -309,7 +417,7 @@ function lobbyReadyStatusLabel(
         poolBuild: {
           status: "idle" | "building" | "ready" | "failed";
         };
-        sourceMode: "public_playlist" | "players_liked" | "anilist_union";
+        sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
         sourceConfig: {
           publicPlaylist: {
             sourceQuery: string;
@@ -387,6 +495,7 @@ export function RoomPlayPage() {
   const navigate = useNavigate();
   const session = useGameStore((state) => state.session);
   const account = useGameStore((state) => state.account);
+  const setAccount = useGameStore((state) => state.setAccount);
   const clearSession = useGameStore((state) => state.clearSession);
   const setLiveRound = useGameStore((state) => state.setLiveRound);
   const [answer, setAnswer] = useState("");
@@ -411,6 +520,14 @@ export function RoomPlayPage() {
   const [answerSuggestionPool, setAnswerSuggestionPool] = useState<string[]>([]);
   const [sourceMode, setSourceMode] = useState<SourceMode>("anilist_union");
   const [themeMode, setThemeMode] = useState<ThemeMode>("mix");
+  const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>("all");
+  const [contentFilters, setContentFilters] = useState<RoomContentFilters>({ decades: [], genres: [] });
+  const [answerMode, setAnswerMode] = useState<AnswerMode>("mixed");
+  const [livesMode, setLivesMode] = useState(false);
+  const [maxLives, setMaxLives] = useState(3);
+  const [maxRounds, setMaxRounds] = useState(10);
+  const [playingMs, setPlayingMs] = useState(20_000);
+  const [revealMs, setRevealMs] = useState(20_000);
   const titlePreference = account.titlePreference;
   const [debouncedAnswer, setDebouncedAnswer] = useState("");
   const [playlistQuery, setPlaylistQuery] = useState("top hits");
@@ -452,6 +569,7 @@ export function RoomPlayPage() {
   const animeDiagnosticsRef = useRef<Set<string>>(new Set());
   const userInteractionUnlockedRef = useRef(false);
   const roomMissingRedirectedRef = useRef(false);
+  const rememberedSettingsRestoreAttemptedRef = useRef(false);
   const chatLogRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const lastSnapshotErrorToastRef = useRef<string | null>(null);
@@ -501,6 +619,30 @@ export function RoomPlayPage() {
   });
 
   const state = snapshotQuery.data?.snapshot;
+
+  useEffect(() => {
+    const activePhases = ["countdown", "loading", "playing", "reveal", "leaderboard"];
+    const isGameActive = state?.state != null && activePhases.includes(state.state);
+    if (isGameActive) {
+      document.documentElement.classList.add("game-active");
+    } else {
+      document.documentElement.classList.remove("game-active");
+    }
+    return () => {
+      document.documentElement.classList.remove("game-active");
+    };
+  }, [state?.state]);
+
+  const titlePrefQuery = useQuery({
+    queryKey: ["account-title-preference"],
+    queryFn: getAccountTitlePreference,
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (!titlePrefQuery.isSuccess) return;
+    setAccount({ titlePreference: titlePrefQuery.data.titlePreference });
+  }, [titlePrefQuery.data?.titlePreference, titlePrefQuery.isSuccess, setAccount]);
+
   useEffect(() => {
     if (typeof snapshotQuery.data?.serverNowMs !== "number") return;
     setServerClockOffsetMs(snapshotQuery.data.serverNowMs - Date.now());
@@ -598,6 +740,34 @@ export function RoomPlayPage() {
     if (!state?.sourceConfig?.themeMode) return;
     setThemeMode(state.sourceConfig.themeMode);
   }, [state?.sourceConfig?.themeMode]);
+
+  useEffect(() => {
+    if (!state?.sourceConfig?.difficultyFilter) return;
+    setDifficultyFilter(state.sourceConfig.difficultyFilter);
+  }, [state?.sourceConfig?.difficultyFilter]);
+
+  useEffect(() => {
+    if (!state?.sourceConfig?.contentFilters) return;
+    setContentFilters(state.sourceConfig.contentFilters);
+  }, [state?.sourceConfig?.contentFilters]);
+
+  useEffect(() => {
+    if (!state?.answerMode) return;
+    setAnswerMode(state.answerMode);
+  }, [state?.answerMode]);
+
+  useEffect(() => {
+    if (typeof state?.livesMode !== "boolean") return;
+    setLivesMode(state.livesMode);
+    setMaxLives(state.maxLives);
+  }, [state?.livesMode, state?.maxLives]);
+
+  useEffect(() => {
+    if (!state?.roomRoundConfig) return;
+    setMaxRounds(state.roomRoundConfig.maxRounds);
+    setPlayingMs(state.roomRoundConfig.playingMs);
+    setRevealMs(state.roomRoundConfig.revealMs);
+  }, [state?.roomRoundConfig]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -731,12 +901,16 @@ export function RoomPlayPage() {
     const values = [...fromApi.map((item) => item.label), ...rankedPool];
     const deduped: AnswerSelectOption[] = [];
     const seen = new Set<string>();
+    const seenFranchise = new Set<string>();
     for (const value of values) {
       const normalized = value.trim();
       if (normalized.length <= 0) continue;
       const key = normalized.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
+      const franchise = normalizeChoiceLabel(stripSeasonSuffix(normalized));
+      if (franchise.length > 0 && seenFranchise.has(franchise)) continue;
+      if (franchise.length > 0) seenFranchise.add(franchise);
       deduped.push({ value: normalized, label: normalized });
     }
     return deduped;
@@ -758,6 +932,7 @@ export function RoomPlayPage() {
       bulkAnswerSuggestionsQuery.isFetching ||
       animeAutocompleteQuery.isFetching) &&
     answerSuggestionPool.length <= 0;
+  const currentRoomSettings = state ? roomStateToRememberedGameSettings(state) : null;
 
   const showRevealAnswersInLeaderboard =
     state?.state === "reveal" || state?.state === "leaderboard";
@@ -957,12 +1132,131 @@ export function RoomPlayPage() {
       });
     },
     onSuccess: (_result, mode) => {
+      rememberCurrentRoomSettings({ themeMode: mode });
       notify.success(`Mode themes: ${themeModeLabel(mode)}.`);
       snapshotQuery.refetch();
     },
     onError: (error) => {
       notify.error(themeModeErrorMessage(error), {
         key: `room-play:theme-mode:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const roundConfigMutation = useMutation({
+    mutationFn: (config: { maxRounds?: number; playingMs?: number; revealMs?: number }) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomRoundConfig({
+        roomCode,
+        playerId: session.playerId,
+        ...config,
+      });
+    },
+    onSuccess: (_result, config) => {
+      rememberCurrentRoomSettings({
+        roundConfig: {
+          maxRounds: config.maxRounds ?? maxRounds,
+          playingMs: config.playingMs ?? playingMs,
+          revealMs: config.revealMs ?? revealMs,
+        },
+      });
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error("Erreur lors de la mise à jour de la configuration.", {
+        key: `room-play:round-config:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const answerModeMutation = useMutation({
+    mutationFn: (mode: AnswerMode) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomAnswerMode({
+        roomCode,
+        playerId: session.playerId,
+        mode,
+      });
+    },
+    onSuccess: (_result, mode) => {
+      rememberCurrentRoomSettings({ answerMode: mode });
+      const label = mode === "mcq_only" ? "QCM" : mode === "text_only" ? "Texte" : "Mixte";
+      notify.success(`Mode réponse: ${label}.`);
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error("Erreur lors du changement de mode réponse.", {
+        key: `room-play:answer-mode:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const difficultyFilterMutation = useMutation({
+    mutationFn: (filter: DifficultyFilter) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomDifficulty({
+        roomCode,
+        playerId: session.playerId,
+        filter,
+      });
+    },
+    onSuccess: (_result, filter) => {
+      rememberCurrentRoomSettings({ difficultyFilter: filter });
+      notify.success(`Difficulte: ${difficultyFilterLabel(filter)}.`);
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error(difficultyFilterErrorMessage(error), {
+        key: `room-play:difficulty:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const contentFiltersMutation = useMutation({
+    mutationFn: (nextFilters: RoomContentFilters) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomContentFilters({
+        roomCode,
+        playerId: session.playerId,
+        decades: nextFilters.decades,
+        genres: nextFilters.genres,
+      });
+    },
+    onSuccess: (_result, nextFilters) => {
+      rememberCurrentRoomSettings({ contentFilters: nextFilters });
+      notify.success("Filtres de contenu mis a jour.");
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error("Erreur lors du changement des filtres de contenu.", {
+        key: `room-play:content-filters:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  const livesMutation = useMutation({
+    mutationFn: (nextPreset: LivesPreset) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+      return setRoomLives({
+        roomCode,
+        playerId: session.playerId,
+        livesMode: nextPreset > 0,
+        maxLives: nextPreset > 0 ? nextPreset : maxLives,
+      });
+    },
+    onSuccess: (_result, nextPreset) => {
+      rememberCurrentRoomSettings({
+        livesMode: nextPreset > 0,
+        maxLives: nextPreset > 0 ? nextPreset : maxLives,
+      });
+      notify.success(
+        nextPreset > 0 ? `Mode vies: ${livesPresetLabel(nextPreset)}.` : "Mode vies desactive.",
+      );
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      notify.error("Erreur lors du changement du mode vies.", {
+        key: `room-play:lives:${roomCode}:${errorCode(error) ?? "unknown"}`,
       });
     },
   });
@@ -1052,6 +1346,150 @@ export function RoomPlayPage() {
       });
     },
   });
+
+  function rememberedSettingsFromLocalState(
+    overrides: Partial<RememberedGameSettings> = {},
+  ): RememberedGameSettings {
+    const currentRoundConfig = {
+      maxRounds,
+      playingMs,
+      revealMs,
+    };
+    const nextRoundConfig = overrides.roundConfig
+      ? {
+          ...currentRoundConfig,
+          ...overrides.roundConfig,
+        }
+      : currentRoundConfig;
+    return {
+      sourceMode: overrides.sourceMode ?? sourceMode,
+      themeMode: overrides.themeMode ?? themeMode,
+      difficultyFilter: overrides.difficultyFilter ?? difficultyFilter,
+      contentFilters: overrides.contentFilters ?? contentFilters,
+      answerMode: overrides.answerMode ?? answerMode,
+      livesMode: overrides.livesMode ?? livesMode,
+      maxLives: overrides.maxLives ?? maxLives,
+      roundConfig: nextRoundConfig,
+    };
+  }
+
+  function rememberCurrentRoomSettings(overrides: Partial<RememberedGameSettings> = {}) {
+    const nextSettings =
+      Object.keys(overrides).length <= 0 && currentRoomSettings
+        ? currentRoomSettings
+        : rememberedSettingsFromLocalState(overrides);
+    persistRememberedGameSettings(nextSettings);
+  }
+
+  const restoreRememberedSettingsMutation = useMutation({
+    mutationFn: async (settings: RememberedGameSettings) => {
+      if (!session.playerId) throw new Error("PLAYER_NOT_FOUND");
+
+      if (settings.sourceMode !== DEFAULT_USER_GAME_SETTINGS.sourceMode) {
+        await setRoomSourceMode({
+          roomCode,
+          playerId: session.playerId,
+          mode: settings.sourceMode,
+        });
+      }
+      if (settings.themeMode !== DEFAULT_USER_GAME_SETTINGS.themeMode) {
+        await setRoomThemeMode({
+          roomCode,
+          playerId: session.playerId,
+          mode: settings.themeMode,
+        });
+      }
+      if (settings.difficultyFilter !== DEFAULT_USER_GAME_SETTINGS.difficultyFilter) {
+        await setRoomDifficulty({
+          roomCode,
+          playerId: session.playerId,
+          filter: settings.difficultyFilter,
+        });
+      }
+      if (
+        settings.contentFilters.decades.length > 0 ||
+        settings.contentFilters.genres.length > 0
+      ) {
+        await setRoomContentFilters({
+          roomCode,
+          playerId: session.playerId,
+          decades: settings.contentFilters.decades,
+          genres: settings.contentFilters.genres,
+        });
+      }
+      if (settings.answerMode !== DEFAULT_USER_GAME_SETTINGS.answerMode) {
+        await setRoomAnswerMode({
+          roomCode,
+          playerId: session.playerId,
+          mode: settings.answerMode,
+        });
+      }
+      if (
+        settings.livesMode !== DEFAULT_USER_GAME_SETTINGS.livesMode ||
+        (settings.livesMode && settings.maxLives !== DEFAULT_USER_GAME_SETTINGS.maxLives)
+      ) {
+        await setRoomLives({
+          roomCode,
+          playerId: session.playerId,
+          livesMode: settings.livesMode,
+          maxLives: settings.maxLives,
+        });
+      }
+      if (
+        settings.roundConfig.maxRounds !== DEFAULT_USER_GAME_SETTINGS.roundConfig.maxRounds ||
+        settings.roundConfig.playingMs !== DEFAULT_USER_GAME_SETTINGS.roundConfig.playingMs ||
+        settings.roundConfig.revealMs !== DEFAULT_USER_GAME_SETTINGS.roundConfig.revealMs
+      ) {
+        await setRoomRoundConfig({
+          roomCode,
+          playerId: session.playerId,
+          maxRounds: settings.roundConfig.maxRounds,
+          playingMs: settings.roundConfig.playingMs,
+          revealMs: settings.roundConfig.revealMs,
+        });
+      }
+    },
+    onSuccess: () => {
+      notify.success("Réglages précédents restaurés.");
+      snapshotQuery.refetch();
+    },
+    onError: (error) => {
+      rememberedSettingsRestoreAttemptedRef.current = false;
+      notify.error("Impossible de restaurer les réglages précédents.", {
+        key: `room-play:restore-settings:${roomCode}:${errorCode(error) ?? "unknown"}`,
+      });
+    },
+  });
+
+  useEffect(() => {
+    const isDefaultHostLobby =
+      isHost &&
+      state?.state === "waiting" &&
+      currentRoomSettings !== null &&
+      isDefaultRememberedGameSettings(currentRoomSettings);
+    if (!isDefaultHostLobby) {
+      rememberedSettingsRestoreAttemptedRef.current = false;
+      return;
+    }
+    if (
+      rememberedSettingsRestoreAttemptedRef.current ||
+      restoreRememberedSettingsMutation.isPending
+    ) {
+      return;
+    }
+    const rememberedSettings = loadRememberedGameSettings();
+    if (!shouldRestoreRememberedGameSettings(currentRoomSettings, rememberedSettings)) {
+      return;
+    }
+    rememberedSettingsRestoreAttemptedRef.current = true;
+    restoreRememberedSettingsMutation.mutate(rememberedSettings!);
+  }, [
+    currentRoomSettings,
+    isHost,
+    restoreRememberedSettingsMutation,
+    restoreRememberedSettingsMutation.isPending,
+    state?.state,
+  ]);
 
   const skipMutation = useMutation({
     mutationFn: () => {
@@ -1334,16 +1772,17 @@ export function RoomPlayPage() {
     effectivePhase !== "playing" &&
     state?.state !== "results";
   const isResults = state?.state === "results";
+  const isSpectating = Boolean(state?.livesMode && currentPlayer?.isEliminated);
   const hasServerLockedGuess =
     effectivePhase === "playing" && Boolean(currentPlayer?.hasAnsweredCurrentRound);
   const mcqLocked =
     effectivePhase === "playing" &&
     state?.mode === "mcq" &&
-    (hasServerLockedGuess || (submittedMcq !== null && submittedMcq.round === state?.round));
+    (isSpectating || hasServerLockedGuess || (submittedMcq !== null && submittedMcq.round === state?.round));
   const textLocked =
     effectivePhase === "playing" &&
     state?.mode === "text" &&
-    (hasServerLockedGuess || (submittedText !== null && submittedText.round === state?.round));
+    (isSpectating || hasServerLockedGuess || (submittedText !== null && submittedText.round === state?.round));
   const roundLabel = `${state?.round ?? 0}/${state?.totalRounds ?? 0}`;
   const revealArtwork = state?.reveal ? revealArtworkUrl(state.reveal) : null;
   const hasLockedGuessVote =
@@ -1357,9 +1796,10 @@ export function RoomPlayPage() {
   const skipGuessDisabled =
     skipMutation.isPending ||
     !session.playerId ||
+    isSpectating ||
     Boolean(currentPlayer?.hasAnsweredCurrentRound) ||
     hasLockedGuessVote;
-  const skipRevealDisabled = skipMutation.isPending || !session.playerId || hasLockedRevealVote;
+  const skipRevealDisabled = skipMutation.isPending || !session.playerId || isSpectating || hasLockedRevealVote;
 
   function cancelAnimeWarmupVerification() {
     if (animeWarmupRafRef.current !== null) {
@@ -2158,6 +2598,61 @@ export function RoomPlayPage() {
     themeModeMutation.mutate(mode);
   }
 
+  function onSelectDifficultyFilter(filter: DifficultyFilter) {
+    setDifficultyFilter(filter);
+    difficultyFilterMutation.mutate(filter);
+  }
+
+  function onToggleContentDecade(decade: number) {
+    const nextFilters: RoomContentFilters = {
+      decades: contentFilters.decades.includes(decade)
+        ? contentFilters.decades.filter((value) => value !== decade)
+        : [...contentFilters.decades, decade].sort((left, right) => left - right),
+      genres: contentFilters.genres,
+    };
+    setContentFilters(nextFilters);
+    contentFiltersMutation.mutate(nextFilters);
+  }
+
+  function onToggleContentGenre(genre: string) {
+    const nextFilters: RoomContentFilters = {
+      decades: contentFilters.decades,
+      genres: contentFilters.genres.includes(genre)
+        ? contentFilters.genres.filter((value) => value !== genre)
+        : [...contentFilters.genres, genre],
+    };
+    setContentFilters(nextFilters);
+    contentFiltersMutation.mutate(nextFilters);
+  }
+
+  function onSelectLivesPreset(preset: LivesPreset) {
+    setLivesMode(preset > 0);
+    if (preset > 0) {
+      setMaxLives(preset);
+    }
+    livesMutation.mutate(preset);
+  }
+
+  function onSelectAnswerMode(mode: AnswerMode) {
+    setAnswerMode(mode);
+    answerModeMutation.mutate(mode);
+  }
+
+  function onSelectMaxRounds(value: number) {
+    setMaxRounds(value);
+    roundConfigMutation.mutate({ maxRounds: value });
+  }
+
+  function onSelectPlayingMs(value: number) {
+    setPlayingMs(value);
+    roundConfigMutation.mutate({ playingMs: value });
+  }
+
+  function onSelectRevealMs(value: number) {
+    setRevealMs(value);
+    roundConfigMutation.mutate({ revealMs: value });
+  }
+
   function dispatchLeaveSignal() {
     if (leaveSentRef.current || !session.playerId) return;
     leaveSentRef.current = true;
@@ -2247,7 +2742,7 @@ export function RoomPlayPage() {
                 {state.leaderboard.map((entry) => (
                   <li
                     key={entry.playerId}
-                    className={entry.hasAnsweredCurrentRound ? "answered" : ""}
+                    className={`${entry.hasAnsweredCurrentRound ? "answered" : ""}${entry.isEliminated ? " eliminated" : ""}`}
                   >
                     <span>#{entry.rank}</span>
                     <div className="leaderboard-player-block">
@@ -2259,6 +2754,12 @@ export function RoomPlayPage() {
                           </i>
                         )}
                       </strong>
+                      {state.livesMode && (
+                        <small className={`leaderboard-lives${entry.isEliminated ? " eliminated" : ""}`}>
+                          {renderLivesHearts(entry.lives, state.maxLives)}
+                          {entry.isEliminated && <span> Spectateur</span>}
+                        </small>
+                      )}
                       {showRevealAnswersInLeaderboard &&
                         (() => {
                           const revealAnswer = revealAnswerByPlayerId.get(entry.playerId);
@@ -2303,6 +2804,11 @@ export function RoomPlayPage() {
               <div className="round-strip">
                 <span>Room {roomCode}</span>
                 <strong>Manche {roundLabel}</strong>
+                {state?.livesMode && currentPlayer && (
+                  <em className={`round-strip-lives${currentPlayer.isEliminated ? " eliminated" : ""}`}>
+                    {renderLivesHearts(currentPlayer.lives, state.maxLives)}
+                  </em>
+                )}
               </div>
 
               <div
@@ -2404,6 +2910,14 @@ export function RoomPlayPage() {
                       <strong>AniList synchronise</strong>
                       <span>Union des listes des joueurs connectés</span>
                     </button>
+                    <button
+                      type="button"
+                      className={`source-preset-btn${sourceMode === "random_classic" ? " active" : ""}`}
+                      onClick={() => onSelectSourceMode("random_classic")}
+                    >
+                      <strong>Blindtest aléatoire classique</strong>
+                      <span>Tirage anime global frais à chaque partie</span>
+                    </button>
                   </div>
 
                   {sourceMode === "anilist_union" && (
@@ -2444,6 +2958,184 @@ export function RoomPlayPage() {
                       </button>
                     </div>
                   </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Difficulte AniList</span>
+                    <div className="source-preset-grid source-preset-grid-four">
+                      <button
+                        type="button"
+                        className={`source-preset-btn${difficultyFilter === "easy" ? " active" : ""}`}
+                        onClick={() => onSelectDifficultyFilter("easy")}
+                      >
+                        <strong>Facile</strong>
+                        <span>Hits tres populaires</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${difficultyFilter === "medium" ? " active" : ""}`}
+                        onClick={() => onSelectDifficultyFilter("medium")}
+                      >
+                        <strong>Moyen</strong>
+                        <span>Popularite intermediaire</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${difficultyFilter === "hard" ? " active" : ""}`}
+                        onClick={() => onSelectDifficultyFilter("hard")}
+                      >
+                        <strong>Difficile</strong>
+                        <span>Series plus niche</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${difficultyFilter === "all" ? " active" : ""}`}
+                        onClick={() => onSelectDifficultyFilter("all")}
+                      >
+                        <strong>Tous</strong>
+                        <span>Aucun filtre de popularite</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Décennies</span>
+                    <div className="source-preset-grid source-preset-grid-four">
+                      {CONTENT_FILTER_DECADES.map((entry) => (
+                        <button
+                          key={entry.start}
+                          type="button"
+                          className={`source-preset-btn${contentFilters.decades.includes(entry.start) ? " active" : ""}`}
+                          onClick={() => onToggleContentDecade(entry.start)}
+                        >
+                          <strong>{entry.label}</strong>
+                          <span>{entry.start}-{entry.start + 9}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Genres</span>
+                    <div className="source-preset-grid source-preset-grid-three">
+                      {CONTENT_FILTER_GENRES.map((genre) => (
+                        <button
+                          key={genre}
+                          type="button"
+                          className={`source-preset-btn${contentFilters.genres.includes(genre) ? " active" : ""}`}
+                          onClick={() => onToggleContentGenre(genre)}
+                        >
+                          <strong>{genre}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Mode vies</span>
+                    <div className="source-preset-grid source-preset-grid-five">
+                      {LIVES_PRESETS.map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          className={`source-preset-btn${(preset === 0 ? !livesMode : livesMode && maxLives === preset) ? " active" : ""}`}
+                          onClick={() => onSelectLivesPreset(preset)}
+                        >
+                          <strong>{livesPresetLabel(preset)}</strong>
+                          <span>
+                            {preset > 0 ? "Elimination a zero vie" : "Score classique"}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Nombre de rounds</span>
+                    <div className="source-preset-grid">
+                      {[5, 10, 15, 20].map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className={`source-preset-btn${maxRounds === n ? " active" : ""}`}
+                          onClick={() => onSelectMaxRounds(n)}
+                        >
+                          <strong>{n}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Durée de devinette</span>
+                    <div className="source-preset-grid">
+                      {([
+                        [10_000, "10s"],
+                        [15_000, "15s"],
+                        [20_000, "20s"],
+                        [30_000, "30s"],
+                      ] as const).map(([ms, label]) => (
+                        <button
+                          key={ms}
+                          type="button"
+                          className={`source-preset-btn${playingMs === ms ? " active" : ""}`}
+                          onClick={() => onSelectPlayingMs(ms)}
+                        >
+                          <strong>{label}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Durée de révélation</span>
+                    <div className="source-preset-grid">
+                      {([
+                        [5_000, "5s"],
+                        [10_000, "10s"],
+                        [15_000, "15s"],
+                        [20_000, "20s"],
+                      ] as const).map(([ms, label]) => (
+                        <button
+                          key={ms}
+                          type="button"
+                          className={`source-preset-btn${revealMs === ms ? " active" : ""}`}
+                          onClick={() => onSelectRevealMs(ms)}
+                        >
+                          <strong>{label}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="field-block">
+                    <span className="field-label">Mode réponse</span>
+                    <div className="source-preset-grid">
+                      <button
+                        type="button"
+                        className={`source-preset-btn${answerMode === "mcq_only" ? " active" : ""}`}
+                        onClick={() => onSelectAnswerMode("mcq_only")}
+                      >
+                        <strong>QCM</strong>
+                        <span>Choix multiples uniquement</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${answerMode === "text_only" ? " active" : ""}`}
+                        onClick={() => onSelectAnswerMode("text_only")}
+                      >
+                        <strong>Texte</strong>
+                        <span>Réponse libre uniquement</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${answerMode === "mixed" ? " active" : ""}`}
+                        onClick={() => onSelectAnswerMode("mixed")}
+                      >
+                        <strong>Mixte</strong>
+                        <span>Alternance QCM / Texte</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <p className="status">Seul le host peut modifier la configuration source.</p>
@@ -2477,6 +3169,22 @@ export function RoomPlayPage() {
                         ? "ED only"
                         : "Mix"}
                   </strong>
+                </p>
+                <p>
+                  <span>Difficulte</span>
+                  <strong>{difficultyFilterLabel(state.sourceConfig.difficultyFilter)}</strong>
+                </p>
+                <p>
+                  <span>Décennies</span>
+                  <strong>{contentDecadesLabel(state.sourceConfig.contentFilters)}</strong>
+                </p>
+                <p>
+                  <span>Genres</span>
+                  <strong>{contentGenresLabel(state.sourceConfig.contentFilters)}</strong>
+                </p>
+                <p>
+                  <span>Mode vies</span>
+                  <strong>{state.livesMode ? livesPresetLabel(state.maxLives) : "Off"}</strong>
                 </p>
               </div>
 
@@ -2522,6 +3230,11 @@ export function RoomPlayPage() {
                         {player.isHost ? "Host" : "Joueur"} -{" "}
                         {player.isReady ? "Prêt" : "En attente"}
                       </p>
+                      {state.livesMode && (
+                        <small className={`lobby-player-lives${player.isEliminated ? " eliminated" : ""}`}>
+                          {renderLivesHearts(player.lives, state.maxLives)}
+                        </small>
+                      )}
                     </div>
                     {isHost && player.playerId !== session.playerId && (
                       <button
@@ -2539,7 +3252,14 @@ export function RoomPlayPage() {
             </div>
           )}
 
-          {effectivePhase === "playing" && state?.mode === "mcq" && (
+          {effectivePhase === "playing" && isSpectating && (
+            <div className="spectator-banner" role="status" aria-live="polite">
+              <strong>Éliminé</strong>
+              <span>Mode spectateur actif. Tu peux suivre la manche sans répondre.</span>
+            </div>
+          )}
+
+          {effectivePhase === "playing" && !isSpectating && state?.mode === "mcq" && (
             <div className="mcq-grid">
               {(state.choices ?? []).map((choice, index) => (
                 <button
@@ -2554,7 +3274,7 @@ export function RoomPlayPage() {
             </div>
           )}
 
-          {effectivePhase === "playing" && state?.mode === "text" && (
+          {effectivePhase === "playing" && !isSpectating && state?.mode === "text" && (
             <form className="panel-form answer-box" onSubmit={onSubmitText}>
               <label>
                 <span>Réponse (nom de l'anime)</span>
@@ -2564,15 +3284,32 @@ export function RoomPlayPage() {
                   unstyled
                   options={answerSelectOptions}
                   value={selectedAnswerOption}
+                  inputValue={answer}
                   onInputChange={(inputValue: string, actionMeta: InputActionMeta) => {
                     if (actionMeta.action === "input-change") {
                       setAnswer(inputValue.slice(0, 80));
                     }
+                    if (actionMeta.action === "set-value") {
+                      // Keep input in sync after option selection
+                    }
                   }}
                   onChange={(option: SingleValue<AnswerSelectOption>) => {
-                    if (!option) return;
+                    if (!option) {
+                      setAnswer("");
+                      return;
+                    }
                     setAnswer(option.value.slice(0, 80));
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      // Prevent react-select from selecting the highlighted option.
+                      // The form's onSubmit will handle submission instead.
+                      event.preventDefault();
+                      const form = (event.target as HTMLElement).closest("form");
+                      if (form) form.requestSubmit();
+                    }
+                  }}
+                  filterOption={() => true}
                   placeholder="Nom de l'anime"
                   noOptionsMessage={() =>
                     typedAnswer.length <= 0
@@ -2601,7 +3338,7 @@ export function RoomPlayPage() {
             </form>
           )}
 
-          {effectivePhase === "playing" && (
+          {effectivePhase === "playing" && !isSpectating && (
             <div className="phase-skip-panel">
               <button
                 className="ghost-btn"
@@ -2632,7 +3369,7 @@ export function RoomPlayPage() {
               <div className="reveal-content">
                 <p className="kicker">Reveal</p>
                 <h3 className="reveal-title">
-                  {withRomajiLabel(state.reveal.title, state.reveal.titleRomaji)}
+                  {formatRevealTitle(state.reveal, titlePreference)}
                 </h3>
                 {state.reveal.songTitle && (
                   <p className="reveal-song-title">{state.reveal.songTitle}</p>
@@ -2647,7 +3384,7 @@ export function RoomPlayPage() {
             </div>
           )}
 
-          {state?.state === "reveal" && (
+          {state?.state === "reveal" && !isSpectating && (
             <div className="phase-skip-panel">
               <button
                 className="ghost-btn"
@@ -2690,7 +3427,10 @@ export function RoomPlayPage() {
                   <button
                     className="solid-btn"
                     type="button"
-                    onClick={() => replayMutation.mutate()}
+                    onClick={() => {
+                      rememberCurrentRoomSettings();
+                      replayMutation.mutate();
+                    }}
                   >
                     {replayMutation.isPending ? "Retour lobby..." : "Rejouer"}
                   </button>
@@ -2702,8 +3442,7 @@ export function RoomPlayPage() {
           )}
         </div>
 
-        {!isResults && (
-          <aside className="arena-side meta-side">
+        <aside className="arena-side meta-side">
             <h2 className="side-title">Chat</h2>
             <div ref={chatLogRef} className="room-chat-log">
               {chatMessages.map((message) => (
@@ -2735,11 +3474,12 @@ export function RoomPlayPage() {
                 {chatMutation.isPending ? "Envoi..." : "Envoyer"}
               </button>
             </form>
-            <button className="ghost-btn" type="button" onClick={leaveRoom}>
-              Quitter la room
-            </button>
+            {!isResults && (
+              <button className="ghost-btn" type="button" onClick={leaveRoom}>
+                Quitter la room
+              </button>
+            )}
           </aside>
-        )}
       </article>
 
       <audio

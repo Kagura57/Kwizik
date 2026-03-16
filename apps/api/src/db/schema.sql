@@ -315,10 +315,29 @@ create table if not exists anime_catalog_anime (
   title_romaji text not null,
   title_english text,
   title_native text,
+  anilist_popularity integer,
+  year integer,
+  genres text[] not null default '{}',
   searchable_romaji text not null,
   is_active boolean not null default true,
   updated_at timestamptz not null default now()
 );
+
+alter table anime_catalog_anime
+  add column if not exists anilist_popularity integer;
+alter table anime_catalog_anime
+  add column if not exists year integer;
+alter table anime_catalog_anime
+  add column if not exists genres text[] not null default '{}';
+
+create index if not exists idx_anime_catalog_anilist_popularity
+  on anime_catalog_anime (anilist_popularity)
+  where anilist_popularity is not null;
+create index if not exists idx_anime_catalog_year
+  on anime_catalog_anime (year)
+  where year is not null;
+create index if not exists idx_anime_catalog_genres
+  on anime_catalog_anime using gin (genres);
 
 create table if not exists anime_catalog_alias (
   id bigserial primary key,
