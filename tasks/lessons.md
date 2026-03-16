@@ -2,6 +2,7 @@
 
 ## 2026-03-13
 
+- Quand l'utilisateur dit que la disposition d'une page est "desastreuse", ne pas se limiter a corriger un bloc isole; reevaluer la composition complete (hero, hierarchy, grid, density, breathing room, CTA, responsive balance) avant de proposer un redesign.
 - Quand un utilisateur demande un mode "simplement aleatoire", ne pas supposer que le catalogue deja synchronise en base est acceptable; verifier explicitement s'il attend un tirage depuis une source distante/globalement fraiche plutot qu'un pool local.
 - Pour un mode distant "classique", ne pas proposer un echec utilisateur ou un fallback permanent comme comportement normal; dimensionner le chemin principal pour remplir suffisamment le pool jouable, et n'utiliser le cache que pour accelerer ce meme chemin.
 - Si l'utilisateur dit que l'aleatoire parfait prime sur la robustesse cachee, ne reutiliser aucun pool preconstruit entre parties; garder un tirage frais par partie et limiter le cache aux metadonnees techniques qui n'influencent pas la selection.

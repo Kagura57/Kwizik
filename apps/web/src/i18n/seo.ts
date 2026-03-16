@@ -21,6 +21,8 @@ export type SeoConfig = {
   robots?: string;
   alternatesPath?: string;
   noindex?: boolean;
+  socialImagePath?: string;
+  socialImageAlt?: string;
   jsonLd?: Record<string, JsonValue> | Array<Record<string, JsonValue>>;
 };
 
@@ -59,6 +61,20 @@ export function buildAlternateUrls(path: string) {
     en: `${origin}${alternates.en}`,
     "x-default": `${origin}${alternates["x-default"]}`,
   } as const;
+}
+
+function defaultSocialImagePath(locale: SupportedLocale) {
+  return locale === "en" ? "/og/kwizik-en.svg" : "/og/kwizik-fr.svg";
+}
+
+function defaultSocialImageAlt(locale: SupportedLocale) {
+  return locale === "en"
+    ? "Kwizik anime blind test multiplayer social card"
+    : "Carte de partage Kwizik pour blind test anime multijoueur";
+}
+
+export function buildSocialImageUrl(locale: SupportedLocale, imagePath?: string) {
+  return `${getSiteOrigin()}${imagePath ?? defaultSocialImagePath(locale)}`;
 }
 
 function appendMeta(doc: SeoDocument, name: string, content: string) {
@@ -121,6 +137,10 @@ export function applyPageSeo(
   const canonicalUrl = buildCanonicalUrl(config.locale, config.path);
   const alternates = buildAlternateUrls(config.alternatesPath ?? config.path);
   const robots = config.robots ?? (config.noindex ? "noindex,follow" : "index,follow");
+  const socialImageUrl = buildSocialImageUrl(config.locale, config.socialImagePath);
+  const socialImageAlt = config.socialImageAlt ?? defaultSocialImageAlt(config.locale);
+  const localeValue = config.locale === "fr" ? "fr_FR" : "en_US";
+  const alternateLocaleValue = config.locale === "fr" ? "en_US" : "fr_FR";
 
   doc.title = config.title;
   doc.documentElement.lang = config.locale;
@@ -130,11 +150,21 @@ export function applyPageSeo(
   appendPropertyMeta(doc, "og:title", config.title);
   appendPropertyMeta(doc, "og:description", config.description);
   appendPropertyMeta(doc, "og:type", "website");
+  appendPropertyMeta(doc, "og:site_name", "Kwizik");
   appendPropertyMeta(doc, "og:url", canonicalUrl);
-  appendPropertyMeta(doc, "og:locale", config.locale === "fr" ? "fr_FR" : "en_US");
+  appendPropertyMeta(doc, "og:locale", localeValue);
+  appendPropertyMeta(doc, "og:locale:alternate", alternateLocaleValue);
+  appendPropertyMeta(doc, "og:image", socialImageUrl);
+  appendPropertyMeta(doc, "og:image:secure_url", socialImageUrl);
+  appendPropertyMeta(doc, "og:image:type", "image/svg+xml");
+  appendPropertyMeta(doc, "og:image:width", "1200");
+  appendPropertyMeta(doc, "og:image:height", "630");
+  appendPropertyMeta(doc, "og:image:alt", socialImageAlt);
   appendMeta(doc, "twitter:card", "summary_large_image");
   appendMeta(doc, "twitter:title", config.title);
   appendMeta(doc, "twitter:description", config.description);
+  appendMeta(doc, "twitter:image", socialImageUrl);
+  appendMeta(doc, "twitter:image:alt", socialImageAlt);
   appendLink(doc, "canonical", canonicalUrl);
   appendLink(doc, "alternate", alternates.fr, { hreflang: "fr" });
   appendLink(doc, "alternate", alternates.en, { hreflang: "en" });

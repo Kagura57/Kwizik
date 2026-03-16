@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { applyPageSeo, buildAlternateUrls, buildCanonicalUrl, clearPageSeo } from "../i18n/seo";
+import {
+  applyPageSeo,
+  buildAlternateUrls,
+  buildCanonicalUrl,
+  buildSocialImageUrl,
+  clearPageSeo,
+} from "../i18n/seo";
 
 type MockElement = {
   tagName: string;
@@ -52,6 +58,8 @@ describe("route SEO helpers", () => {
 
   it("builds canonical and alternate URLs for localized pages", () => {
     expect(buildCanonicalUrl("en", "/join")).toBe("https://kwizik.app/en/join");
+    expect(buildSocialImageUrl("fr")).toBe("https://kwizik.app/og/kwizik-fr.svg");
+    expect(buildSocialImageUrl("en")).toBe("https://kwizik.app/og/kwizik-en.svg");
     expect(buildAlternateUrls("/join")).toEqual({
       fr: "https://kwizik.app/fr/join",
       en: "https://kwizik.app/en/join",
@@ -74,6 +82,9 @@ describe("route SEO helpers", () => {
     expect(mockDocument.snapshot().join("|")).toContain("noindex,follow");
     expect(mockDocument.snapshot().join("|")).toContain('"rel":"canonical"');
     expect(mockDocument.snapshot().join("|")).toContain("https://kwizik.app/en/auth");
+    expect(mockDocument.snapshot().join("|")).toContain('"property":"og:image"');
+    expect(mockDocument.snapshot().join("|")).toContain("https://kwizik.app/og/kwizik-en.svg");
+    expect(mockDocument.snapshot().join("|")).toContain('"name":"twitter:image"');
   });
 
   it("renders JSON-LD for indexable pages", () => {

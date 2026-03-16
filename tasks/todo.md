@@ -1,3 +1,30 @@
+# Home Page Harmony Refresh
+
+- [x] Audit the current home layout, the relevant CSS, and a few external references to identify the main hierarchy and spacing issues.
+- [x] Lock a visual direction for the home page and record the intended composition changes.
+- [x] Refactor the home route and styles to create a more harmonious, responsive landing page.
+- [x] Run a polish pass on spacing, alignment, and responsive balance.
+- [x] Verify the result with targeted checks and document the review.
+
+## Review
+
+- Root cause: the home page relied on two competing top cards and narrow follow-up panels, so there was no clear focal point, weak visual rhythm, and poor balance between room actions, public rooms, and editorial content.
+- Design direction validated: hybrid product landing page plus lobby-entry surface, with a hero-first composition, a unified room-actions panel, a full-width public-room section, and a calmer editorial grid below.
+- Implementation:
+  - rebuilt `apps/web/src/routes/index.tsx` around a dedicated hero, room-actions aside, richer public-room rows, and a three-card editorial section;
+  - added dedicated home-page layout and responsive styles in `apps/web/src/styles.css` instead of depending on the older generic `home-grid` / `single-panel` composition;
+  - kept all existing join/create/public-room behaviors intact while improving hierarchy and mobile collapse.
+- References used during design review:
+  - Unity Lobby docs for browse/join/private room framing
+  - Game.Page for hero-to-actions progression
+  - SaaS Hero conversion patterns for CTA hierarchy
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright visual check on `http://127.0.0.1:5173/en` at `1365x768` ✅ PASS
+  - Playwright visual check on `http://127.0.0.1:5173/en` at `390x844` ✅ PASS
+  - Playwright console warnings check on the home page ✅ 0 warnings, 0 errors
+
 # Blindtest Anime Aleatoire Global
 
 - [x] Explorer le flux existant des modes source, des reglages de room et du demarrage de partie.
@@ -288,3 +315,25 @@
   - build web apres changements: `index` 162.35 kB, `tanstack` 119.73 kB, `vendor` 264.61 kB
 - Risque residuel:
   - les warnings React hooks / a11y existants dans `play.tsx` et `view.tsx` restent un chantier distinct
+
+# Open Graph Social Cards
+
+- [x] Auditer la couche SEO actuelle et les assets publics pour identifier le support OG/Twitter deja present.
+- [x] Ajouter les balises Open Graph/Twitter manquantes dans la couche SEO partagee.
+- [x] Publier des images de partage localisees FR/EN et les brancher sur les pages publiques.
+- [x] Verifier avec build/tests web et revue finale.
+
+## Review
+
+- Etat initial confirme: la couche SEO cliente exposait deja `og:title`, `og:description`, `og:type`, `og:url` et quelques tags Twitter, mais sans image sociale ni fallback HTML initial pour les scrapers qui ne rendent pas le JS.
+- Implementation:
+  - ajout des metas `og:site_name`, `og:image`, `og:image:secure_url`, `og:image:type`, `og:image:width`, `og:image:height`, `og:image:alt`, `og:locale:alternate`, `twitter:image` et `twitter:image:alt` dans `apps/web/src/i18n/seo.ts`
+  - ajout d'un fallback OG/Twitter statique dans `apps/web/index.html`
+  - ajout des cartes localisees `apps/web/public/og/kwizik-default.svg`, `apps/web/public/og/kwizik-fr.svg`, `apps/web/public/og/kwizik-en.svg`
+  - la page neutre `/` utilise explicitement la carte `kwizik-default.svg`
+- Verification:
+  - `bun test apps/web/src/routes/seo.spec.tsx apps/web/src/i18n/locale.spec.ts apps/web/src/lib/runtimeOrigin.spec.ts apps/web/src/routes/layout.spec.tsx apps/web/src/routes/routes.spec.tsx` ✅ PASS
+  - `bun run --cwd apps/web build` ✅ PASS
+  - verification de sortie: `apps/web/dist/og/kwizik-default.svg`, `apps/web/dist/og/kwizik-fr.svg`, `apps/web/dist/og/kwizik-en.svg` ✅
+- Limite connue:
+  - les balises OG par route restent limitees par la nature SPA de l'application; les scrapers sociaux liront de facon fiable le fallback statique de `index.html`, tandis que les metas dynamiques par route ne seront pleinement exploitees qu'avec SSR/prerender.

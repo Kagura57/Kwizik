@@ -8,6 +8,8 @@ export function RootLanguagePage() {
     locale: "en",
     path: "/",
     noindex: true,
+    socialImagePath: "/og/kwizik-default.svg",
+    socialImageAlt: "Kwizik language selection social card",
   });
 
   return (

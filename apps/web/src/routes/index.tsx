@@ -27,6 +27,21 @@ function joinErrorMessage(error: unknown, locale: "fr" | "en") {
   return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
 }
 
+function formatRoomState(state: string, locale: "fr" | "en") {
+  switch (state) {
+    case "waiting":
+      return locale === "en" ? "Lobby open" : "Lobby ouvert";
+    case "playing":
+      return locale === "en" ? "Live match" : "Partie en cours";
+    case "results":
+      return locale === "en" ? "Results" : "Resultats";
+    case "finished":
+      return locale === "en" ? "Finished" : "Terminee";
+    default:
+      return state;
+  }
+}
+
 export function HomePage() {
   const navigate = useNavigate();
   const locale = useCurrentLocale();
@@ -70,6 +85,28 @@ export function HomePage() {
           roomJoined: "Joined room.",
           createError: "Unable to create the room.",
           promptNickname: "Choose a nickname to join this room",
+          heroKicker: "Anime multiplayer rooms",
+          heroPointOne: "Openings and endings",
+          heroPointTwo: "Shared live playback",
+          heroPointThree: "Public and private lobbies",
+          heroPointFour: "AniList-powered playlists",
+          heroSignalRooms: "Public rooms",
+          heroSignalJoinable: "Open to join",
+          heroSignalModes: "Playlist modes",
+          heroSignalModesValue: "Anime + AniList",
+          heroSignalAccess: "Setup",
+          heroSignalAccessValue: "Browser only",
+          actionTitle: "Jump into the next match",
+          actionSubtitle:
+            "Join with a code in seconds or create a room and host the lobby from the same panel.",
+          joinBlockTitle: "Join with a code",
+          createBlockTitle: "Create your lobby",
+          publicRoomsTitle: "Rooms you can join now",
+          publicRoomsSubtitle:
+            "See which lobbies are open, how many players are inside, and which source mode they use before jumping in.",
+          publicRoomsCount: "listed rooms",
+          publicRoomsEmpty:
+            "No public room is open right now. Create one and it will appear here for the next players.",
           seoH1: "Anime Blind Test Online for Multiplayer Rooms",
           seoLead:
             "Kwizik lets you create a live anime blind test room, challenge friends on openings and endings, and launch the game instantly in your browser.",
@@ -118,6 +155,28 @@ export function HomePage() {
           roomJoined: "Room rejointe.",
           createError: "Impossible de créer la room.",
           promptNickname: "Choisis un pseudo pour rejoindre cette room",
+          heroKicker: "Rooms anime multijoueur",
+          heroPointOne: "Openings et endings",
+          heroPointTwo: "Lecture synchronisee en direct",
+          heroPointThree: "Lobbies publics ou prives",
+          heroPointFour: "Playlists basees sur AniList",
+          heroSignalRooms: "Rooms publiques",
+          heroSignalJoinable: "Ouvertes",
+          heroSignalModes: "Modes de playlist",
+          heroSignalModesValue: "Anime + AniList",
+          heroSignalAccess: "Installation",
+          heroSignalAccessValue: "Navigateur uniquement",
+          actionTitle: "Entre rapidement dans la prochaine partie",
+          actionSubtitle:
+            "Rejoins avec un code en quelques secondes ou cree une room et pilote le lobby depuis le meme panneau.",
+          joinBlockTitle: "Rejoindre avec un code",
+          createBlockTitle: "Creer ton lobby",
+          publicRoomsTitle: "Rooms disponibles maintenant",
+          publicRoomsSubtitle:
+            "Vois quels lobbies sont ouverts, combien de joueurs sont presents et quel mode de source ils utilisent avant de rejoindre.",
+          publicRoomsCount: "rooms listees",
+          publicRoomsEmpty:
+            "Aucune room publique n'est ouverte pour le moment. Cree-en une et elle apparaitra ici pour les prochains joueurs.",
           seoH1: "Blind Test Anime en ligne pour jouer en multijoueur",
           seoLead:
             "Kwizik te permet de créer une room de blind test anime, de défier tes amis sur des openings et endings, puis de lancer la partie directement dans le navigateur.",
@@ -195,6 +254,10 @@ export function HomePage() {
     queryFn: getPublicRooms,
     refetchInterval: 4_000,
   });
+  const publicRooms = publicRoomsQuery.data?.rooms ?? [];
+  const joinableRoomCount = publicRooms.filter((room) => room.canJoin).length;
+  const publicRoomCountLabel = publicRoomsQuery.isLoading ? "..." : String(publicRooms.length);
+  const joinableRoomCountLabel = publicRoomsQuery.isLoading ? "..." : String(joinableRoomCount);
 
   const createRoomMutation = useMutation({
     mutationFn: async () => {
@@ -315,116 +378,186 @@ export function HomePage() {
 
   return (
     <>
-      <section className="home-grid home-grid-balanced home-top-grid">
-        <article className="panel-card">
-          <h2 className="panel-title">{copy.joinTitle}</h2>
-          <p className="panel-copy">{copy.joinSubtitle}</p>
-
-          <form className="panel-form" onSubmit={onJoin}>
-            <label>
-              <span>{copy.roomCode}</span>
-              <input
-                value={joinRoomCode}
-                onChange={(event) => setJoinRoomCode(event.currentTarget.value)}
-                maxLength={6}
-                placeholder="ABC123"
-              />
-            </label>
-
-            <label>
-              <span>{copy.nickname}</span>
-              <input
-                value={joinDisplayName}
-                onChange={(event) => setJoinDisplayName(event.currentTarget.value)}
-                maxLength={24}
-                placeholder={copy.nicknamePlaceholder}
-              />
-            </label>
-
-            <button
-              className="solid-btn"
-              type="submit"
-              disabled={joinMutation.isPending || createRoomMutation.isPending}
-            >
-              {joinMutation.isPending ? copy.joining : copy.enterRoom}
-            </button>
-          </form>
-        </article>
-
-        <article className="panel-card">
-          <h2 className="panel-title">{copy.createTitle}</h2>
-          <p className="panel-copy">{copy.createSubtitle}</p>
-          {!account.userId && <p className="status">{copy.syncHint}</p>}
-
-          <div className="panel-form">
-            <label>
-              <span>{copy.nickname}</span>
-              <input
-                value={createDisplayName}
-                onChange={(event) => setCreateDisplayName(event.currentTarget.value)}
-                maxLength={24}
-                placeholder={copy.nicknamePlaceholder}
-              />
-            </label>
-
-            <div className="field-block">
-              <span className="field-label">{copy.visibility}</span>
-              <div className="source-preset-grid">
-                <button
-                  type="button"
-                  className={`source-preset-btn${isPublicRoom ? " active" : ""}`}
-                  onClick={() => setIsPublicRoom(true)}
-                >
-                  <strong>{copy.publicGame}</strong>
-                  <span>{copy.publicGameHint}</span>
-                </button>
-                <button
-                  type="button"
-                  className={`source-preset-btn${!isPublicRoom ? " active" : ""}`}
-                  onClick={() => setIsPublicRoom(false)}
-                >
-                  <strong>{copy.privateGame}</strong>
-                  <span>{copy.privateGameHint}</span>
-                </button>
-              </div>
+      <section className="home-landing">
+        <div className="home-hero-shell">
+          <article className="hero-card home-hero-card">
+            <div className="home-hero-copy">
+              <p className="kicker">{copy.heroKicker}</p>
+              <h1 className="hero-title home-hero-title">{copy.seoH1}</h1>
+              <p className="hero-copy">{copy.seoLead}</p>
             </div>
 
-            <p className="status">{copy.hostHint}</p>
+            <div className="hero-chips home-hero-chips" aria-label={copy.heroKicker}>
+              <span>{copy.heroPointOne}</span>
+              <span>{copy.heroPointTwo}</span>
+              <span>{copy.heroPointThree}</span>
+              <span>{copy.heroPointFour}</span>
+            </div>
 
-            <button
-              id="create-room"
-              className="solid-btn"
-              type="button"
-              onClick={onCreate}
-              disabled={createRoomMutation.isPending || joinMutation.isPending}
-            >
-              {createRoomMutation.isPending ? copy.creating : copy.createRoom}
-            </button>
-          </div>
-        </article>
+            <div className="home-signal-grid">
+              <div className="home-signal-card">
+                <span>{copy.heroSignalRooms}</span>
+                <strong>{publicRoomCountLabel}</strong>
+              </div>
+              <div className="home-signal-card">
+                <span>{copy.heroSignalJoinable}</span>
+                <strong>{joinableRoomCountLabel}</strong>
+              </div>
+              <div className="home-signal-card">
+                <span>{copy.heroSignalModes}</span>
+                <strong>{copy.heroSignalModesValue}</strong>
+              </div>
+              <div className="home-signal-card">
+                <span>{copy.heroSignalAccess}</span>
+                <strong>{copy.heroSignalAccessValue}</strong>
+              </div>
+            </div>
+          </article>
+
+          <aside className="panel-card home-action-card">
+            <div className="home-section-heading">
+              <h2 className="panel-title">{copy.actionTitle}</h2>
+              <p className="panel-copy">{copy.actionSubtitle}</p>
+            </div>
+
+            <div className="home-action-stack">
+              <section className="home-action-block">
+                <div className="home-action-header">
+                  <h3 className="panel-title">{copy.joinBlockTitle}</h3>
+                  <p className="panel-copy">{copy.joinSubtitle}</p>
+                </div>
+
+                <form className="panel-form" onSubmit={onJoin}>
+                  <label>
+                    <span>{copy.roomCode}</span>
+                    <input
+                      value={joinRoomCode}
+                      onChange={(event) => setJoinRoomCode(event.currentTarget.value)}
+                      maxLength={6}
+                      placeholder="ABC123"
+                    />
+                  </label>
+
+                  <label>
+                    <span>{copy.nickname}</span>
+                    <input
+                      value={joinDisplayName}
+                      onChange={(event) => setJoinDisplayName(event.currentTarget.value)}
+                      maxLength={24}
+                      placeholder={copy.nicknamePlaceholder}
+                    />
+                  </label>
+
+                  <button
+                    className="solid-btn"
+                    type="submit"
+                    disabled={joinMutation.isPending || createRoomMutation.isPending}
+                  >
+                    {joinMutation.isPending ? copy.joining : copy.enterRoom}
+                  </button>
+                </form>
+              </section>
+
+              <div className="home-action-divider" aria-hidden="true" />
+
+              <section className="home-action-block">
+                <div className="home-action-header">
+                  <h3 className="panel-title">{copy.createBlockTitle}</h3>
+                  <p className="panel-copy">{copy.createSubtitle}</p>
+                </div>
+                {!account.userId && <p className="status">{copy.syncHint}</p>}
+
+                <div className="panel-form">
+                  <label>
+                    <span>{copy.nickname}</span>
+                    <input
+                      value={createDisplayName}
+                      onChange={(event) => setCreateDisplayName(event.currentTarget.value)}
+                      maxLength={24}
+                      placeholder={copy.nicknamePlaceholder}
+                    />
+                  </label>
+
+                  <div className="field-block">
+                    <span className="field-label">{copy.visibility}</span>
+                    <div className="source-preset-grid">
+                      <button
+                        type="button"
+                        className={`source-preset-btn${isPublicRoom ? " active" : ""}`}
+                        onClick={() => setIsPublicRoom(true)}
+                      >
+                        <strong>{copy.publicGame}</strong>
+                        <span>{copy.publicGameHint}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`source-preset-btn${!isPublicRoom ? " active" : ""}`}
+                        onClick={() => setIsPublicRoom(false)}
+                      >
+                        <strong>{copy.privateGame}</strong>
+                        <span>{copy.privateGameHint}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="status">{copy.hostHint}</p>
+
+                  <button
+                    id="create-room"
+                    className="solid-btn"
+                    type="button"
+                    onClick={onCreate}
+                    disabled={createRoomMutation.isPending || joinMutation.isPending}
+                  >
+                    {createRoomMutation.isPending ? copy.creating : copy.createRoom}
+                  </button>
+                </div>
+              </section>
+            </div>
+          </aside>
+        </div>
       </section>
-      <section className="single-panel">
-        {(publicRoomsQuery.data?.rooms ?? []).length > 0 && (
-          <article className="panel-card room-list-card">
-            <h3 className="panel-title">{copy.publicRooms}</h3>
-            <ul className="public-room-list">
-              {(publicRoomsQuery.data?.rooms ?? []).map((room) => (
-                <li key={room.roomCode}>
-                  <div>
-                    <strong>{room.roomCode}</strong>
-                    <p>
-                      {room.state} · {room.playerCount} {copy.players}
-                    </p>
-                    <p>
+      <section className="panel-card home-public-section">
+        <div className="home-section-head">
+          <div className="home-section-heading">
+            <h2 className="panel-title">{copy.publicRoomsTitle}</h2>
+            <p className="panel-copy">{copy.publicRoomsSubtitle}</p>
+          </div>
+          <div className="home-public-summary" aria-label={copy.publicRooms}>
+            <span className="home-summary-pill">
+              <strong>{publicRoomCountLabel}</strong>
+              <span>{copy.publicRoomsCount}</span>
+            </span>
+            <span className="home-summary-pill">
+              <strong>{joinableRoomCountLabel}</strong>
+              <span>{copy.heroSignalJoinable}</span>
+            </span>
+          </div>
+        </div>
+
+        {publicRooms.length > 0 ? (
+          <ul className="public-room-list home-public-room-list">
+            {publicRooms.map((room) => (
+              <li key={room.roomCode}>
+                <div className="home-room-main">
+                  <div className="home-room-topline">
+                    <strong className="home-room-code">{room.roomCode}</strong>
+                    <span className="home-room-state">{formatRoomState(room.state, locale)}</span>
+                  </div>
+                  <div className="home-room-meta">
+                    <span>
+                      {room.playerCount} {copy.players}
+                    </span>
+                    <span>
                       {copy.mode}:{" "}
-                      {room.sourceMode === "anilist_union"
-                        ? copy.synchronizedAniList
-                        : copy.anime}
+                      {room.sourceMode === "anilist_union" ? copy.synchronizedAniList : copy.anime}
                       {room.sourceMode === "public_playlist" && room.playlistName
                         ? ` · ${withRomajiLabel(room.playlistName)}`
                         : ""}
-                    </p>
+                    </span>
                   </div>
+                </div>
+                <div className="home-room-actions">
                   <button
                     className="solid-btn"
                     type="button"
@@ -433,37 +566,36 @@ export function HomePage() {
                   >
                     {room.canJoin ? copy.joinPublicRoom : copy.closed}
                   </button>
-                </li>
-              ))}
-            </ul>
-          </article>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="status home-empty-state">{copy.publicRoomsEmpty}</p>
         )}
       </section>
-      <section className="single-panel">
-        <article className="panel-card">
-          <h1 className="panel-title">{copy.seoH1}</h1>
-          <p className="panel-copy">{copy.seoLead}</p>
-          <div className="panel-form">
-            <div className="field-block">
-              <h2 className="panel-title">{copy.howItWorksTitle}</h2>
-              <p className="panel-copy">{copy.howItWorksBody}</p>
+
+      <section className="home-editorial-grid">
+        <article className="panel-card home-editorial-card">
+          <h2 className="panel-title">{copy.howItWorksTitle}</h2>
+          <p className="panel-copy">{copy.howItWorksBody}</p>
+        </article>
+
+        <article className="panel-card home-editorial-card">
+          <h2 className="panel-title">{copy.whyTitle}</h2>
+          <p className="panel-copy">{copy.whyBody}</p>
+        </article>
+
+        <article className="panel-card home-editorial-card">
+          <h2 className="panel-title">{copy.faqTitle}</h2>
+          <div className="faq-list">
+            <div className="faq-item">
+              <strong>{copy.faqQ1}</strong>
+              <p className="panel-copy">{copy.faqA1}</p>
             </div>
-            <div className="field-block">
-              <h2 className="panel-title">{copy.whyTitle}</h2>
-              <p className="panel-copy">{copy.whyBody}</p>
-            </div>
-            <div className="field-block">
-              <h2 className="panel-title">{copy.faqTitle}</h2>
-              <p className="status">
-                <strong>{copy.faqQ1}</strong>
-                <br />
-                {copy.faqA1}
-              </p>
-              <p className="status">
-                <strong>{copy.faqQ2}</strong>
-                <br />
-                {copy.faqA2}
-              </p>
+            <div className="faq-item">
+              <strong>{copy.faqQ2}</strong>
+              <p className="panel-copy">{copy.faqA2}</p>
             </div>
           </div>
         </article>
