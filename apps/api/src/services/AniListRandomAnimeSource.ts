@@ -16,6 +16,8 @@ const ANILIST_SLICE_SORTS = [
   ["FAVOURITES_DESC", "POPULARITY_DESC"],
 ] as const;
 const DEFAULT_PER_PAGE = 50;
+const MAX_PAGES_PER_SLICE = 24;
+export const MAX_RANDOM_ANIME_DISCOVERY_IDS = DEFAULT_PER_PAGE * ANILIST_SLICE_SORTS.length * MAX_PAGES_PER_SLICE;
 
 const RANDOM_ANILIST_QUERY = `
 query ($page: Int, $perPage: Int, $sort: [MediaSort]) {
@@ -84,8 +86,8 @@ function seededShuffle<T>(input: T[], random: () => number) {
 
 function buildRequestPlan(seed: string, themeMode: "op_only" | "ed_only" | "mix", desiredCount: number) {
   const random = seededRandom(`${seed}:${themeMode}`);
-  const safeDesiredCount = Math.max(1, Math.min(desiredCount, 120));
-  const maxPagesPerSlice = Math.max(2, Math.min(24, Math.ceil(safeDesiredCount / 8) + 3));
+  const safeDesiredCount = Math.max(1, Math.min(desiredCount, MAX_RANDOM_ANIME_DISCOVERY_IDS));
+  const maxPagesPerSlice = Math.max(2, Math.min(MAX_PAGES_PER_SLICE, Math.ceil(safeDesiredCount / 8) + 3));
   const shuffledSorts = seededShuffle([...ANILIST_SLICE_SORTS], random);
 
   return shuffledSorts.map((sort, index): RequestSlice => ({
@@ -100,7 +102,7 @@ export async function fetchRandomAniListAnimeIds(input: {
   desiredCount: number;
   themeMode: "op_only" | "ed_only" | "mix";
 }): Promise<number[]> {
-  const safeDesiredCount = Math.max(1, Math.min(input.desiredCount, 120));
+  const safeDesiredCount = Math.max(1, Math.min(input.desiredCount, MAX_RANDOM_ANIME_DISCOVERY_IDS));
   const requestPlan = buildRequestPlan(input.seed, input.themeMode, safeDesiredCount);
   const uniqueIds: number[] = [];
   const seenIds = new Set<number>();

@@ -25,7 +25,11 @@ import { normalizeAnimeText } from "./AnimeTextNormalization";
 import {
   fetchAniListMediaMetadataBySearchBatch,
 } from "./AniListTitleLookup";
-import { fetchRandomAniListAnimeIds, AniListRemoteFailureError } from "./AniListRandomAnimeSource";
+import {
+  fetchRandomAniListAnimeIds,
+  AniListRemoteFailureError,
+  MAX_RANDOM_ANIME_DISCOVERY_IDS,
+} from "./AniListRandomAnimeSource";
 import { animeThemesProxyCache } from "./AnimeThemesProxyCache";
 import { RoundSyncCoordinator } from "./RoundSyncCoordinator";
 
@@ -191,6 +195,7 @@ const ROUND_SYNC_START_LEAD_MS = 900;
 const ROUND_SYNC_MAX_WAIT_MS = 2_000;
 const ANILIST_ENGLISH_BACKFILL_BATCH_SIZE = 24;
 const ANILIST_DIFFICULTY_START_BACKFILL_LIMIT = 48;
+const RANDOM_CLASSIC_DISCOVERY_ATTEMPTS = 4;
 const DEFAULT_ROOM_CONTENT_FILTERS: RoomContentFilters = {
   decades: [],
   genres: [],
@@ -1300,25 +1305,63 @@ export class RoomStore {
       };
     }
 
-    const seed = `${session.roomCode}:${Date.now()}`;
-    const animeIds = await this.getRandomAniListAnimeIds({
-      seed,
-      desiredCount: Math.min(20_000, Math.max(targetCandidateSize * 30, 2_000)),
-      themeMode: session.themeMode,
-    });
+    const baseDesiredCount = Math.min(MAX_RANDOM_ANIME_DISCOVERY_IDS, Math.max(targetCandidateSize * 30, 2_000));
+    const baseSeed = `${session.roomCode}:${Date.now()}`;
+    const collectedAnimeIds: number[] = [];
+    const seenAnimeIds = new Set<number>();
+    let desiredCount = baseDesiredCount;
+    let latestBuilt = {
+      tracks: [] as MusicTrack[],
+      distractorTracks: [] as MusicTrack[],
+      candidateCount: 0,
+      rawTotal: 0,
+      playableTotal: 0,
+      cleanTotal: 0,
+    };
 
-    if (animeIds.length <= 0) {
-      return {
-        tracks: [] as MusicTrack[],
-        distractorTracks: [] as MusicTrack[],
-        candidateCount: 0,
-        rawTotal: 0,
-        playableTotal: 0,
-        cleanTotal: 0,
-      };
+    for (let attempt = 0; attempt < RANDOM_CLASSIC_DISCOVERY_ATTEMPTS; attempt += 1) {
+      let discoveredAnimeIds: number[];
+      try {
+        discoveredAnimeIds = await this.getRandomAniListAnimeIds({
+          seed: `${baseSeed}:${attempt}`,
+          desiredCount,
+          themeMode: session.themeMode,
+        });
+      } catch (error) {
+        if (error instanceof AniListRemoteFailureError && collectedAnimeIds.length > 0) {
+          break;
+        }
+        throw error;
+      }
+
+      let addedCount = 0;
+      for (const animeId of discoveredAnimeIds) {
+        if (seenAnimeIds.has(animeId)) continue;
+        seenAnimeIds.add(animeId);
+        collectedAnimeIds.push(animeId);
+        addedCount += 1;
+      }
+
+      if (collectedAnimeIds.length > 0) {
+        latestBuilt = await this.buildAniListTrackPoolFromIds(session, safeRounds, collectedAnimeIds);
+        if (latestBuilt.tracks.length >= safeRounds) {
+          return latestBuilt;
+        }
+      }
+
+      const reachedDiscoveryCeiling = collectedAnimeIds.length >= MAX_RANDOM_ANIME_DISCOVERY_IDS;
+      const didNotGrow = addedCount <= 0;
+      if (reachedDiscoveryCeiling || didNotGrow) {
+        break;
+      }
+
+      desiredCount = Math.min(
+        MAX_RANDOM_ANIME_DISCOVERY_IDS,
+        Math.max(desiredCount + baseDesiredCount, Math.floor(desiredCount * 1.5)),
+      );
     }
 
-    return this.buildAniListTrackPoolFromIds(session, safeRounds, animeIds);
+    return latestBuilt;
   }
 
   private async buildAniListTrackPoolFromIds(session: RoomSession, safeRounds: number, animeIds: number[]) {

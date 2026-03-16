@@ -169,6 +169,8 @@ export const quizRoutes = new Elysia({ prefix: "/quiz" })
     if (started.ok === false) {
       if (started.error === "SPOTIFY_RATE_LIMITED") {
         set.status = 429;
+      } else if (started.error === "ANILIST_REMOTE_FAILURE") {
+        set.status = 503;
       } else if (started.error === "NO_TRACKS_FOUND") {
         set.status = 422;
       } else if (started.error === "PLAYERS_LIBRARY_SYNCING" || started.error === "PLAYLIST_TRACKS_RESOLVING") {

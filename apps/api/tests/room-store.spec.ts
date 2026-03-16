@@ -2506,6 +2506,67 @@ describe("RoomStore gameplay progression", () => {
     }
   });
 
+  it("broadens random_classic AniList discovery when the first fresh draw has no playable AnimeThemes matches", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const getRandomAniListAnimeIds = vi
+      .fn()
+      .mockResolvedValueOnce(Array.from({ length: 120 }, (_, index) => index + 1))
+      .mockResolvedValueOnce(Array.from({ length: 120 }, (_, index) => index + 2_001));
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
+    let selectCalls = 0;
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (!text.includes("from best_theme_video")) {
+        return { rows: [] } as never;
+      }
+      selectCalls += 1;
+      if (selectCalls === 1) {
+        return { rows: [] } as never;
+      }
+      return {
+        rows: makeAniListThemeRows(16),
+      } as never;
+    });
+
+    try {
+      const store = new RoomStore({ getRandomAniListAnimeIds } as never);
+      const created = store.createRoom();
+      const host = store.joinRoom(created.roomCode, "Host");
+      expect(host.status).toBe("ok");
+      if (host.status !== "ok") return;
+
+      const modeSet = store.setRoomSourceMode(created.roomCode, host.value.playerId, "random_classic" as never);
+      expect(modeSet).toMatchObject({ status: "ok", mode: "random_classic" });
+
+      const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+      expect(ready.status).toBe("ok");
+
+      const started = await store.startGame(created.roomCode, host.value.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "random_classic" });
+      expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(2);
+      expect(selectCalls).toBe(2);
+      expect(perUserSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
   it("replayRoom preserves random_classic source mode and categoryQuery", async () => {
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;

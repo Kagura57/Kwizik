@@ -6,6 +6,7 @@
 - Pour un mode distant "classique", ne pas proposer un echec utilisateur ou un fallback permanent comme comportement normal; dimensionner le chemin principal pour remplir suffisamment le pool jouable, et n'utiliser le cache que pour accelerer ce meme chemin.
 - Si l'utilisateur dit que l'aleatoire parfait prime sur la robustesse cachee, ne reutiliser aucun pool preconstruit entre parties; garder un tirage frais par partie et limiter le cache aux metadonnees techniques qui n'influencent pas la selection.
 - Quand un utilisateur dit que l'aleatoire est le point clef du blindtest, propager cette contrainte au-dela du nouveau mode: verifier aussi que les autres tirages anime de l'application restent larges, non repetitifs et non biaises par des pools trop petits.
+- Quand un mode aleatoire distant doit ensuite recouper un catalogue jouable local (ex. AniList -> AnimeThemes), ne jamais plafonner la decouverte distante a un petit nombre fixe d'IDs; tester explicitement le cas ou un premier tirage frais n'a aucun match jouable et doit etre elargi avant d'echouer.
 
 ## 2026-03-12
 

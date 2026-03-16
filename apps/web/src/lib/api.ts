@@ -544,7 +544,7 @@ export async function startRoom(input: { roomCode: string; playerId: string }) {
       }
     | {
         ok: false;
-        error: "PLAYERS_LIBRARY_SYNCING" | "PLAYLIST_TRACKS_RESOLVING";
+        error: "PLAYERS_LIBRARY_SYNCING" | "PLAYLIST_TRACKS_RESOLVING" | "ANILIST_REMOTE_FAILURE";
         retryAfterMs?: number | null;
       }
   >("/quiz/start", {

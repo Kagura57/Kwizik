@@ -165,6 +165,8 @@ function snapshotErrorMessage(error: unknown) {
 
 function startErrorMessage(error: unknown, spotifyCooldownRemainingSec: number) {
   switch (errorCode(error)) {
+    case "ANILIST_REMOTE_FAILURE":
+      return "AniList est temporairement indisponible pour ce mode aleatoire. Reessaie dans quelques secondes.";
     case "NO_TRACKS_FOUND":
       return "Aucune chanson jouable trouvee pour le moment. Reessaie dans quelques secondes.";
     case "SPOTIFY_RATE_LIMITED":

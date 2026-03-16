@@ -196,6 +196,26 @@ describe("AniListRandomAnimeSource", () => {
     expect(ids).toEqual([7, 8]);
   });
 
+  it("supports discovery targets larger than 120 anime IDs without clipping early", async () => {
+    const fetchMock = mockAniListFetch((request) => {
+      const page = request.variables?.page ?? 1;
+      const base = (page - 1) * 50;
+      return {
+        ids: Array.from({ length: 50 }, (_, index) => base + index + 1),
+        hasNextPage: true,
+      };
+    });
+
+    const ids = await fetchRandomAniListAnimeIds({
+      seed: "large-target-seed",
+      desiredCount: 180,
+      themeMode: "mix",
+    });
+
+    expect(ids).toHaveLength(180);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+  });
+
   it("throws AniListRemoteFailureError when all fetches fail and no IDs are collected", async () => {
     Object.defineProperty(globalThis, "fetch", {
       value: vi.fn(async () =>

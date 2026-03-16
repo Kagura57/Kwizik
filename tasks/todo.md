@@ -15,11 +15,15 @@
 - Contrainte produit supplementaire: l'aleatoire doit rester une priorite sur l'ensemble de l'application, y compris pour les tirages AniList existants.
 - Root cause (synthese): le besoin etait de verrouiller une verification finale complete du mode `random_classic` apres implementation des taches precedentes, avec preuve de non-regression sur les suites ciblees.
 - Implementation finale (synthese): le mode `random_classic` est bien expose bout-en-bout (settings room, parsing/resolution source, construction de pool aleatoire AniList fraiche par partie) et la verification finale a ete executee sans modifier le code feature.
+- Follow-up prod: le start `random_classic` n'echoue plus trop tot avec `NO_TRACKS_FOUND` quand un premier tirage AniList frais recoupe mal le miroir AnimeThemes; le backend elargit maintenant la decouverte sur plusieurs tirages frais dans le meme demarrage, surface `ANILIST_REMOTE_FAILURE` explicitement en cas de panne AniList totale, et conserve les reglages host v1 lors de la migration de storage v2.
 - Verification executee:
   - `bun test apps/api/tests/room-anime-mode.spec.ts apps/api/tests/room-routes.spec.ts apps/api/tests/anilist-random-anime-source.spec.ts apps/api/tests/track-source-resolver.spec.ts` ✅ PASS (19 tests).
   - `bun test apps/api/tests/room-store.spec.ts -t "random_classic|unbiased AniList random draw"` ✅ PASS (3 tests).
   - `bun test apps/web/src/lib/userGameSettingsMemory.spec.ts apps/web/src/routes` ✅ PASS (13 tests).
   - `npx playwright test apps/web/e2e/live-blindtest.spec.ts --grep "random classic"` ✅ PASS (1 test).
+  - `bun test apps/api/tests/anilist-random-anime-source.spec.ts` ✅ PASS (9 tests) apres elargissement du tirage AniList au-dela de 120 IDs.
+  - `bun test apps/api/tests/room-store.spec.ts -t "random_classic|ANILIST_REMOTE_FAILURE|unbiased AniList random draw"` ✅ PASS (5 tests), dont le cas reel "premier tirage sans match jouable puis elargissement".
+  - `bun test apps/web/src/routes` ✅ PASS (7 tests) apres alignement du code d'erreur `ANILIST_REMOTE_FAILURE` jusqu'au front.
   - `bun run lint` ✅ PASS avec warnings observes (`Found 49 warnings and 0 errors`); ce closeout ne prouve pas la baseline historique de ces warnings.
   - `bun test` ⚠️ ECHEC observe; la causalite par rapport a cette tache n'a pas ete investiguee dans ce closeout:
     - `apps/api/tests/room-store-romaji.spec.ts` -> `RoomStore romaji answer matching > accepts text answers written in romaji for japanese tracks` (attendu `mcq`, recu `text`).
