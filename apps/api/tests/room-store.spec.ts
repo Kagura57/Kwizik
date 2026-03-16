@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { pool } from "../src/db/client";
 import { userAnimeLibraryRepository } from "../src/repositories/UserAnimeLibraryRepository";
 import * as aniListLookupModule from "../src/services/AniListTitleLookup";
+import { AniListRemoteFailureError } from "../src/services/AniListRandomAnimeSource";
 import { RoomStore } from "../src/services/RoomStore";
 import type { MusicTrack } from "../src/services/music-types";
 
@@ -2444,6 +2445,51 @@ describe("RoomStore gameplay progression", () => {
       expect(querySpy).toHaveBeenCalledTimes(1);
       expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(1);
       expect(perUserSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("returns ANILIST_REMOTE_FAILURE when random_classic AniList discovery is fully unavailable", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const getRandomAniListAnimeIds = vi.fn().mockRejectedValue(new AniListRemoteFailureError(3));
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
+    const querySpy = vi.spyOn(pool, "query");
+
+    try {
+      const store = new RoomStore({ getRandomAniListAnimeIds } as never);
+      const created = store.createRoom();
+      const host = store.joinRoom(created.roomCode, "Host");
+      expect(host.status).toBe("ok");
+      if (host.status !== "ok") return;
+
+      const modeSet = store.setRoomSourceMode(created.roomCode, host.value.playerId, "random_classic" as never);
+      expect(modeSet).toMatchObject({ status: "ok", mode: "random_classic" });
+
+      const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+      expect(ready.status).toBe("ok");
+
+      const started = await store.startGame(created.roomCode, host.value.playerId);
+      expect(started).toMatchObject({ ok: false, error: "ANILIST_REMOTE_FAILURE" });
+      expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(1);
+      expect(perUserSpy).not.toHaveBeenCalled();
+      expect(querySpy).not.toHaveBeenCalled();
     } finally {
       if (previousDatabaseUrl === undefined) {
         delete process.env.DATABASE_URL;
