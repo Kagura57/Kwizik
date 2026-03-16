@@ -16,6 +16,8 @@
 - Root cause (synthese): le besoin etait de verrouiller une verification finale complete du mode `random_classic` apres implementation des taches precedentes, avec preuve de non-regression sur les suites ciblees.
 - Implementation finale (synthese): le mode `random_classic` est bien expose bout-en-bout (settings room, parsing/resolution source, construction de pool aleatoire AniList fraiche par partie) et la verification finale a ete executee sans modifier le code feature.
 - Follow-up prod: le start `random_classic` n'echoue plus trop tot avec `NO_TRACKS_FOUND` quand un premier tirage AniList frais recoupe mal le miroir AnimeThemes; le backend elargit maintenant la decouverte sur plusieurs tirages frais dans le meme demarrage, surface `ANILIST_REMOTE_FAILURE` explicitement en cas de panne AniList totale, et conserve les reglages host v1 lors de la migration de storage v2.
+- Follow-up prod 2: `random_classic` ne remappe plus des `Media.id` AniList vers les IDs internes SQL par accident; la decouverte distante transporte maintenant les titres/aliases AniList pour resoudre le catalogue local par alias, et le pool AniList conserve un seul anime par partie au lieu de plusieurs OP/ED du meme titre.
+- Follow-up prod 2: les MCQ anime ne recyclent plus les futures bonnes reponses comme mauvais choix plus tot dans la partie, ce qui reduit nettement la repetition du meme anime en distractor puis en answer.
 - Verification executee:
   - `bun test apps/api/tests/room-anime-mode.spec.ts apps/api/tests/room-routes.spec.ts apps/api/tests/anilist-random-anime-source.spec.ts apps/api/tests/track-source-resolver.spec.ts` ✅ PASS (19 tests).
   - `bun test apps/api/tests/room-store.spec.ts -t "random_classic|unbiased AniList random draw"` ✅ PASS (3 tests).
@@ -23,6 +25,8 @@
   - `npx playwright test apps/web/e2e/live-blindtest.spec.ts --grep "random classic"` ✅ PASS (1 test).
   - `bun test apps/api/tests/anilist-random-anime-source.spec.ts` ✅ PASS (9 tests) apres elargissement du tirage AniList au-dela de 120 IDs.
   - `bun test apps/api/tests/room-store.spec.ts -t "random_classic|ANILIST_REMOTE_FAILURE|unbiased AniList random draw"` ✅ PASS (5 tests), dont le cas reel "premier tirage sans match jouable puis elargissement".
+  - `bun test apps/api/tests/anilist-random-anime-source.spec.ts apps/api/tests/room-store.spec.ts -t "random_classic|AniListRandomAnimeSource|does not use future correct tracks|deduplicates MCQ anime choices|does not reuse previously-correct tracks"` ✅ PASS (18 tests).
+  - `bun test apps/api/tests/room-routes.spec.ts apps/api/tests/room-anime-mode.spec.ts` ✅ PASS (7 tests).
   - `bun test apps/web/src/routes` ✅ PASS (7 tests) apres alignement du code d'erreur `ANILIST_REMOTE_FAILURE` jusqu'au front.
   - `bun run lint` ✅ PASS avec warnings observes (`Found 49 warnings and 0 errors`); ce closeout ne prouve pas la baseline historique de ces warnings.
   - `bun test` ⚠️ ECHEC observe; la causalite par rapport a cette tache n'a pas ete investiguee dans ce closeout:

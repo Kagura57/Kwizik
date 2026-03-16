@@ -3,6 +3,7 @@ import { pool } from "../src/db/client";
 import { userAnimeLibraryRepository } from "../src/repositories/UserAnimeLibraryRepository";
 import * as aniListLookupModule from "../src/services/AniListTitleLookup";
 import { AniListRemoteFailureError } from "../src/services/AniListRandomAnimeSource";
+import type { AniListRandomAnimeCandidate } from "../src/services/AniListRandomAnimeSource";
 import { RoomStore } from "../src/services/RoomStore";
 import type { MusicTrack } from "../src/services/music-types";
 
@@ -365,6 +366,7 @@ function makeAniListThemeRows(count: number, offset = 0) {
   return Array.from({ length: count }, (_, index) => {
     const value = offset + index + 1;
     return {
+      anime_id: value,
       video_key: `theme-${value}`,
       webm_url: `https://v.animethemes.moe/theme-${value}.webm`,
       theme_type: "OP",
@@ -374,6 +376,27 @@ function makeAniListThemeRows(count: number, offset = 0) {
       song_title: `Song ${value}`,
       song_artists: [`Artist ${value}`],
       aliases: [`Alias ${value}`],
+    };
+  });
+}
+
+function makeRandomAniListCandidates(
+  count: number,
+  options: { animeOffset?: number; mediaOffset?: number } = {},
+): AniListRandomAnimeCandidate[] {
+  const animeOffset = options.animeOffset ?? 0;
+  const mediaOffset = options.mediaOffset ?? 10_000;
+  return Array.from({ length: count }, (_, index) => {
+    const animeValue = animeOffset + index + 1;
+    return {
+      mediaId: mediaOffset + animeValue,
+      titleRomaji: `Anime ${animeValue}`,
+      titleEnglish: `Anime EN ${animeValue}`,
+      titleNative: null,
+      synonyms: [`Alias ${animeValue}`],
+      popularity: 1_000 + animeValue,
+      year: 2000 + (animeValue % 20),
+      genres: animeValue % 2 === 0 ? ["Action"] : ["Adventure"],
     };
   });
 }
@@ -1325,6 +1348,47 @@ describe("RoomStore gameplay progression", () => {
     expect((round3Playing?.choices ?? []).some((choice) => choice.value === round1Label)).toBe(false);
   });
 
+  it("does not use future correct tracks as earlier MCQ distractors", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => MCQ_NO_REPEAT_DISTRACTOR_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+        maxRounds: 3,
+      },
+    });
+
+    const { roomCode } = store.createRoom();
+    const player = store.joinRoom(roomCode, "Host");
+    expect(player.status).toBe("ok");
+    if (player.status !== "ok") return;
+
+    const sourceSet = store.setRoomSource(roomCode, player.value.playerId, "spotify:playlist:dummy");
+    expect(sourceSet.status).toBe("ok");
+    const ready = store.setPlayerReady(roomCode, player.value.playerId, true);
+    expect(ready.status).toBe("ok");
+    const started = await store.startGame(roomCode, player.value.playerId);
+    expect(started?.ok).toBe(true);
+
+    const roomMap = (store as unknown as {
+      rooms: Map<string, { trackPool: MusicTrack[] }>;
+    }).rooms;
+    const session = roomMap.get(roomCode);
+    const futureRoundLabel = session?.trackPool[2]
+      ? `${session.trackPool[2].title} - ${session.trackPool[2].artist}`
+      : null;
+
+    nowMs = 5;
+    const round1Playing = store.roomState(roomCode);
+    expect(round1Playing?.state).toBe("playing");
+    expect(round1Playing?.mode).toBe("mcq");
+    expect((round1Playing?.choices ?? []).some((choice) => choice.value === futureRoundLabel)).toBe(false);
+  });
+
   it("downgrades MCQ to text when coherent distractors are insufficient", async () => {
     let nowMs = 0;
     const singleTrack: MusicTrack[] = [
@@ -1420,8 +1484,8 @@ describe("RoomStore gameplay progression", () => {
     expect(session).not.toBeNull();
     if (!session) return;
 
-    session.trackPool = [...ANIME_DUPLICATE_CHOICE_TRACKS];
-    session.distractorTrackPool = [];
+    session.trackPool = [ANIME_DUPLICATE_CHOICE_TRACKS[0]!];
+    session.distractorTrackPool = ANIME_DUPLICATE_CHOICE_TRACKS.slice(1);
     session.roundChoices = new Map();
 
     const choices = (
@@ -1958,9 +2022,24 @@ describe("RoomStore gameplay progression", () => {
     const metadataSpy = vi
       .spyOn(aniListLookupModule, "fetchAniListMediaMetadataBySearchBatch")
       .mockResolvedValue(new Map());
-    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
-      rows: makeAniListThemeRows(12),
-    } as never);
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("select normalized_alias, anime_id, alias_type")) {
+        return {
+          rows: makeRandomAniListCandidates(4).map((candidate, index) => ({
+            normalized_alias: `anime ${index + 1}`,
+            anime_id: index + 1,
+            alias_type: "canonical",
+          })),
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set")) {
+        return { rows: [] } as never;
+      }
+      return {
+        rows: makeAniListThemeRows(12),
+      } as never;
+    });
 
     try {
       const store = new RoomStore({
@@ -2379,7 +2458,7 @@ describe("RoomStore gameplay progression", () => {
       expect(perUserSpy).toHaveBeenCalledTimes(1);
       const requestedLimit = perUserSpy.mock.calls[0]?.[1] ?? 0;
       expect(requestedLimit).toBeGreaterThanOrEqual(2_000);
-      expect(querySpy).toHaveBeenCalledTimes(1);
+      expect(querySpy).toHaveBeenCalled();
       const queryParams = querySpy.mock.calls[0]?.[1] as unknown[] | undefined;
       expect(Array.isArray(queryParams)).toBe(true);
       expect(queryParams ?? []).toHaveLength(2);
@@ -2419,16 +2498,31 @@ describe("RoomStore gameplay progression", () => {
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
     process.env.DATABASE_URL = "postgres://test";
     process.env.BETTER_AUTH_URL = "https://api.example.test";
-    const getRandomAniListAnimeIds = vi.fn().mockResolvedValue([101, 102, 103, 104]);
+    const getRandomAniListAnimeCandidates = vi.fn().mockResolvedValue(makeRandomAniListCandidates(4));
     const perUserSpy = vi
       .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
       .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
-    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
-      rows: makeAniListThemeRows(12),
-    } as never);
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("select normalized_alias, anime_id, alias_type")) {
+        return {
+          rows: makeRandomAniListCandidates(4).map((candidate, index) => ({
+            normalized_alias: `anime ${index + 1}`,
+            anime_id: index + 1,
+            alias_type: "canonical",
+          })),
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set")) {
+        return { rows: [] } as never;
+      }
+      return {
+        rows: makeAniListThemeRows(12),
+      } as never;
+    });
 
     try {
-      const store = new RoomStore({ getRandomAniListAnimeIds } as never);
+      const store = new RoomStore({ getRandomAniListAnimeCandidates } as never);
       const created = store.createRoom();
       const host = store.joinRoom(created.roomCode, "Host");
       expect(host.status).toBe("ok");
@@ -2442,8 +2536,121 @@ describe("RoomStore gameplay progression", () => {
 
       const started = await store.startGame(created.roomCode, host.value.playerId);
       expect(started).toMatchObject({ ok: true, sourceMode: "random_classic" });
-      expect(querySpy).toHaveBeenCalledTimes(1);
-      expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(1);
+      expect(querySpy).toHaveBeenCalled();
+      expect(getRandomAniListAnimeCandidates).toHaveBeenCalledTimes(1);
+      expect(perUserSpy).not.toHaveBeenCalled();
+    } finally {
+      if (previousDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = previousDatabaseUrl;
+      }
+      if (previousBetterAuthUrl === undefined) {
+        delete process.env.BETTER_AUTH_URL;
+      } else {
+        process.env.BETTER_AUTH_URL = previousBetterAuthUrl;
+      }
+      perUserSpy.mockRestore();
+      querySpy.mockRestore();
+    }
+  });
+
+  it("maps random_classic AniList discovery titles onto local catalog ids instead of using raw AniList media ids", async () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
+    process.env.DATABASE_URL = "postgres://test";
+    process.env.BETTER_AUTH_URL = "https://api.example.test";
+    const getRandomAniListAnimeCandidates = vi.fn().mockResolvedValue([
+      {
+        mediaId: 90_001,
+        titleRomaji: "Anime 41",
+        titleEnglish: "Anime EN 41",
+        titleNative: null,
+        synonyms: ["Alias 41"],
+        popularity: 4_100,
+        year: 2011,
+        genres: ["Action"],
+      },
+      {
+        mediaId: 90_002,
+        titleRomaji: "Anime 42",
+        titleEnglish: "Anime EN 42",
+        titleNative: null,
+        synonyms: ["Alias 42"],
+        popularity: 4_200,
+        year: 2012,
+        genres: ["Adventure"],
+      },
+      {
+        mediaId: 90_003,
+        titleRomaji: "Anime 43",
+        titleEnglish: "Anime EN 43",
+        titleNative: null,
+        synonyms: ["Alias 43"],
+        popularity: 4_300,
+        year: 2013,
+        genres: ["Comedy"],
+      },
+      {
+        mediaId: 90_004,
+        titleRomaji: "Anime 44",
+        titleEnglish: "Anime EN 44",
+        titleNative: null,
+        synonyms: ["Alias 44"],
+        popularity: 4_400,
+        year: 2014,
+        genres: ["Drama"],
+      },
+    ] satisfies AniListRandomAnimeCandidate[]);
+    const perUserSpy = vi
+      .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
+      .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
+    let selectedAnimeIds: unknown[] | null = null;
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown, params?: unknown[]) => {
+      const text = String(sql);
+      if (text.includes("select normalized_alias, anime_id, alias_type")) {
+        return {
+          rows: [
+            { normalized_alias: "anime 41", anime_id: 41, alias_type: "canonical" },
+            { normalized_alias: "anime 42", anime_id: 42, alias_type: "canonical" },
+            { normalized_alias: "anime 43", anime_id: 43, alias_type: "canonical" },
+            { normalized_alias: "anime 44", anime_id: 44, alias_type: "canonical" },
+          ],
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set")) {
+        return { rows: [] } as never;
+      }
+      if (text.includes("from best_theme_video")) {
+        selectedAnimeIds = (params?.[0] as unknown[]) ?? null;
+        return {
+          rows: makeAniListThemeRows(4, 40),
+        } as never;
+      }
+      return { rows: [] } as never;
+    });
+
+    try {
+      const store = new RoomStore({
+        getRandomAniListAnimeCandidates,
+        config: {
+          maxRounds: 4,
+        },
+      } as never);
+      const created = store.createRoom();
+      const host = store.joinRoom(created.roomCode, "Host");
+      expect(host.status).toBe("ok");
+      if (host.status !== "ok") return;
+
+      const modeSet = store.setRoomSourceMode(created.roomCode, host.value.playerId, "random_classic" as never);
+      expect(modeSet).toMatchObject({ status: "ok", mode: "random_classic" });
+
+      const ready = store.setPlayerReady(created.roomCode, host.value.playerId, true);
+      expect(ready.status).toBe("ok");
+
+      const started = await store.startGame(created.roomCode, host.value.playerId);
+      expect(started).toMatchObject({ ok: true, sourceMode: "random_classic" });
+      expect(selectedAnimeIds).toEqual([41, 42, 43, 44]);
       expect(perUserSpy).not.toHaveBeenCalled();
     } finally {
       if (previousDatabaseUrl === undefined) {
@@ -2466,14 +2673,14 @@ describe("RoomStore gameplay progression", () => {
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
     process.env.DATABASE_URL = "postgres://test";
     process.env.BETTER_AUTH_URL = "https://api.example.test";
-    const getRandomAniListAnimeIds = vi.fn().mockRejectedValue(new AniListRemoteFailureError(3));
+    const getRandomAniListAnimeCandidates = vi.fn().mockRejectedValue(new AniListRemoteFailureError(3));
     const perUserSpy = vi
       .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
       .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
     const querySpy = vi.spyOn(pool, "query");
 
     try {
-      const store = new RoomStore({ getRandomAniListAnimeIds } as never);
+      const store = new RoomStore({ getRandomAniListAnimeCandidates } as never);
       const created = store.createRoom();
       const host = store.joinRoom(created.roomCode, "Host");
       expect(host.status).toBe("ok");
@@ -2487,7 +2694,7 @@ describe("RoomStore gameplay progression", () => {
 
       const started = await store.startGame(created.roomCode, host.value.playerId);
       expect(started).toMatchObject({ ok: false, error: "ANILIST_REMOTE_FAILURE" });
-      expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(1);
+      expect(getRandomAniListAnimeCandidates).toHaveBeenCalledTimes(1);
       expect(perUserSpy).not.toHaveBeenCalled();
       expect(querySpy).not.toHaveBeenCalled();
     } finally {
@@ -2511,16 +2718,32 @@ describe("RoomStore gameplay progression", () => {
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
     process.env.DATABASE_URL = "postgres://test";
     process.env.BETTER_AUTH_URL = "https://api.example.test";
-    const getRandomAniListAnimeIds = vi
+    const getRandomAniListAnimeCandidates = vi
       .fn()
-      .mockResolvedValueOnce(Array.from({ length: 120 }, (_, index) => index + 1))
-      .mockResolvedValueOnce(Array.from({ length: 120 }, (_, index) => index + 2_001));
+      .mockResolvedValueOnce(makeRandomAniListCandidates(120))
+      .mockResolvedValueOnce(makeRandomAniListCandidates(120, { animeOffset: 2_000 }));
     const perUserSpy = vi
       .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
       .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
     let selectCalls = 0;
     const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
       const text = String(sql);
+      if (text.includes("select normalized_alias, anime_id, alias_type")) {
+        return {
+          rows: [
+            ...makeRandomAniListCandidates(120).map((candidate, index) => ({
+              normalized_alias: candidate.titleRomaji ? candidate.titleRomaji.toLowerCase() : "",
+              anime_id: index + 1,
+              alias_type: "canonical",
+            })),
+            ...makeRandomAniListCandidates(120, { animeOffset: 2_000 }).map((candidate, index) => ({
+              normalized_alias: candidate.titleRomaji ? candidate.titleRomaji.toLowerCase() : "",
+              anime_id: index + 2_001,
+              alias_type: "canonical",
+            })),
+          ],
+        } as never;
+      }
       if (!text.includes("from best_theme_video")) {
         return { rows: [] } as never;
       }
@@ -2534,7 +2757,7 @@ describe("RoomStore gameplay progression", () => {
     });
 
     try {
-      const store = new RoomStore({ getRandomAniListAnimeIds } as never);
+      const store = new RoomStore({ getRandomAniListAnimeCandidates } as never);
       const created = store.createRoom();
       const host = store.joinRoom(created.roomCode, "Host");
       expect(host.status).toBe("ok");
@@ -2548,7 +2771,7 @@ describe("RoomStore gameplay progression", () => {
 
       const started = await store.startGame(created.roomCode, host.value.playerId);
       expect(started).toMatchObject({ ok: true, sourceMode: "random_classic" });
-      expect(getRandomAniListAnimeIds).toHaveBeenCalledTimes(2);
+      expect(getRandomAniListAnimeCandidates).toHaveBeenCalledTimes(2);
       expect(selectCalls).toBe(2);
       expect(perUserSpy).not.toHaveBeenCalled();
     } finally {
@@ -2572,18 +2795,33 @@ describe("RoomStore gameplay progression", () => {
     const previousBetterAuthUrl = process.env.BETTER_AUTH_URL;
     process.env.DATABASE_URL = "postgres://test";
     process.env.BETTER_AUTH_URL = "https://api.example.test";
-    const getRandomAniListAnimeIds = vi.fn().mockResolvedValue([101, 102, 103, 104]);
+    const getRandomAniListAnimeCandidates = vi.fn().mockResolvedValue(makeRandomAniListCandidates(4));
     const perUserSpy = vi
       .spyOn(userAnimeLibraryRepository, "animeIdsForUser")
       .mockRejectedValue(new Error("random_classic should not call animeIdsForUser"));
-    const querySpy = vi.spyOn(pool, "query").mockResolvedValue({
-      rows: makeAniListThemeRows(12),
-    } as never);
+    const querySpy = vi.spyOn(pool, "query").mockImplementation(async (sql: unknown) => {
+      const text = String(sql);
+      if (text.includes("select normalized_alias, anime_id, alias_type")) {
+        return {
+          rows: makeRandomAniListCandidates(4).map((candidate, index) => ({
+            normalized_alias: `anime ${index + 1}`,
+            anime_id: index + 1,
+            alias_type: "canonical",
+          })),
+        } as never;
+      }
+      if (text.includes("update anime_catalog_anime as a set")) {
+        return { rows: [] } as never;
+      }
+      return {
+        rows: makeAniListThemeRows(12),
+      } as never;
+    });
 
     let nowMs = 0;
     try {
       const store = new RoomStore({
-        getRandomAniListAnimeIds,
+        getRandomAniListAnimeCandidates,
         now: () => nowMs,
         config: {
           maxRounds: 1,

@@ -19,6 +19,17 @@ const DEFAULT_PER_PAGE = 50;
 const MAX_PAGES_PER_SLICE = 24;
 export const MAX_RANDOM_ANIME_DISCOVERY_IDS = DEFAULT_PER_PAGE * ANILIST_SLICE_SORTS.length * MAX_PAGES_PER_SLICE;
 
+export type AniListRandomAnimeCandidate = {
+  mediaId: number;
+  titleRomaji: string | null;
+  titleEnglish: string | null;
+  titleNative: string | null;
+  synonyms: string[];
+  popularity: number | null;
+  year: number | null;
+  genres: string[];
+};
+
 const RANDOM_ANILIST_QUERY = `
 query ($page: Int, $perPage: Int, $sort: [MediaSort]) {
   Page(page: $page, perPage: $perPage) {
@@ -33,6 +44,15 @@ query ($page: Int, $perPage: Int, $sort: [MediaSort]) {
       sort: $sort
     ) {
       id
+      title {
+        romaji
+        english
+        native
+      }
+      synonyms
+      popularity
+      seasonYear
+      genres
     }
   }
 }
@@ -44,7 +64,18 @@ type AniListRandomPayload = {
       pageInfo?: {
         hasNextPage?: boolean;
       };
-      media?: Array<{ id?: number | null } | null>;
+      media?: Array<{
+        id?: number | null;
+        title?: {
+          romaji?: string | null;
+          english?: string | null;
+          native?: string | null;
+        } | null;
+        synonyms?: string[] | null;
+        popularity?: number | null;
+        seasonYear?: number | null;
+        genres?: string[] | null;
+      } | null>;
     };
   };
 };
@@ -97,23 +128,62 @@ function buildRequestPlan(seed: string, themeMode: "op_only" | "ed_only" | "mix"
   }));
 }
 
-export async function fetchRandomAniListAnimeIds(input: {
+function cleanOptionalText(value: string | null | undefined) {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function cleanStringList(values: string[] | null | undefined) {
+  return Array.from(
+    new Set(
+      (values ?? [])
+        .map((value) => value?.trim() ?? "")
+        .filter((value) => value.length > 0),
+    ),
+  );
+}
+
+function toCandidate(entry: NonNullable<NonNullable<AniListRandomPayload["data"]>["Page"]>["media"][number]) {
+  const mediaId = entry?.id;
+  if (!(typeof mediaId === "number" && Number.isFinite(mediaId) && Number.isInteger(mediaId) && mediaId > 0)) {
+    return null;
+  }
+
+  return {
+    mediaId,
+    titleRomaji: cleanOptionalText(entry?.title?.romaji),
+    titleEnglish: cleanOptionalText(entry?.title?.english),
+    titleNative: cleanOptionalText(entry?.title?.native),
+    synonyms: cleanStringList(entry?.synonyms),
+    popularity:
+      typeof entry?.popularity === "number" && Number.isFinite(entry.popularity)
+        ? Math.max(0, Math.round(entry.popularity))
+        : null,
+    year:
+      typeof entry?.seasonYear === "number" && Number.isFinite(entry.seasonYear)
+        ? Math.max(1900, Math.round(entry.seasonYear))
+        : null,
+    genres: cleanStringList(entry?.genres),
+  } satisfies AniListRandomAnimeCandidate;
+}
+
+export async function fetchRandomAniListAnimeCandidates(input: {
   seed: string;
   desiredCount: number;
   themeMode: "op_only" | "ed_only" | "mix";
-}): Promise<number[]> {
+}): Promise<AniListRandomAnimeCandidate[]> {
   const safeDesiredCount = Math.max(1, Math.min(input.desiredCount, MAX_RANDOM_ANIME_DISCOVERY_IDS));
   const requestPlan = buildRequestPlan(input.seed, input.themeMode, safeDesiredCount);
-  const uniqueIds: number[] = [];
+  const uniqueCandidates: AniListRandomAnimeCandidate[] = [];
   const seenIds = new Set<number>();
-  const requestMemo = new Map<string, { ids: number[]; hasNextPage: boolean }>();
+  const requestMemo = new Map<string, { candidates: AniListRandomAnimeCandidate[]; hasNextPage: boolean }>();
   let fetchedPageCount = 0;
   let failedFetchCount = 0;
 
   for (const [sliceIndex, slice] of requestPlan.entries()) {
     let page = slice.startPage;
     for (let depth = 0; depth < slice.maxPagesToFetch; depth += 1) {
-      if (uniqueIds.length >= safeDesiredCount) break;
+      if (uniqueCandidates.length >= safeDesiredCount) break;
 
       const requestKey = `${sliceIndex}:${page}`;
       const cached = requestMemo.get(requestKey);
@@ -153,24 +223,24 @@ export async function fetchRandomAniListAnimeIds(input: {
         fetchedPageCount += 1;
         if (payload === null) {
           failedFetchCount += 1;
-          const response = { ids: [] as number[], hasNextPage: false };
+          const response = { candidates: [] as AniListRandomAnimeCandidate[], hasNextPage: false };
           requestMemo.set(requestKey, response);
           return response;
         }
-        const ids = (payload?.data?.Page?.media ?? [])
-          .map((entry) => entry?.id)
-          .filter((id): id is number => typeof id === "number" && Number.isFinite(id) && Number.isInteger(id) && id > 0);
+        const candidates = (payload?.data?.Page?.media ?? [])
+          .map((entry) => toCandidate(entry))
+          .filter((entry): entry is AniListRandomAnimeCandidate => entry !== null);
         const hasNextPage = payload?.data?.Page?.pageInfo?.hasNextPage === true;
-        const response = { ids, hasNextPage };
+        const response = { candidates, hasNextPage };
         requestMemo.set(requestKey, response);
         return response;
       })());
 
-      for (const id of result.ids) {
-        if (seenIds.has(id)) continue;
-        seenIds.add(id);
-        uniqueIds.push(id);
-        if (uniqueIds.length >= safeDesiredCount) break;
+      for (const candidate of result.candidates) {
+        if (seenIds.has(candidate.mediaId)) continue;
+        seenIds.add(candidate.mediaId);
+        uniqueCandidates.push(candidate);
+        if (uniqueCandidates.length >= safeDesiredCount) break;
       }
 
       if (!result.hasNextPage) {
@@ -179,7 +249,7 @@ export async function fetchRandomAniListAnimeIds(input: {
       page += 1;
     }
 
-    if (uniqueIds.length >= safeDesiredCount) break;
+    if (uniqueCandidates.length >= safeDesiredCount) break;
   }
 
   logEvent("info", "anilist_random_discovery_fetched", {
@@ -188,13 +258,22 @@ export async function fetchRandomAniListAnimeIds(input: {
     desiredCount: safeDesiredCount,
     sliceCount: requestPlan.length,
     fetchedPageCount,
-    uniqueAnimeIdCount: uniqueIds.length,
+    uniqueAnimeIdCount: uniqueCandidates.length,
     failedFetchCount,
   });
 
-  if (uniqueIds.length === 0 && failedFetchCount > 0) {
+  if (uniqueCandidates.length === 0 && failedFetchCount > 0) {
     throw new AniListRemoteFailureError(failedFetchCount);
   }
 
-  return uniqueIds;
+  return uniqueCandidates;
+}
+
+export async function fetchRandomAniListAnimeIds(input: {
+  seed: string;
+  desiredCount: number;
+  themeMode: "op_only" | "ed_only" | "mix";
+}): Promise<number[]> {
+  const candidates = await fetchRandomAniListAnimeCandidates(input);
+  return candidates.map((candidate) => candidate.mediaId);
 }

@@ -26,11 +26,13 @@ import {
   fetchAniListMediaMetadataBySearchBatch,
 } from "./AniListTitleLookup";
 import {
-  fetchRandomAniListAnimeIds,
+  fetchRandomAniListAnimeCandidates,
   AniListRemoteFailureError,
   MAX_RANDOM_ANIME_DISCOVERY_IDS,
+  type AniListRandomAnimeCandidate,
 } from "./AniListRandomAnimeSource";
 import { animeThemesProxyCache } from "./AnimeThemesProxyCache";
+import { normalizeAnimeAlias } from "./AnimeThemesCatalogService";
 import { RoundSyncCoordinator } from "./RoundSyncCoordinator";
 
 type RoundMode = "mcq" | "text";
@@ -249,11 +251,11 @@ type RoomStoreDependencies = {
   }) => Promise<MusicTrack[]>;
   warmAnimeThemeVideo?: (videoKey: string) => Promise<void>;
   config?: Partial<RoundConfig>;
-  getRandomAniListAnimeIds?: (input: {
+  getRandomAniListAnimeCandidates?: (input: {
     seed: string;
     desiredCount: number;
     themeMode: RoomThemeMode;
-  }) => Promise<number[]>;
+  }) => Promise<AniListRandomAnimeCandidate[]>;
 };
 
 function randomRoomCode(length = 6): string {
@@ -281,6 +283,10 @@ function mcqChoiceIdentity(track: Pick<MusicTrack, "provider" | "title" | "artis
     return normalizeAnswer(track.title);
   }
   return normalizeAnswer(asChoiceLabel(track));
+}
+
+function mcqChoiceIdentityForRoundChoice(choice: Pick<RoundChoice, "titleRomaji">) {
+  return normalizeAnswer(choice.titleRomaji);
 }
 
 function collectAnswerVariants(track: MusicTrack) {
@@ -890,11 +896,11 @@ export class RoomStore {
     allowExternalResolve?: boolean;
   }) => Promise<MusicTrack[]>;
   private readonly warmAnimeThemeVideo: (videoKey: string) => Promise<void>;
-  private readonly getRandomAniListAnimeIds: (input: {
+  private readonly getRandomAniListAnimeCandidates: (input: {
     seed: string;
     desiredCount: number;
     themeMode: RoomThemeMode;
-  }) => Promise<number[]>;
+  }) => Promise<AniListRandomAnimeCandidate[]>;
   private readonly config: RoundConfig;
 
   constructor(dependencies: RoomStoreDependencies = {}) {
@@ -904,7 +910,8 @@ export class RoomStore {
     this.getPlayerLikedTracks = dependencies.getPlayerLikedTracks ?? fetchSyncedUserLikedTracksForProviders;
     this.warmAnimeThemeVideo = dependencies.warmAnimeThemeVideo ?? ((videoKey) =>
       animeThemesProxyCache.warmByVideoKey(videoKey).then(() => undefined));
-    this.getRandomAniListAnimeIds = dependencies.getRandomAniListAnimeIds ?? fetchRandomAniListAnimeIds;
+    this.getRandomAniListAnimeCandidates =
+      dependencies.getRandomAniListAnimeCandidates ?? fetchRandomAniListAnimeCandidates;
     this.config = {
       ...DEFAULT_ROUND_CONFIG,
       ...(dependencies.config ?? {}),
@@ -1075,11 +1082,21 @@ export class RoomStore {
     const correct = buildRoundChoice(track);
     const correctIdentity = mcqChoiceIdentity(track);
     const sourceProfile = buildChoiceProfile(track);
-    const futureRoundTracks = session.trackPool.slice(round);
-    const distractorCandidates = [...futureRoundTracks, ...session.distractorTrackPool]
+    const previouslyUsedChoiceIdentities = new Set<string>();
+    for (const [existingRound, choices] of session.roundChoices.entries()) {
+      if (existingRound >= round) continue;
+      for (const choice of choices) {
+        previouslyUsedChoiceIdentities.add(mcqChoiceIdentityForRoundChoice(choice));
+      }
+    }
+    const distractorCandidates = session.distractorTrackPool
       .filter((candidate) => {
         const candidateIdentity = mcqChoiceIdentity(candidate);
-        return candidateIdentity !== correctIdentity && asChoiceLabel(candidate) !== correct.value;
+        return (
+          candidateIdentity !== correctIdentity &&
+          asChoiceLabel(candidate) !== correct.value &&
+          !previouslyUsedChoiceIdentities.has(candidateIdentity)
+        );
       })
       .map((candidate) => ({
         choice: buildRoundChoice(candidate),
@@ -1307,8 +1324,8 @@ export class RoomStore {
 
     const baseDesiredCount = Math.min(MAX_RANDOM_ANIME_DISCOVERY_IDS, Math.max(targetCandidateSize * 30, 2_000));
     const baseSeed = `${session.roomCode}:${Date.now()}`;
-    const collectedAnimeIds: number[] = [];
-    const seenAnimeIds = new Set<number>();
+    const collectedCandidates: AniListRandomAnimeCandidate[] = [];
+    const seenMediaIds = new Set<number>();
     let desiredCount = baseDesiredCount;
     let latestBuilt = {
       tracks: [] as MusicTrack[],
@@ -1320,36 +1337,37 @@ export class RoomStore {
     };
 
     for (let attempt = 0; attempt < RANDOM_CLASSIC_DISCOVERY_ATTEMPTS; attempt += 1) {
-      let discoveredAnimeIds: number[];
+      let discoveredCandidates: AniListRandomAnimeCandidate[];
       try {
-        discoveredAnimeIds = await this.getRandomAniListAnimeIds({
+        discoveredCandidates = await this.getRandomAniListAnimeCandidates({
           seed: `${baseSeed}:${attempt}`,
           desiredCount,
           themeMode: session.themeMode,
         });
       } catch (error) {
-        if (error instanceof AniListRemoteFailureError && collectedAnimeIds.length > 0) {
+        if (error instanceof AniListRemoteFailureError && collectedCandidates.length > 0) {
           break;
         }
         throw error;
       }
 
       let addedCount = 0;
-      for (const animeId of discoveredAnimeIds) {
-        if (seenAnimeIds.has(animeId)) continue;
-        seenAnimeIds.add(animeId);
-        collectedAnimeIds.push(animeId);
+      for (const candidate of discoveredCandidates) {
+        if (seenMediaIds.has(candidate.mediaId)) continue;
+        seenMediaIds.add(candidate.mediaId);
+        collectedCandidates.push(candidate);
         addedCount += 1;
       }
 
-      if (collectedAnimeIds.length > 0) {
-        latestBuilt = await this.buildAniListTrackPoolFromIds(session, safeRounds, collectedAnimeIds);
+      if (collectedCandidates.length > 0) {
+        const catalogAnimeIds = await this.mapAniListCandidatesToCatalogIds(collectedCandidates);
+        latestBuilt = await this.buildAniListTrackPoolFromIds(session, safeRounds, catalogAnimeIds);
         if (latestBuilt.tracks.length >= safeRounds) {
           return latestBuilt;
         }
       }
 
-      const reachedDiscoveryCeiling = collectedAnimeIds.length >= MAX_RANDOM_ANIME_DISCOVERY_IDS;
+      const reachedDiscoveryCeiling = collectedCandidates.length >= MAX_RANDOM_ANIME_DISCOVERY_IDS;
       const didNotGrow = addedCount <= 0;
       if (reachedDiscoveryCeiling || didNotGrow) {
         break;
@@ -1362,6 +1380,149 @@ export class RoomStore {
     }
 
     return latestBuilt;
+  }
+
+  private async mapAniListCandidatesToCatalogIds(candidates: AniListRandomAnimeCandidate[]) {
+    const aliasesByMediaId = new Map<number, string[]>();
+    const allAliases = new Set<string>();
+
+    for (const candidate of candidates) {
+      const aliases = Array.from(
+        new Set(
+          [
+            candidate.titleRomaji,
+            candidate.titleEnglish,
+            candidate.titleNative,
+            ...candidate.synonyms,
+          ]
+            .map((value) => value?.trim() ?? "")
+            .filter((value) => value.length > 0)
+            .map((value) => normalizeAnimeAlias(value)),
+        ),
+      );
+      if (aliases.length <= 0) continue;
+      aliasesByMediaId.set(candidate.mediaId, aliases);
+      for (const alias of aliases) {
+        allAliases.add(alias);
+      }
+    }
+
+    if (allAliases.size <= 0) {
+      return [];
+    }
+
+    const mapped = await pool.query<{
+      normalized_alias: string;
+      anime_id: number;
+      alias_type: "canonical" | "synonym" | "acronym";
+    }>(
+      `
+        select normalized_alias, anime_id, alias_type
+        from anime_catalog_alias
+        where normalized_alias = any($1::text[])
+        union all
+        select searchable_romaji as normalized_alias, id as anime_id, 'canonical' as alias_type
+        from anime_catalog_anime
+        where searchable_romaji = any($1::text[])
+      `,
+      [[...allAliases]],
+    );
+
+    const mappedByAlias = new Map<
+      string,
+      Array<{
+        animeId: number;
+        aliasType: "canonical" | "synonym" | "acronym";
+      }>
+    >();
+    for (const row of mapped.rows) {
+      const entries = mappedByAlias.get(row.normalized_alias) ?? [];
+      entries.push({
+        animeId: row.anime_id,
+        aliasType: row.alias_type,
+      });
+      entries.sort((left, right) => {
+        const weight = (value: "canonical" | "synonym" | "acronym") =>
+          value === "canonical" ? 0 : value === "synonym" ? 1 : 2;
+        return weight(left.aliasType) - weight(right.aliasType);
+      });
+      mappedByAlias.set(row.normalized_alias, entries);
+    }
+
+    const updates = new Map<
+      number,
+      {
+        titleEnglish: string | null;
+        titleNative: string | null;
+        popularity: number | null;
+        year: number | null;
+        genres: string[];
+      }
+    >();
+    const animeIds: number[] = [];
+    const seenAnimeIds = new Set<number>();
+
+    for (const candidate of candidates) {
+      const aliases = aliasesByMediaId.get(candidate.mediaId) ?? [];
+      let matchedAnimeId: number | null = null;
+      for (const alias of aliases) {
+        const match = mappedByAlias.get(alias)?.[0];
+        if (!match) continue;
+        matchedAnimeId = match.animeId;
+        break;
+      }
+      if (matchedAnimeId === null || seenAnimeIds.has(matchedAnimeId)) continue;
+      seenAnimeIds.add(matchedAnimeId);
+      animeIds.push(matchedAnimeId);
+      updates.set(matchedAnimeId, {
+        titleEnglish: candidate.titleEnglish,
+        titleNative: candidate.titleNative,
+        popularity: candidate.popularity,
+        year: candidate.year,
+        genres: candidate.genres,
+      });
+    }
+
+    if (updates.size > 0) {
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      let index = 1;
+      for (const [animeId, update] of updates) {
+        placeholders.push(
+          `($${index}, $${index + 1}::text, $${index + 2}::text, $${index + 3}::integer, $${index + 4}::integer, $${index + 5}::text[])`,
+        );
+        values.push(
+          animeId,
+          update.titleEnglish,
+          update.titleNative,
+          update.popularity,
+          update.year,
+          update.genres,
+        );
+        index += 6;
+      }
+      await pool.query(
+        `
+          update anime_catalog_anime as a set
+            title_english = coalesce(v.title_english, a.title_english),
+            title_native = coalesce(v.title_native, a.title_native),
+            anilist_popularity = coalesce(v.anilist_popularity, a.anilist_popularity),
+            year = coalesce(v.year, a.year),
+            genres = case
+              when coalesce(array_length(v.genres, 1), 0) > 0 then v.genres
+              else a.genres
+            end,
+            updated_at = now()
+          from (
+            values ${placeholders.join(", ")}
+          ) as v(id, title_english, title_native, anilist_popularity, year, genres)
+          where a.id = v.id::bigint
+        `,
+        values,
+      );
+    }
+
+    return animeIds;
   }
 
   private async buildAniListTrackPoolFromIds(session: RoomSession, safeRounds: number, animeIds: number[]) {
@@ -1610,7 +1771,11 @@ export class RoomStore {
       );
     }
 
-    const tracks: MusicTrack[] = selected.rows.map((row) => {
+    const uniqueRows = Array.from(
+      new Map(selected.rows.map((row) => [row.anime_id, row] as const)).values(),
+    );
+
+    const tracks: MusicTrack[] = uniqueRows.map((row) => {
       const englishTitle = englishTitleBackfills.get(row.anime_id) ?? row.title_english;
       const themeLabel = `${row.theme_type}${row.theme_number ?? ""}`.trim();
       const answerAliases = Array.from(

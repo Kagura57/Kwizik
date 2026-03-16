@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchRandomAniListAnimeIds, AniListRemoteFailureError } from "../src/services/AniListRandomAnimeSource";
+import {
+  fetchRandomAniListAnimeCandidates,
+  fetchRandomAniListAnimeIds,
+  AniListRemoteFailureError,
+} from "../src/services/AniListRandomAnimeSource";
 
 type AniListRequest = {
   query?: string;
@@ -31,7 +35,23 @@ function mockAniListFetch(
               currentPage: request.variables?.page ?? 1,
               hasNextPage,
             },
-            media: ids.map((id) => ({ id })),
+            media: ids.map((id) => {
+              if (typeof id === "object" && id !== null) {
+                return id;
+              }
+              return {
+                id,
+                title: {
+                  romaji: typeof id === "number" ? `Anime ${id}` : null,
+                  english: typeof id === "number" ? `Anime EN ${id}` : null,
+                  native: null,
+                },
+                synonyms: typeof id === "number" ? [`Alias ${id}`] : [],
+                popularity: typeof id === "number" ? 1_000 + id : null,
+                seasonYear: typeof id === "number" ? 2000 + (id % 20) : null,
+                genres: typeof id === "number" ? ["Action"] : [],
+              };
+            }),
           },
         },
       }),
@@ -194,6 +214,45 @@ describe("AniListRandomAnimeSource", () => {
     });
 
     expect(ids).toEqual([7, 8]);
+  });
+
+  it("returns titles and aliases needed to map AniList discovery onto the local catalog", async () => {
+    mockAniListFetch(() => ({
+      ids: [
+        {
+          id: 77,
+          title: {
+            romaji: "Mahou Shoujo Madoka☆Magica",
+            english: "Puella Magi Madoka Magica",
+            native: "魔法少女まどか☆マギカ",
+          },
+          synonyms: ["Madoka Magica"],
+          popularity: 98765,
+          seasonYear: 2011,
+          genres: ["Drama", "Psychological"],
+        },
+      ],
+      hasNextPage: false,
+    }));
+
+    const candidates = await fetchRandomAniListAnimeCandidates({
+      seed: "candidate-seed",
+      desiredCount: 1,
+      themeMode: "mix",
+    });
+
+    expect(candidates).toEqual([
+      {
+        mediaId: 77,
+        titleRomaji: "Mahou Shoujo Madoka☆Magica",
+        titleEnglish: "Puella Magi Madoka Magica",
+        titleNative: "魔法少女まどか☆マギカ",
+        synonyms: ["Madoka Magica"],
+        popularity: 98765,
+        year: 2011,
+        genres: ["Drama", "Psychological"],
+      },
+    ]);
   });
 
   it("supports discovery targets larger than 120 anime IDs without clipping early", async () => {
