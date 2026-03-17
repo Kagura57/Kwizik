@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
+import {
+  formatSettingsSyncTimestamp,
+  getAniListStatusMeta,
+  getSettingsCopy,
+  getSettingsPrimaryActionLabel,
+  getSettingsTitlePreferenceLabel,
+  getSettingsUpdateErrorMessage,
+  getSyncErrorMessage,
+  getSyncStatusLabel,
+  getSyncStatusTone,
+} from "../i18n/copy/settings";
 import { localizedPath } from "../i18n/locale";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
@@ -10,7 +21,6 @@ import {
   getAniListLibrarySyncStatus,
   getAniListLinkStatus,
   getAuthSession,
-  HttpStatusError,
   queueAniListLibrarySync,
   signOutAccount,
   type TitlePreference,
@@ -21,104 +31,6 @@ import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
 
 type AniListLinkStatus = "linked" | "not_linked";
-
-function anilistStatusMeta(status: AniListLinkStatus, locale: "fr" | "en") {
-  if (status === "linked") {
-    return {
-      label: locale === "en" ? "Ready" : "Pret",
-      tone: "connected",
-      description:
-        locale === "en"
-          ? "AniList username configured for anime rounds."
-          : "Pseudo AniList configure pour les manches anime.",
-    } as const;
-  }
-  return {
-    label: locale === "en" ? "Not configured" : "Non configure",
-    tone: "idle",
-    description:
-      locale === "en"
-        ? "Enter your AniList username, then click Update."
-        : "Renseigne ton pseudo AniList puis clique Mettre a jour.",
-  } as const;
-}
-
-function syncStatusLabel(status: "queued" | "running" | "success" | "error" | "idle", locale: "fr" | "en") {
-  if (status === "queued") return locale === "en" ? "queued" : "en file";
-  if (status === "running") return locale === "en" ? "running" : "en cours";
-  if (status === "success") return locale === "en" ? "completed" : "terminee";
-  if (status === "error") return locale === "en" ? "error" : "en erreur";
-  return "idle";
-}
-
-function syncErrorMessage(code: string | null | undefined, locale: "fr" | "en") {
-  const normalized = typeof code === "string" ? code.trim() : "";
-  if (!normalized) return locale === "en" ? "AniList sync error." : "Erreur de synchronisation AniList.";
-  if (normalized === "ANILIST_USERNAME_NOT_SET") {
-    return locale === "en"
-      ? "Enter your AniList username before syncing."
-      : "Renseigne ton pseudo AniList avant de synchroniser.";
-  }
-  if (normalized === "ANILIST_USER_NOT_FOUND") {
-    return locale === "en"
-      ? "AniList username not found. Check it and try again."
-      : "Pseudo AniList introuvable. Verifie le nom puis relance.";
-  }
-  if (normalized === "ANILIST_COLLECTION_GRAPHQL_ERROR") {
-    return locale === "en"
-      ? "AniList returned a GraphQL error. Try again in a few seconds."
-      : "AniList a retourne une erreur GraphQL. Reessaie dans quelques secondes.";
-  }
-  if (normalized === "ANIME_CATALOG_EMPTY") {
-    return locale === "en"
-      ? "The local anime catalog is empty. Let the API finish refreshing AnimeThemes, then try again."
-      : "Le catalogue anime local est vide. Laisse l'API finir son rafraichissement AnimeThemes puis relance.";
-  }
-  if (normalized.startsWith("ANILIST_COLLECTION_HTTP_")) {
-    return locale === "en"
-      ? `AniList returned ${normalized.replace("ANILIST_COLLECTION_HTTP_", "HTTP ")}. Try again in a few seconds.`
-      : `AniList a retourne ${normalized.replace("ANILIST_COLLECTION_HTTP_", "HTTP ")}. Reessaie dans quelques secondes.`;
-  }
-  if (normalized === "QUEUE_UNAVAILABLE" || normalized === "ENQUEUE_FAILED") {
-    return locale === "en"
-      ? "The sync queue is currently unavailable."
-      : "La file de synchronisation est indisponible pour le moment.";
-  }
-  return locale === "en" ? `AniList sync error: ${normalized}` : `Erreur sync AniList: ${normalized}`;
-}
-
-function updateMutationErrorMessage(error: unknown, locale: "fr" | "en") {
-  if (!(error instanceof HttpStatusError)) {
-    return locale === "en"
-      ? "Unable to update the AniList library."
-      : "Impossible de mettre a jour la liste AniList.";
-  }
-  if (error.message === "INVALID_ANILIST_USERNAME") {
-    return locale === "en"
-      ? "Invalid AniList username (letters, digits, _ or - only)."
-      : "Pseudo AniList invalide (lettres, chiffres, _ ou - uniquement).";
-  }
-  if (error.message === "ANILIST_USERNAME_NOT_SET") {
-    return locale === "en"
-      ? "Enter your AniList username before updating."
-      : "Renseigne ton pseudo AniList avant la mise a jour.";
-  }
-  if (error.message === "QUEUE_UNAVAILABLE" || error.message === "ENQUEUE_FAILED") {
-    return locale === "en"
-      ? "Username saved, but the sync queue is unavailable."
-      : "Pseudo enregistre, mais la file de sync est indisponible.";
-  }
-  return locale === "en"
-    ? "Unable to update the AniList library."
-    : "Impossible de mettre a jour la liste AniList.";
-}
-
-function formatSyncTimestamp(ts: number | null | undefined, locale: "fr" | "en") {
-  if (typeof ts !== "number" || !Number.isFinite(ts)) {
-    return locale === "en" ? "never" : "jamais";
-  }
-  return new Date(ts).toLocaleString(locale === "en" ? "en-US" : "fr-FR");
-}
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -138,86 +50,7 @@ export function SettingsPage() {
     path: "/settings",
     noindex: true,
   });
-  const copy =
-    locale === "en"
-      ? {
-          title: "Profile & connections",
-          subtitle: "Enter your AniList username, then click Update whenever you want to refresh your library.",
-          authRequired: "You must be signed in to manage your AniList username.",
-          signIn: "Sign in",
-          backHome: "Back home",
-          loadingAccount: "Loading account...",
-          connected: "Signed in:",
-          aniListUsername: "AniList username",
-          update: "Update",
-          updating: "Updating...",
-          lastSync: "Last sync",
-          titlePreference: "Title preference",
-          titlePreferenceHint: "Choose the displayed format for anime MCQ choices.",
-          mixed: "Mixed",
-          romaji: "Romaji",
-          english: "English",
-          syncState: "Sync status",
-          progress: "Progress",
-          lastRun: "Last run",
-          recoveredAnime: "Recovered anime",
-          recoveredHint: "Titles present in the locally synced library (watching + completed).",
-          loadingLibrary: "Loading anime library...",
-          libraryLoadError: "Unable to load the anime library.",
-          libraryEmpty: "No anime found yet. Run a sync, then reload this page.",
-          signOut: "Sign out",
-          signingOut: "Signing out...",
-          signedOut: "Signed out.",
-          signOutError: "Unable to sign out right now.",
-          syncStarted: "Username updated and AniList sync started.",
-          usernameUpdated: "AniList username updated.",
-          titlePreferenceUpdated: "Title preference updated.",
-          titlePreferenceError: "Unable to update the title preference.",
-          accountDescription: "Manage your AniList sync and profile preferences in Kwizik.",
-          animeQuiz: "Anime quiz",
-          statusWatching: "Watching",
-          statusCompleted: "Completed",
-          never: "never",
-        }
-      : {
-          title: "Profil & connexions",
-          subtitle: "Renseigne ton pseudo AniList puis clique Mettre a jour quand tu veux rafraichir ta liste.",
-          authRequired: "Tu dois etre connecte pour gerer ton pseudo AniList.",
-          signIn: "Se connecter",
-          backHome: "Retour accueil",
-          loadingAccount: "Chargement du compte...",
-          connected: "Connecte:",
-          aniListUsername: "Pseudo AniList",
-          update: "Mettre a jour",
-          updating: "Mise a jour...",
-          lastSync: "Derniere sync",
-          titlePreference: "Preference de titre",
-          titlePreferenceHint: "Choisis le format affiche pour les choix QCM anime.",
-          mixed: "Mixte",
-          romaji: "Romaji",
-          english: "Anglais",
-          syncState: "Etat synchronisation",
-          progress: "Progression",
-          lastRun: "Derniere execution",
-          recoveredAnime: "Animes recuperes",
-          recoveredHint: "Titres presents dans la bibliotheque synchronisee locale (en cours + termines).",
-          loadingLibrary: "Chargement de la bibliotheque anime...",
-          libraryLoadError: "Impossible de charger la bibliotheque anime.",
-          libraryEmpty: "Aucun anime trouve pour le moment. Lance une synchronisation puis recharge cette page.",
-          signOut: "Se deconnecter",
-          signingOut: "Deconnexion...",
-          signedOut: "Déconnexion effectuée.",
-          signOutError: "Deconnexion impossible pour le moment.",
-          syncStarted: "Pseudo mis à jour et synchronisation AniList lancée.",
-          usernameUpdated: "Pseudo AniList mis à jour.",
-          titlePreferenceUpdated: "Préférence de titre mise à jour.",
-          titlePreferenceError: "Impossible de mettre a jour la preference de titre.",
-          accountDescription: "Gere ta synchronisation AniList et tes preferences de profil dans Kwizik.",
-          animeQuiz: "Quiz anime",
-          statusWatching: "En cours",
-          statusCompleted: "Termine",
-          never: "jamais",
-        };
+  const copy = getSettingsCopy(locale);
 
   const sessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -291,7 +124,7 @@ export function SettingsPage() {
 
   const updateAndSyncMutation = useMutation({
     mutationFn: async () => {
-      const username = anilistUsernameInput.trim();
+      const username = (usernameDirty ? anilistUsernameInput : anilistLinkQuery.data?.link?.anilistUsername ?? "").trim();
       await updateAniListUsername({ username });
       if (!username) {
         return { queued: false as const };
@@ -312,7 +145,7 @@ export function SettingsPage() {
       notify.success(result.queued ? copy.syncStarted : copy.usernameUpdated);
     },
     onError: (error) => {
-      notify.error(updateMutationErrorMessage(error, locale), {
+      notify.error(getSettingsUpdateErrorMessage(error, locale), {
         key: "settings:anilist:update:error",
       });
     },
@@ -359,13 +192,25 @@ export function SettingsPage() {
 
   const user = sessionQuery.data?.user ?? null;
   const linkStatus = (anilistLinkQuery.data?.status ?? "not_linked") as AniListLinkStatus;
-  const linkStatusMeta = anilistStatusMeta(linkStatus, locale);
+  const linkStatusMeta = getAniListStatusMeta(linkStatus, locale);
   const activeRun = anilistSyncStatusQuery.data?.run ?? null;
   const runStatus = activeRun?.status ?? "idle";
   const lastCompletedAtMs = activeRun?.finishedAtMs ?? null;
   const recoveredAnimeItems = anilistRecoveredLibraryQuery.data?.items ?? [];
   const recoveredAnimeCount = anilistRecoveredLibraryQuery.data?.total ?? 0;
   const titlePreference = titlePreferenceQuery.data?.titlePreference ?? "mixed";
+  const currentUsername = anilistLinkQuery.data?.link?.anilistUsername ?? "";
+  const displayedUsername = usernameDirty ? anilistUsernameInput : currentUsername;
+  const trimmedUsernameInput = displayedUsername.trim();
+  const primaryCtaLabel = getSettingsPrimaryActionLabel({
+    locale,
+    currentUsername,
+    nextUsername: displayedUsername,
+  });
+  const primaryCtaDisabled =
+    updateAndSyncMutation.isPending ||
+    signOutMutation.isPending ||
+    (!trimmedUsernameInput && !currentUsername.trim());
 
   useEffect(() => {
     if (!anilistRecoveredLibraryQuery.isError) return;
@@ -376,20 +221,28 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (activeRun?.status !== "error") return;
-    notify.error(syncErrorMessage(activeRun.message, locale), {
+    notify.error(getSyncErrorMessage(activeRun.message, locale), {
       key: `settings:anilist-sync-run:error:${activeRun.runId ?? activeRun.createdAtMs ?? "latest"}`,
     });
   }, [activeRun?.createdAtMs, activeRun?.message, activeRun?.runId, activeRun?.status, locale]);
 
   return (
-    <section className="single-panel">
-      <article className="panel-card">
-        <h2 className="panel-title">{copy.title}</h2>
-        <p className="panel-copy">{copy.subtitle}</p>
+    <section className="settings-page">
+      <article className="panel-card settings-hero">
+        <div className="settings-hero-copy">
+          <p className="kicker">{copy.summaryKicker}</p>
+          <h2 className="panel-title">{copy.title}</h2>
+          <p className="panel-copy">{copy.subtitle}</p>
+        </div>
+
+        {sessionQuery.isPending && <p className="status">{copy.loadingAccount}</p>}
 
         {!sessionQuery.isPending && !user && (
-          <div className="panel-form">
-            <p className="status">{copy.authRequired}</p>
+          <div className="settings-guest-card">
+            <div className="settings-guest-copy">
+              <h3>{copy.summaryTitle}</h3>
+              <p className="status">{copy.authRequired}</p>
+            </div>
             <div className="waiting-actions">
               <Link className="solid-btn" to={localizedPath(locale, "/auth")}>
                 {copy.signIn}
@@ -401,29 +254,58 @@ export function SettingsPage() {
           </div>
         )}
 
-        {sessionQuery.isPending && <p className="status">{copy.loadingAccount}</p>}
-
         {user && (
-          <div className="panel-form">
-            <p className="status">
-              {copy.connected} <strong>{user.name}</strong> ({user.email})
-            </p>
-
-            <div className="provider-link-card">
-              <div className="provider-link-head">
-                <div>
-                  <p className="kicker">AniList</p>
-                  <h3>{copy.aniListUsername}</h3>
-                </div>
-                <span className={`provider-badge ${linkStatusMeta.tone}`}>
-                  {linkStatusMeta.label}
-                </span>
+          <>
+            <div className="settings-account-row">
+              <div className="settings-account-chip">
+                <span className="field-label">{copy.signedInAs}</span>
+                <strong>{user.name}</strong>
+                <span>{user.email}</span>
               </div>
-              <p className="status">{linkStatusMeta.description}</p>
-              <label>
+              <div className="settings-account-chip">
+                <span className="field-label">{copy.readiness}</span>
+                <strong>{linkStatus === "linked" ? copy.summaryReady : copy.summaryNeedsSetup}</strong>
+                <span>{linkStatusMeta.description}</span>
+              </div>
+            </div>
+
+            <div className="settings-summary-grid">
+              <div className="settings-summary-item">
+                <span className="field-label">{copy.aniListUsername}</span>
+                <strong>{currentUsername || linkStatusMeta.label}</strong>
+                <span>{copy.summaryUsernameHint}</span>
+              </div>
+              <div className="settings-summary-item">
+                <span className="field-label">{copy.lastSync}</span>
+                <strong>{formatSettingsSyncTimestamp(lastCompletedAtMs, locale)}</strong>
+                <span>{getSyncStatusLabel(runStatus, locale)}</span>
+              </div>
+              <div className="settings-summary-item">
+                <span className="field-label">{copy.summaryRecovered}</span>
+                <strong>{recoveredAnimeCount}</strong>
+                <span>{copy.recoveredHint}</span>
+              </div>
+            </div>
+          </>
+        )}
+      </article>
+
+      {user && (
+        <div className="settings-layout">
+          <div className="settings-main">
+            <article className="panel-card settings-card settings-card-primary">
+              <div className="settings-card-head">
+                <div>
+                  <p className="kicker">{copy.actionsTitle}</p>
+                  <h3>{copy.aniListConnection}</h3>
+                </div>
+                <span className={`provider-badge ${linkStatusMeta.tone}`}>{linkStatusMeta.label}</span>
+              </div>
+              <p className="panel-copy">{copy.aniListConnectionHint}</p>
+              <label className="settings-field">
                 <span>{copy.aniListUsername}</span>
                 <input
-                  value={anilistUsernameInput}
+                  value={displayedUsername}
                   onChange={(event) => {
                     setUsernameDirty(true);
                     setAniListUsernameInput(event.currentTarget.value);
@@ -432,31 +314,31 @@ export function SettingsPage() {
                   maxLength={50}
                 />
               </label>
+              <p className="status">{copy.aniListUsernameHint}</p>
               <div className="waiting-actions">
                 <button
                   className="solid-btn"
                   type="button"
-                  disabled={updateAndSyncMutation.isPending || signOutMutation.isPending}
+                  disabled={primaryCtaDisabled}
                   onClick={() => updateAndSyncMutation.mutate()}
                 >
-                  {updateAndSyncMutation.isPending ? copy.updating : copy.update}
+                  {updateAndSyncMutation.isPending ? copy.saving : primaryCtaLabel}
                 </button>
               </div>
-              <p className="status">
-                {copy.lastSync}: <strong>{formatSyncTimestamp(lastCompletedAtMs, locale)}</strong>
-              </p>
-            </div>
+            </article>
 
-            <div className="provider-link-card">
-              <div className="provider-link-head">
+            <article className="panel-card settings-card">
+              <div className="settings-card-head">
                 <div>
                   <p className="kicker">{copy.animeQuiz}</p>
                   <h3>{copy.titlePreference}</h3>
                 </div>
-                <span className="provider-badge connected">{titlePreference}</span>
+                <span className="provider-badge connected">
+                  {getSettingsTitlePreferenceLabel(titlePreference, locale)}
+                </span>
               </div>
-              <p className="status">{copy.titlePreferenceHint}</p>
-              <div className="waiting-actions">
+              <p className="panel-copy">{copy.titlePreferenceHint}</p>
+              <div className="settings-segmented-control" role="group" aria-label={copy.titlePreference}>
                 {(
                   [
                     { value: "mixed", label: copy.mixed },
@@ -466,46 +348,78 @@ export function SettingsPage() {
                 ).map((entry) => (
                   <button
                     key={entry.value}
-                    className={titlePreference === entry.value ? "solid-btn" : "ghost-btn"}
+                    className={`settings-segment${titlePreference === entry.value ? " is-active" : ""}`}
                     type="button"
                     disabled={updateTitlePreferenceMutation.isPending || signOutMutation.isPending}
                     onClick={() => updateTitlePreferenceMutation.mutate(entry.value)}
                   >
                     {titlePreference === entry.value && updateTitlePreferenceMutation.isPending
-                      ? copy.updating
+                      ? copy.saving
                       : entry.label}
                   </button>
                 ))}
               </div>
-            </div>
+            </article>
 
-            <div className="provider-link-card">
-              <div className="provider-link-head">
+            <article className="panel-card settings-card">
+              <div className="settings-card-head">
                 <div>
-                  <p className="kicker">AniList</p>
+                  <p className="kicker">{copy.sessionActions}</p>
+                  <h3>{copy.sessionActions}</h3>
+                </div>
+              </div>
+              <p className="panel-copy">{copy.sessionHint}</p>
+              <div className="waiting-actions">
+                <button
+                  className="ghost-btn danger-btn"
+                  type="button"
+                  disabled={signOutMutation.isPending || updateAndSyncMutation.isPending}
+                  onClick={() => signOutMutation.mutate()}
+                >
+                  {signOutMutation.isPending ? copy.signingOut : copy.signOut}
+                </button>
+                <Link className="ghost-btn" to={localizedPath(locale, "/")}>
+                  {copy.backHome}
+                </Link>
+              </div>
+            </article>
+          </div>
+
+          <aside className="settings-side">
+            <article className="panel-card settings-card">
+              <div className="settings-card-head">
+                <div>
+                  <p className="kicker">{copy.statusTitle}</p>
                   <h3>{copy.syncState}</h3>
                 </div>
-                <span
-                  className={`provider-badge ${runStatus === "error" ? "expired" : "connected"}`}
-                >
-                  {syncStatusLabel(runStatus, locale)}
+                <span className={`provider-badge ${getSyncStatusTone(runStatus)}`}>
+                  {getSyncStatusLabel(runStatus, locale)}
                 </span>
               </div>
-              <p className="status">
-                {copy.progress}:{" "}
-                <strong>
-                  {typeof activeRun?.progress === "number" ? `${activeRun.progress}%` : "0%"}
-                </strong>
-              </p>
-              <p className="status">
-                {copy.lastRun}: {formatSyncTimestamp(activeRun?.createdAtMs ?? null, locale)}
-              </p>
-            </div>
-
-            <div className="provider-link-card">
-              <div className="provider-link-head">
+              <p className="panel-copy">{copy.syncStateHint}</p>
+              <dl className="settings-stat-list">
                 <div>
-                  <p className="kicker">AniList</p>
+                  <dt>{copy.progress}</dt>
+                  <dd>{typeof activeRun?.progress === "number" ? `${activeRun.progress}%` : "0%"}</dd>
+                </div>
+                <div>
+                  <dt>{copy.lastRun}</dt>
+                  <dd>{formatSettingsSyncTimestamp(activeRun?.createdAtMs ?? null, locale)}</dd>
+                </div>
+                <div>
+                  <dt>{copy.lastSync}</dt>
+                  <dd>{formatSettingsSyncTimestamp(lastCompletedAtMs, locale)}</dd>
+                </div>
+              </dl>
+              {activeRun?.status === "error" && (
+                <p className="status error">{getSyncErrorMessage(activeRun.message, locale)}</p>
+              )}
+            </article>
+
+            <article className="panel-card settings-card">
+              <div className="settings-card-head">
+                <div>
+                  <p className="kicker">{copy.statusTitle}</p>
                   <h3>{copy.recoveredAnime}</h3>
                 </div>
                 <span
@@ -514,7 +428,7 @@ export function SettingsPage() {
                   {recoveredAnimeCount}
                 </span>
               </div>
-              <p className="status">{copy.recoveredHint}</p>
+              <p className="panel-copy">{copy.recoveredHint}</p>
 
               {anilistRecoveredLibraryQuery.isPending && (
                 <p className="status">{copy.loadingLibrary}</p>
@@ -549,24 +463,10 @@ export function SettingsPage() {
                   ))}
                 </ul>
               )}
-            </div>
-
-            <div className="waiting-actions">
-              <button
-                className="ghost-btn danger-btn"
-                type="button"
-                disabled={signOutMutation.isPending || updateAndSyncMutation.isPending}
-                onClick={() => signOutMutation.mutate()}
-              >
-                {signOutMutation.isPending ? copy.signingOut : copy.signOut}
-              </button>
-              <Link className="ghost-btn" to={localizedPath(locale, "/")}>
-                {copy.backHome}
-              </Link>
-            </div>
-          </div>
-        )}
-      </article>
+            </article>
+          </aside>
+        </div>
+      )}
     </section>
   );
 }

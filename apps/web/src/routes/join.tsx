@@ -1,21 +1,12 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { formatJoinRoomState, getJoinCopy, getJoinErrorMessage } from "../i18n/copy/join";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
 import { getPublicRooms, joinRoom } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
-
-function joinErrorMessage(error: unknown, locale: "fr" | "en") {
-  if (!(error instanceof Error)) return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
-  if (error.message === "ROOM_NOT_JOINABLE") {
-    return locale === "en"
-      ? "This room is finished and no longer accepts new players."
-      : "La room est terminée et n’accepte plus de nouveaux joueurs.";
-  }
-  return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
-}
 
 export function JoinPage() {
   const navigate = useNavigate();
@@ -23,36 +14,7 @@ export function JoinPage() {
   const setSession = useGameStore((state) => state.setSession);
   const [roomCode, setRoomCode] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const copy =
-    locale === "en"
-      ? {
-          title: "Join a room",
-          subtitle: "The first player in a room becomes the lobby host.",
-          roomCode: "Room code",
-          nickname: "Nickname",
-          nicknamePlaceholder: "Your nickname",
-          connecting: "Joining...",
-          submit: "Enter the room",
-          publicRooms: "Public rooms",
-          players: "players",
-          use: "Use",
-          locked: "Locked",
-          joined: "Joined room.",
-        }
-      : {
-          title: "Rejoindre une room",
-          subtitle: "Le premier joueur de la room devient host du lobby.",
-          roomCode: "Code room",
-          nickname: "Pseudo",
-          nicknamePlaceholder: "Ton pseudo",
-          connecting: "Connexion...",
-          submit: "Entrer dans la room",
-          publicRooms: "Rooms publiques",
-          players: "joueurs",
-          use: "Utiliser",
-          locked: "Locked",
-          joined: "Room rejointe.",
-        };
+  const copy = getJoinCopy(locale);
   usePageSeo({
     title: locale === "en" ? "Join an anime quiz room | Kwizik" : "Rejoindre une room anime | Kwizik",
     description:
@@ -91,7 +53,7 @@ export function JoinPage() {
       });
     },
     onError: (error) => {
-      notify.error(joinErrorMessage(error, locale), {
+      notify.error(getJoinErrorMessage(error, locale), {
         key: "join-page:join:error",
       });
     },
@@ -141,7 +103,7 @@ export function JoinPage() {
               <div>
                 <strong>{room.roomCode}</strong>
                 <p>
-                  {room.state} - {room.playerCount} {copy.players}
+                  {formatJoinRoomState(room.state, locale)} - {room.playerCount} {copy.players}
                 </p>
               </div>
               <button

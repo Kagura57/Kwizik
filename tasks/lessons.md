@@ -1,5 +1,12 @@
 # Lessons
 
+## 2026-03-17
+
+- Quand un utilisateur signale qu'un round montrait deja le mauvais anime pour la musique en cours, ne pas partir sur un scenario de transition entre reveal et round suivant; traiter d'abord le bug comme une incoherence interne au meme round.
+- Quand l'utilisateur dit qu'il n'y a aucune contrainte de delai et veut que le SEO soit "bien fait", ne pas cadrer la recommandation autour d'un gain rapide ou d'un refresh minimal; requalifier vers une architecture SEO plus durable, quitte a proposer une landing dediee et un enrichissement de contenu.
+- Quand l'utilisateur dit qu'il a installe de nouveaux skills et demande de les prendre en compte, verifier immediatement l'inventaire local des skills disponibles avant de continuer, puis integrer explicitement ceux qui sont pertinents dans la suite du travail.
+- Quand une refonte de page ajoute plusieurs cartes de synthese, verifier explicitement qu'aucune ne repete la meme information avec une autre etiquette; chaque carte de hero doit apporter une donnee distincte ou une action differente.
+
 ## 2026-03-13
 
 - Quand l'utilisateur dit que la disposition d'une page est "desastreuse", ne pas se limiter a corriger un bloc isole; reevaluer la composition complete (hero, hierarchy, grid, density, breathing room, CTA, responsive balance) avant de proposer un redesign.

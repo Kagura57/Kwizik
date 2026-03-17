@@ -1476,7 +1476,7 @@ describe("RoomStore gameplay progression", () => {
         playingMs: 20,
         revealMs: 5,
         leaderboardMs: 5,
-        maxRounds: 1,
+        maxRounds: 3,
       },
     });
 
@@ -1830,7 +1830,128 @@ describe("RoomStore gameplay progression", () => {
     const lobby = store.roomState(created.roomCode);
     expect(lobby?.state).toBe("waiting");
     expect(lobby?.players).toHaveLength(2);
-    expect(lobby?.categoryQuery).toBe("anilist:linked:union");
+    expect(lobby?.sourceMode).toBe("public_playlist");
+    expect(lobby?.categoryQuery).toBe("popular hits");
+    expect(lobby?.readyCount).toBe(0);
+  });
+
+  it("preserves configured room settings across replay", async () => {
+    let nowMs = 0;
+    const store = new RoomStore({
+      now: () => nowMs,
+      getTrackPool: async () => FIXTURE_TRACKS,
+      config: {
+        countdownMs: 5,
+        playingMs: 20,
+        revealMs: 5,
+        leaderboardMs: 5,
+        maxRounds: 1,
+      },
+    });
+    const created = store.createRoom();
+    const host = store.joinRoom(created.roomCode, "Host");
+    expect(host.status).toBe("ok");
+    if (host.status !== "ok") return;
+
+    expect(
+      store.setRoomPublicPlaylist(created.roomCode, host.value.playerId, {
+        id: "3155776842",
+        name: "Anime Hits",
+        trackCount: 42,
+        sourceQuery: "deezer:playlist:3155776842",
+      }),
+    ).toMatchObject({ status: "ok", sourceMode: "public_playlist" });
+    expect(store.setRoomThemeMode(created.roomCode, host.value.playerId, "ed_only")).toMatchObject({
+      status: "ok",
+      mode: "ed_only",
+    });
+    expect(store.setRoomDifficultyFilter(created.roomCode, host.value.playerId, "hard")).toMatchObject({
+      status: "ok",
+      filter: "hard",
+    });
+    expect(
+      store.setRoomContentFilters(created.roomCode, host.value.playerId, {
+        decades: [2010],
+        genres: ["Action"],
+      }),
+    ).toMatchObject({
+      status: "ok",
+      contentFilters: { decades: [2010], genres: ["Action"] },
+    });
+    expect(store.setRoomAnswerMode(created.roomCode, host.value.playerId, "text_only")).toMatchObject({
+      status: "ok",
+      mode: "text_only",
+    });
+    expect(
+      store.setRoomLivesMode(created.roomCode, host.value.playerId, {
+        livesMode: true,
+        maxLives: 2,
+      }),
+    ).toMatchObject({
+      status: "ok",
+      livesMode: true,
+      maxLives: 2,
+    });
+    expect(
+      store.setRoomRoundConfig(created.roomCode, host.value.playerId, {
+        maxRounds: 2,
+        playingMs: 7_000,
+        revealMs: 4_000,
+      }),
+    ).toMatchObject({
+      status: "ok",
+      config: { maxRounds: 2, playingMs: 7_000, revealMs: 4_000 },
+    });
+
+    store.setPlayerReady(created.roomCode, host.value.playerId, true);
+    await store.startGame(created.roomCode, host.value.playerId);
+
+    for (let step = 0; step < 10; step += 1) {
+      nowMs += 8_000;
+      const snapshot = store.roomState(created.roomCode);
+      if (snapshot?.state === "results") break;
+    }
+    expect(store.roomState(created.roomCode)?.state).toBe("results");
+
+    const replay = store.replayRoom(created.roomCode, host.value.playerId);
+    expect(replay).toMatchObject({
+      status: "ok",
+      state: "waiting",
+      categoryQuery: "deezer:playlist:3155776842",
+    });
+
+    const lobby = store.roomState(created.roomCode);
+    expect(lobby).toMatchObject({
+      state: "waiting",
+      sourceMode: "public_playlist",
+      categoryQuery: "deezer:playlist:3155776842",
+      answerMode: "text_only",
+      livesMode: true,
+      maxLives: 2,
+      roomRoundConfig: {
+        maxRounds: 2,
+        playingMs: 7_000,
+        revealMs: 4_000,
+      },
+      sourceConfig: {
+        mode: "public_playlist",
+        themeMode: "ed_only",
+        difficultyFilter: "hard",
+        contentFilters: {
+          decades: [2010],
+          genres: ["Action"],
+        },
+        publicPlaylist: {
+          provider: "deezer",
+          id: "3155776842",
+          name: "Anime Hits",
+          trackCount: 42,
+          sourceQuery: "deezer:playlist:3155776842",
+          selectedByPlayerId: host.value.playerId,
+        },
+      },
+    });
+    expect(lobby?.players[0]?.lives).toBe(2);
     expect(lobby?.readyCount).toBe(0);
   });
 

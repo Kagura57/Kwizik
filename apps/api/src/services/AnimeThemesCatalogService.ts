@@ -54,7 +54,18 @@ function clampResolution(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.round(value)) : null;
 }
 
-function safeVideoKey(input: {
+function normalizeVideoKeyFragment(value: string | null | undefined) {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed.length <= 0) return null;
+  const sanitized = trimmed
+    .replace(/[^A-Za-z0-9_.-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-_.]+|[-_.]+$/g, "");
+  if (sanitized.length <= 0) return null;
+  return sanitized.slice(0, 120);
+}
+
+export function buildAnimeThemesVideoKey(input: {
   animeId: string;
   themeType: "OP" | "ED";
   sequence: number | null;
@@ -62,9 +73,12 @@ function safeVideoKey(input: {
   filename: string | null;
   index: number;
 }) {
-  if (input.basename && input.basename.trim().length > 0) return input.basename.trim();
-  if (input.filename && input.filename.trim().length > 0) return input.filename.trim();
+  const upstreamKey =
+    normalizeVideoKeyFragment(input.basename) ?? normalizeVideoKeyFragment(input.filename);
   const seq = input.sequence ?? 0;
+  if (upstreamKey) {
+    return `${input.animeId}-${input.themeType}${seq}-${upstreamKey}`;
+  }
   return `${input.animeId}-${input.themeType}${seq}-v${input.index}`;
 }
 
@@ -265,7 +279,7 @@ export async function refreshAnimeThemesCatalog(input?: { maxPages?: number }) {
             localIndex += 1;
             const webmUrl = video.link?.trim() ?? "";
             if (!webmUrl) continue;
-            const key = safeVideoKey({
+            const key = buildAnimeThemesVideoKey({
               animeId: String(animeIdRaw),
               themeType,
               sequence: themeNumber,

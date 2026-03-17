@@ -2,6 +2,7 @@ import { MouseEvent, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { Toaster } from "sonner";
+import { getRootCopy } from "../i18n/copy/root";
 import { DEFAULT_LOCALE, localizedPath, switchLocalePath } from "../i18n/locale";
 import { useOptionalLocale } from "../i18n/useLocale";
 import { getAuthSession, leaveRoom as leaveRoomApi, signOutAccount } from "../lib/api";
@@ -29,32 +30,7 @@ export function RootLayout() {
   const settingsPath = localizedPath(activeLocale, "/settings");
   const authPath = localizedPath(activeLocale, "/auth");
   const switchLanguagePath = switchLocalePath(pathname, otherLocale);
-  const copy =
-    activeLocale === "en"
-      ? {
-          home: "Home",
-          settings: "Settings",
-          signIn: "Sign in",
-          signOut: "Sign out",
-          signingOut: "Signing out...",
-          signOutSuccess: "Signed out.",
-          signOutError: "Unable to sign out right now.",
-          subtitle: "Live Anime Blind Test",
-          meta: "Create a room, join with a code, and launch the match live.",
-          languageLabel: "FR",
-        }
-      : {
-          home: "Accueil",
-          settings: "Paramètres",
-          signIn: "Connexion",
-          signOut: "Déconnexion",
-          signingOut: "Déconnexion...",
-          signOutSuccess: "Déconnexion effectuée.",
-          signOutError: "Déconnexion impossible pour le moment.",
-          subtitle: "Live Blindtest Arena",
-          meta: "Crée une room, rejoins en un code, et lance la partie en direct.",
-          languageLabel: "EN",
-        };
+  const copy = getRootCopy(activeLocale);
 
   const authSessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -147,7 +123,7 @@ export function RootLayout() {
           gap={10}
           offset={20}
           mobileOffset={16}
-          containerAriaLabel="Notifications"
+          containerAriaLabel={copy.notifications}
           toastOptions={{
             classNames: {
               toast: "kwizik-toast",
@@ -176,6 +152,7 @@ export function RootLayout() {
         <Link className="brand" to={homePath} onClick={onRoomHomeClick}>
           <img className="brand-lockup" src="/logo.svg" alt="Kwizik" />
         </Link>
+        <div id="room-topbar-status-slot" className="room-topbar-status-slot" aria-live="polite" />
         <Link className="ghost-btn" to={homePath} onClick={onRoomHomeClick}>
           {copy.home}
         </Link>

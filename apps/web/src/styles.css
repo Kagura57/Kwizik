@@ -110,17 +110,64 @@ a {
 .room-topbar {
   width: calc(100% - 36px);
   margin: 10px auto 0;
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--panel-strong);
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px 10px;
 }
 
 .room-topbar .brand {
   font-size: inherit;
+}
+
+.room-topbar > .ghost-btn {
+  margin-left: auto;
+}
+
+.room-topbar-status-slot {
+  flex: 1 1 420px;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.room-topbar-status-slot:empty {
+  display: none;
+}
+
+.room-topbar-status {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.room-topbar-state-pill {
+  min-width: 88px;
+  padding: 4px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  display: grid;
+  gap: 1px;
+}
+
+.room-topbar-state-pill span {
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.room-topbar-state-pill strong {
+  font-size: 0.8rem;
+  line-height: 1.1;
 }
 
 .topbar {
@@ -1562,11 +1609,23 @@ select option {
   min-height: calc(100vh - 90px);
   padding: 18px;
   display: grid;
-  gap: 14px;
+  gap: 10px;
   background:
     radial-gradient(circle at 8% 14%, rgba(255, 140, 55, 0.2), transparent 34%),
     radial-gradient(circle at 88% 10%, rgba(54, 214, 180, 0.18), transparent 32%),
     linear-gradient(160deg, var(--bg-0), var(--bg-1) 48%, var(--bg-2));
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .room-scene-header {
@@ -1583,18 +1642,42 @@ select option {
   align-items: end;
 }
 
-.live-status-bar {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 16px;
-  padding: 4px 8px;
-  background:
-    radial-gradient(circle at 12% 24%, rgba(255, 140, 55, 0.12), transparent 30%),
-    radial-gradient(circle at 84% 24%, rgba(54, 214, 180, 0.1), transparent 26%),
-    linear-gradient(180deg, rgba(7, 12, 22, 0.98), rgba(8, 14, 25, 0.9));
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
+.room-scene-header.lobby {
+  padding: 12px 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 12px;
   align-items: center;
+}
+
+.room-scene-header.lobby .room-scene-copy {
+  gap: 4px;
+  max-width: 34ch;
+}
+
+.room-scene-header.lobby .room-scene-title {
+  font-size: clamp(1.35rem, 2.4vw, 2rem);
+}
+
+.room-scene-header.lobby .panel-copy {
+  display: none;
+}
+
+.room-scene-header.lobby .room-scene-stats {
+  width: fit-content;
+  grid-template-columns: repeat(4, minmax(110px, max-content));
+  gap: 6px;
+  justify-content: end;
+}
+
+.room-scene-header.lobby .room-scene-stat {
+  padding: 7px 10px;
+  border-radius: 12px;
+  gap: 1px;
+}
+
+.live-status-bar {
+  display: grid;
+  justify-items: start;
 }
 
 .live-status-copy {
@@ -1628,19 +1711,23 @@ select option {
 }
 
 .live-status-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .live-status-stats .room-scene-stat {
+  min-width: 108px;
   padding: 4px 8px;
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.035);
+  border-radius: 10px;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .live-status-bar.reveal-focus {
-  padding: 3px 7px;
+  padding: 0;
 }
 
 .live-status-bar.reveal-focus .live-status-copy {
@@ -1648,11 +1735,11 @@ select option {
 }
 
 .live-status-bar.reveal-focus .live-status-stats {
-  gap: 4px;
+  gap: 6px;
 }
 
 .live-status-bar.reveal-focus .room-scene-stat {
-  padding: 4px 7px;
+  padding: 3px 7px;
 }
 
 .room-scene-copy {
@@ -2194,6 +2281,201 @@ select option {
   margin-top: 4px;
 }
 
+.settings-page {
+  display: grid;
+  gap: 18px;
+}
+
+.settings-hero {
+  padding: clamp(20px, 2.4vw, 28px);
+  gap: 18px;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(255, 140, 55, 0.18), transparent 28%),
+    radial-gradient(circle at 86% 14%, rgba(54, 214, 180, 0.14), transparent 26%),
+    linear-gradient(180deg, rgba(7, 12, 22, 0.98), rgba(8, 14, 25, 0.9));
+}
+
+.settings-hero-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-guest-card,
+.settings-account-row,
+.settings-summary-grid,
+.settings-layout,
+.settings-main,
+.settings-side {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-guest-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-guest-copy,
+.settings-account-chip,
+.settings-summary-item {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-guest-copy h3,
+.settings-card-head h3 {
+  margin: 2px 0 0;
+}
+
+.settings-account-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-account-chip,
+.settings-summary-item {
+  min-height: 100%;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.settings-account-chip strong,
+.settings-summary-item strong,
+.settings-stat-list dd {
+  font-size: 1.04rem;
+  line-height: 1.25;
+  color: #f6fbff;
+}
+
+.settings-account-chip span:last-child,
+.settings-summary-item span:last-child {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.settings-layout {
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.92fr);
+  align-items: start;
+}
+
+.settings-card {
+  gap: 12px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.settings-card-primary {
+  border-color: rgba(54, 214, 180, 0.26);
+  background:
+    radial-gradient(circle at top right, rgba(54, 214, 180, 0.12), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.settings-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.settings-card-head h3 {
+  font-size: clamp(1.15rem, 1.5vw, 1.35rem);
+}
+
+.settings-field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-field span {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.settings-segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-segment {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  background: transparent;
+  color: rgba(232, 240, 255, 0.84);
+  font-weight: 700;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.settings-segment:hover:not(:disabled) {
+  border-color: rgba(110, 229, 198, 0.26);
+  background: rgba(255, 255, 255, 0.035);
+  transform: translateY(-1px);
+}
+
+.settings-segment.is-active {
+  border-color: rgba(54, 214, 180, 0.42);
+  background: rgba(54, 214, 180, 0.16);
+  color: #d9fff3;
+}
+
+.settings-segment:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.settings-stat-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.settings-stat-list div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-stat-list dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.settings-stat-list dd {
+  margin: 0;
+}
+
 .provider-link-card {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
@@ -2229,8 +2511,10 @@ select option {
   font-size: 0.88rem;
   line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 
 .anilist-library-status {
@@ -2804,13 +3088,19 @@ select option {
   .home-editorial-grid,
   .room-scene-header,
   .live-status-bar,
-  .lobby-shell {
+  .lobby-shell,
+  .settings-layout,
+  .settings-summary-grid {
     grid-template-columns: 1fr;
   }
 
   .home-story-grid,
   .home-signal-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-account-row {
+    grid-template-columns: 1fr;
   }
 
   .home-public-room-list li {
@@ -2855,6 +3145,24 @@ select option {
     gap: 6px;
   }
 
+  .room-scene-header.lobby {
+    align-items: start;
+  }
+
+  .room-scene-header.lobby .room-scene-stats,
+  .live-status-stats {
+    width: 100%;
+  }
+
+  .room-scene-header.lobby .room-scene-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .live-status-stats .room-scene-stat {
+    flex: 1 1 calc(50% - 3px);
+    min-width: 0;
+  }
+
   html.game-active,
   html.game-active body {
     height: auto;
@@ -2891,6 +3199,16 @@ select option {
 
   .room-topbar {
     width: calc(100% - 24px);
+  }
+
+  .room-topbar-status-slot {
+    order: 3;
+    flex: 1 0 100%;
+    justify-content: flex-start;
+  }
+
+  .room-topbar-status {
+    justify-content: flex-start;
   }
 }
 
@@ -2937,6 +3255,25 @@ select option {
   .home-room-meta {
     display: grid;
     gap: 6px;
+  }
+
+  .settings-hero,
+  .settings-card,
+  .settings-guest-card {
+    padding: 16px;
+  }
+
+  .settings-guest-card,
+  .settings-segmented-control {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-card-head {
+    align-items: start;
+  }
+
+  .settings-card-head .provider-badge {
+    width: fit-content;
   }
 
   .home-room-actions {

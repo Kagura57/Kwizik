@@ -1,3 +1,210 @@
+# Replay Room Settings Preservation
+
+- [x] Confirm exactly which room settings are lost on replay and where replay resets them.
+- [x] Check in on the implementation direction before editing code.
+- [x] Preserve room configuration during replay while still resetting gameplay-only state.
+- [x] Add regression coverage for replay with non-default room settings.
+- [x] Verify with targeted API tests and document the review.
+
+## Review
+
+- Investigation:
+  - `apps/api/src/services/RoomStore.ts` `replayRoom()` currently resets lobby/gameplay state, but also overwrites room configuration fields such as `themeMode`, `difficultyFilter`, `contentFilters`, `answerMode`, `livesMode`, `maxLives`, `roomRoundConfig`, and `publicPlaylistSelection`.
+  - The same function only preserves `random_classic`; every other replay falls back to `anilist_union`, so replay can also lose `players_liked` and `public_playlist` source selection.
+  - `apps/web/src/routes/room/$roomCode/play.tsx` already has a local remembered-settings restore path, which is a client-side fallback and not a reliable source of truth for room state after replay.
+- Implementation:
+  - `apps/api/src/services/RoomStore.ts` `replayRoom()` now clears transient gameplay state only and no longer rewrites the persisted room configuration during the return to lobby.
+  - The replay flow now preserves the active source selection, playlist selection, theme mode, difficulty, content filters, answer mode, lives config, and round timings/counts already stored on the room session.
+  - `apps/api/tests/room-store.spec.ts` now asserts both the basic replay lobby flow and a non-default replay configuration scenario.
+- Verification:
+  - `bun test apps/api/tests/room-store.spec.ts -t "replay"` ✅ PASS
+  - `bun test apps/api/tests/room-store.spec.ts` ⚠️ replay coverage passes, but the full file still contains an unrelated existing failure: `downgrades MCQ to text when coherent distractors are insufficient`.
+
+# Anime Reveal / Clip Mismatch
+
+- [x] Review project lessons, recent MCQ/anime commits, and the round generation/reveal code paths.
+- [ ] Confirm whether the mismatch is caused by stale frontend anime video playback across round transitions or by backend round payload inconsistency.
+- [ ] Propose the minimal robust fix and get approval before implementation.
+- [ ] Implement the fix with regression coverage on the exact mismatch path.
+- [ ] Verify with targeted tests and document the result.
+
+## Review
+
+- Initial backend inspection shows `media`, MCQ `choices`, answer checking, and `latestReveal` are all intended to derive from the same `session.trackPool[round - 1]` entry inside `apps/api/src/services/RoomStore.ts`.
+- Current coverage is strong on MCQ distractor quality and anime title normalization, but weak on one critical path: no regression currently proves that the displayed reveal metadata and the rendered anime video remain aligned across a round transition in the real `/play` flow.
+- Current frontend coverage checks that anime playback continues into reveal, but it does not check a cross-round transition where the video source must switch cleanly while the reveal payload also changes.
+- The most plausible remaining causes are:
+  - stale anime video playback on the frontend while a newer snapshot/reveal payload is already displayed;
+  - or a backend payload/data integrity issue that current tests do not assert explicitly.
+
+# Room Topbar State Fusion
+
+- [x] Remove the separate top room header and merge state pills into the shared `room-topbar`.
+- [x] Keep the same fused pattern in both lobby and live gameplay.
+- [x] Tighten the topbar styling so gameplay starts higher with much less empty space.
+- [x] Verify with route tests and a web build, then document the result.
+
+## Review
+
+- Root cause:
+  - the room layout still stacked two header layers: the shared app topbar, then a separate room-state banner;
+  - even after earlier compaction passes, that second layer still kept too much empty vertical chrome in both lobby and live.
+- Implementation delivered:
+  - `apps/web/src/routes/__root.tsx` now exposes a dedicated status slot inside the shared `room-topbar`;
+  - `apps/web/src/routes/room/$roomCode/play.tsx` now renders the room code / round / ready / phase pills into that slot via a portal;
+  - `apps/web/src/routes/room/$roomCode/play.tsx` removes the old visible top room header in both lobby and live and keeps only an `sr-only` page heading for structure;
+  - `apps/web/src/styles.css` tightens the topbar padding, adds compact pill styling, and moves the fused status row below the brand/actions on narrow screens.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright snapshot on `http://127.0.0.1:5173/fr/room/S9RP5Z/play` confirms the state pills now sit inside the shared topbar with no second header band ✅ PASS
+- Verification limit:
+  - the local route used for browser inspection returned realtime/API `404` and auth `401`, so the visual browser check validated structure and vertical density, not live backend-connected gameplay state.
+
+# App-Wide Copy Review
+
+- [x] Inventory every user-facing copy surface across the web app and group them by route and state.
+- [x] Validate the rewrite direction for both supported locales before implementation.
+- [x] Rewrite awkward, long, or overly prominent UI copy with a shorter and more consistent product voice.
+- [x] Keep terminology aligned across home, auth, settings, join, and room flows.
+- [x] Verify the updated copy in route tests and a production build, then document review notes.
+
+## Review
+
+- Scope delivered:
+  - route-local copy was centralized into dedicated modules under `apps/web/src/i18n/copy/`;
+  - the main surfaces were rewired to use those modules: `__root`, `index`, `join`, `auth`, `settings`, `room/$roomCode/play`, `room/$roomCode/view`;
+  - route-specific helpers for labels and frontend-authored error/success text were moved alongside the copy layer where practical.
+- Writing pass delivered:
+  - shortened long helper text, hero copy, lobby copy, settings guidance, and room status text;
+  - normalized recurring product terms and action labels across `fr` and `en`;
+  - kept the app vocabulary (`room`, `host`, `AniList`, `playlist`, `OP/ED`) while removing awkward phrasing.
+- Documentation:
+  - design saved to `docs/plans/2026-03-17-app-copy-centralization-design.md`;
+  - implementation plan saved to `docs/plans/2026-03-17-app-copy-centralization-implementation-plan.md`.
+- Verification:
+  - `bun test apps/web/src/routes` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+- Residual risk:
+  - some phrasing choices are now centralized but still subjective; the architecture is in place, so future tone tuning is now low-risk and localized to the copy modules.
+
+# Settings Page UX/UI Refresh
+
+- [x] Review relevant lessons, project instructions, current skills, and the existing `settings` implementation.
+- [x] Ask one clarifying question to lock the target direction for the settings refresh.
+- [x] Propose 2-3 redesign approaches with trade-offs and a recommendation.
+- [x] Present the design for the settings page refresh and get approval before implementation.
+- [x] Write the approved design to `docs/plans/`.
+- [x] Create the implementation plan after design approval.
+- [x] Implement the refreshed settings layout and microcopy in `apps/web/src/routes/settings.tsx`.
+- [x] Add dedicated settings page styling in `apps/web/src/styles.css`.
+- [x] Add targeted route coverage for the refreshed settings page.
+- [x] Verify with route tests, web build, and responsive checks.
+
+## Review
+
+- Current `apps/web/src/routes/settings.tsx` is functionally complete but visually reads as a stack of generic utility cards inside `single-panel`.
+- The main opportunities are stronger hierarchy, clearer account vs AniList separation, more actionable sync feedback, and a less back-office-feeling layout on desktop and mobile.
+- Design phase intentionally not skipped: this request combines visual redesign, interaction cleanup, and copy refinement, so the target UX needs to be validated before implementation.
+- Design approved with a `hybrid` direction and an `actions first` priority.
+- Design doc saved to `docs/plans/2026-03-17-settings-page-refresh-design.md`.
+- Implementation plan saved to `docs/plans/2026-03-17-settings-page-refresh-implementation-plan.md`.
+- Implementation delivered:
+  - `apps/web/src/routes/settings.tsx` now uses a dedicated summary header, an action-first main column, and a secondary monitoring rail instead of the previous flat utility stack.
+  - `apps/web/src/i18n/copy/settings.ts` centralizes the refreshed settings microcopy and CTA/status helper logic for both locales.
+  - `apps/web/src/styles.css` now gives settings its own visual system and responsive layout while staying aligned with the app shell.
+  - `apps/web/src/routes/settings.spec.tsx` covers the new settings copy/status helper behavior that drives the refreshed UI states.
+- Verification:
+  - `bun test apps/web/src/routes/settings.spec.tsx` ✅ PASS
+  - `bun test apps/web/src/routes apps/web/src/i18n/locale.spec.ts` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+  - Playwright browser check on `http://127.0.0.1:5173/en/settings` desktop + mobile guest state ✅ PASS
+- Verification limit:
+  - signed-in browser verification could not be completed locally because `/api/auth/get-session` returns `500` in the current dev environment; the signed-in state was instead covered by route-level logic tests and build validation.
+
+# App-Wide Copy And SEO Review
+
+- [x] Inventory the newly available copy and SEO skills relevant to this rewrite.
+- [x] Explore where user-facing copy lives across the application.
+- [ ] Ask one clarifying question to lock scope and editorial direction.
+- [ ] Propose 2-3 rewrite strategies with trade-offs and a recommendation.
+- [ ] Present the design for the app-wide copy pass and get approval.
+- [ ] Write the approved design to `docs/plans/`.
+- [ ] Create the implementation plan after design approval.
+
+## Review
+
+- Detected locally relevant skills: `ux-writing`, `microcopy`, `ux-copy`, and `seo-audit`.
+- Initial codebase scan shows a large amount of user-facing copy concentrated in `apps/web/src/routes`, with substantial room/lobby/gameplay text and SEO/public-page metadata in `apps/web/index.html` plus route-level copy objects.
+- Design phase intentionally not skipped: this rewrite touches tone, UX writing, and SEO-facing text across the product, so the scope and editorial policy need to be locked before implementation.
+
+# Skill Search For App Copy Review
+
+- [x] Clarify the text-quality problem to target the right skill category.
+- [x] Search for skills related to UX writing, copy review, tone, and content design.
+- [x] Compare the best matches against the need to shorten and normalize in-app copy.
+- [x] Document the recommendation and any fallback if no precise skill exists.
+- [x] Install `ux-writing` and `microcopy`, then verify they are available locally.
+
+## Review
+
+- Need interpreted as an in-app copy quality pass: awkward phrasing, overly long labels, and text that feels too prominent in the UI point more to UX writing / microcopy than generic marketing copywriting.
+- Best match found with `find-skills`: `anthropics/knowledge-work-plugins@ux-writing`, which is the strongest fit for reviewing interface text quality and consistency across the app.
+- Strong secondary option: `lobehub/lobehub@microcopy`, better if the scope is very specifically buttons, helper text, placeholders, toasts, and other short UI strings.
+- Less relevant matches like generic `copywriting` or `content-strategy` skew too much toward marketing/editorial content rather than product UI text.
+- Installation result:
+  - `ux-writing` installed successfully from `owl-listener/designer-skills@ux-writing`;
+  - `microcopy` installed successfully from `lobehub/lobehub@microcopy`;
+  - `anthropics/knowledge-work-plugins@ux-writing` from the search result was not a real installable skill name in that repo, so `ux-copy` was installed from the same repo as the closest matching complementary skill.
+- Local verification passed: `/home/bboime/.agents/skills/ux-writing/SKILL.md`, `/home/bboime/.agents/skills/microcopy/SKILL.md`, and `/home/bboime/.agents/skills/ux-copy/SKILL.md` are all present.
+
+# Room Live Header Compaction
+
+- [x] Confirm which live-room container still reads as oversized on the current `/play` layout.
+- [x] Remove the full-width "hero" treatment from the active live status strip so it becomes a compact stats row.
+- [x] Tighten the stat pills a bit more so the top chrome stops stealing vertical space.
+- [x] Verify with targeted web checks and document the result.
+
+## Review
+
+- Root cause: the top room chrome still read like a wide header surface instead of a utility strip. In the current workspace the active live state was already fairly tight, but the waiting-room header was still using the old hero layout, and the live strip still occupied the full row visually.
+- Fix delivered:
+  - `apps/web/src/styles.css` now compacts `.room-scene-header.lobby` into a tighter two-zone header with a smaller title, reduced stat-card padding, and no descriptive filler copy.
+  - `apps/web/src/styles.css` now turns `.live-status-bar` into a compact stat-pill row instead of a full-width framed band, with responsive wrapping on smaller screens.
+- Verification:
+  - `bun test apps/web/src/routes apps/web/src/routes/room-play-anime.spec.tsx` ✅ PASS
+  - `cd apps/web && bun run build` ✅ PASS
+
+# Anime Reveal / Media Mismatch Investigation
+
+- [x] Review relevant lessons, task docs, and the round generation / reveal code paths.
+- [x] Identify the most likely root cause for a reveal showing one anime while the video/audio belongs to another.
+- [x] Validate the correction scope and preferred fix direction before implementation.
+- [x] Implement the root-cause fix in the AnimeThemes catalog / proxy path with minimal surface area.
+- [x] Add regression coverage for the mismatch scenario.
+- [x] Verify with targeted backend tests and document the result.
+
+## Review
+
+- Investigation points to the AnimeThemes catalog/proxy path rather than the round scoring path.
+- Current backend reveal assembly is internally consistent: `applyRoundResults()` builds reveal metadata and reveal media from the same `trackPool[round - 1]` entry, and MCQ choices are also generated from that same round track.
+- The strongest root-cause hypothesis is a `video_key` collision in `AnimeThemesCatalogService`: `safeVideoKey()` prefers upstream `basename` / `filename`, while `anime_theme_videos.video_key` is globally unique and reused as the proxy cache key.
+- If two AnimeThemes videos ever share the same basename/filename, the later catalog refresh can overwrite the SQL row identity for that `video_key`, while the proxy cache may still serve the older downloaded file for that same key. That would yield exactly the reported production symptom: reveal metadata for anime B, but video/audio content from anime A.
+- Approved implementation direction:
+  - make AnimeThemes `video_key` generation anime-scoped so upstream duplicate basenames can no longer collide across series;
+  - keep the fix in the backend catalog path, with regression coverage focused on key generation.
+- Implementation delivered:
+  - `apps/api/src/services/AnimeThemesCatalogService.ts` now builds anime-scoped AnimeThemes `video_key` values instead of reusing raw upstream basenames/filenames as global identifiers;
+  - repeated upstream names such as `OP.webm` can no longer collide across different anime in `anime_theme_videos` or in the proxy cache key space;
+  - the helper was made explicit as `buildAnimeThemesVideoKey()` so the collision rule is covered directly by tests.
+- Regression coverage:
+  - `apps/api/tests/animethemes-catalog-refresh.spec.ts` now proves that two different anime with the same upstream basename generate different keys;
+  - the same spec also covers the deterministic fallback when AnimeThemes omits both basename and filename.
+- Verification:
+  - `bun test apps/api/tests/animethemes-catalog-refresh.spec.ts apps/api/tests/anime-themes-proxy-cache.spec.ts apps/api/tests/quiz-routes.spec.ts` ✅ PASS
+- Operational note:
+  - production needs a new AnimeThemes catalog refresh for existing rows to receive the new key format; once refreshed, old proxy-cache files become effectively orphaned and the new keys stop reusing them.
+
 # Room Live Vertical Density Fix
 
 - [x] Confirm from the latest screenshots that the top stats cards still waste vertical space and that reveal can still clip the lower action strip.
@@ -232,11 +439,24 @@
 - `bun test apps/api/tests/anilist-random-anime-source.spec.ts apps/api/tests/room-store.spec.ts apps/api/tests/room-store-romaji.spec.ts apps/api/tests/room-routes.spec.ts apps/api/tests/room-anime-mode.spec.ts -t "random_classic|AniListRandomAnimeSource|does not use future correct tracks|deduplicates MCQ anime choices|does not reuse previously-correct tracks|coherent language distractors|gameplay progression|romaji answers|random classic"` ✅ PASS.
   - `bun test apps/web/src/routes` ✅ PASS (7 tests) apres alignement du code d'erreur `ANILIST_REMOTE_FAILURE` jusqu'au front.
   - `bun run lint` ✅ PASS avec warnings observes (`Found 49 warnings and 0 errors`); ce closeout ne prouve pas la baseline historique de ces warnings.
-  - `bun test` ⚠️ ECHEC observe; la causalite par rapport a cette tache n'a pas ete investiguee dans ce closeout:
+- `bun test` ⚠️ ECHEC observe; la causalite par rapport a cette tache n'a pas ete investiguee dans ce closeout:
     - `apps/api/tests/room-store-romaji.spec.ts` -> `RoomStore romaji answer matching > accepts text answers written in romaji for japanese tracks` (attendu `mcq`, recu `text`).
     - Erreurs Playwright d'initialisation pendant `bun test` sur `apps/web/e2e/toast-feedback.spec.ts`, `apps/web/e2e/core-flow.spec.ts`, `apps/web/e2e/live-blindtest.spec.ts` (`Playwright Test did not expect test() to be called here`).
 
 # Gameplay Scrollbar Fix
+
+# SEO Google Presentation Refresh
+
+- [x] Audit the current homepage SEO setup, crawl-facing metadata, and favicon assets served to search engines.
+- [ ] Clarify the target search-result positioning for title, description, and brand presentation.
+- [ ] Validate a minimal design for Google-facing metadata and favicon coverage.
+- [ ] Document the approved direction and implementation plan.
+- [ ] Implement the approved metadata, structured-data, and icon asset changes.
+- [ ] Verify via targeted tests/build and document the expected SERP impact.
+
+## Review
+
+- In progress.
 
 - [x] Confirm the room gameplay layout pieces that contribute to document scrolling.
 - [x] Adjust the gameplay shell so the active game fits inside the viewport without page scrollbars.

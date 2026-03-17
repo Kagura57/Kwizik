@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
+import {
+  getProjectionCopy,
+  getProjectionPlaybackErrorMessage,
+  getProjectionSnapshotErrorMessage,
+} from "../../../i18n/copy/projection";
 import { usePageSeo } from "../../../i18n/seo";
 import { useCurrentLocale } from "../../../i18n/useLocale";
 import {
@@ -48,30 +53,6 @@ function phaseProgress(phase: string | undefined, remainingMs: number | null) {
 
 function errorCode(error: unknown) {
   return error instanceof Error ? error.message : null;
-}
-
-function projectionSnapshotErrorMessage(error: unknown, locale: "fr" | "en") {
-  if (
-    error instanceof HttpStatusError &&
-    error.status === 404 &&
-    error.message === "ROOM_NOT_FOUND"
-  ) {
-    return locale === "en"
-      ? "This projection room is no longer available."
-      : "La room de projection n'est plus disponible.";
-  }
-  return locale === "en"
-    ? "Unable to synchronize the projection."
-    : "Synchronisation de la projection impossible.";
-}
-
-function projectionPlaybackErrorMessage(provider: string | null, locale: "fr" | "en") {
-  if (provider === "youtube" || provider === "animethemes") {
-    return locale === "en"
-      ? "Video playback failed on the projection screen."
-      : "Lecture video impossible sur l'ecran de projection.";
-  }
-  return locale === "en" ? "Audio error on the current track." : "Erreur audio sur la piste en cours.";
 }
 
 const WAVE_BARS = Array.from({ length: 64 }, (_, index) => ({
@@ -140,40 +121,7 @@ function formatProjectionRevealTitle(
 export function RoomViewPage() {
   const { roomCode } = useParams({ from: "/$locale/room/$roomCode/view" });
   const locale = useCurrentLocale();
-  const copy =
-    locale === "en"
-      ? {
-          projection: "Projection",
-          round: "Round",
-          playbackTitle: "Projection playback",
-          loadingVideo: "Loading video...",
-          readySync: "Projection ready, waiting for synchronized start...",
-          localPrep: "Preparing projection locally...",
-          buffering: "Buffering...",
-          ready: "ready",
-          textModeHint: "Text mode: find the title or artist",
-          reveal: "Reveal",
-          answerValidated: "Answer validated",
-          noAnswer: "No answer",
-          points: "pts",
-          revealArtworkAlt: "cover art",
-        }
-      : {
-          projection: "Projection",
-          round: "Manche",
-          playbackTitle: "Lecture projection",
-          loadingVideo: "Chargement de la video...",
-          readySync: "Projection prete, attente du depart synchronise...",
-          localPrep: "Preparation locale de la projection...",
-          buffering: "Buffering en cours",
-          ready: "pret",
-          textModeHint: "Mode texte: trouver titre ou artiste",
-          reveal: "Revelation",
-          answerValidated: "Reponse validee",
-          noAnswer: "Pas de réponse",
-          points: "pts",
-          revealArtworkAlt: "illustration",
-        };
+  const copy = getProjectionCopy(locale);
   usePageSeo({
     title: locale === "en" ? `Projection ${roomCode} | Kwizik` : `Projection ${roomCode} | Kwizik`,
     description:
@@ -304,7 +252,7 @@ export function RoomViewPage() {
         : (errorCode(error) ?? "UNKNOWN_ERROR");
     if (lastSnapshotErrorToastRef.current === signature) return;
     lastSnapshotErrorToastRef.current = signature;
-    notify.error(projectionSnapshotErrorMessage(error, locale), {
+    notify.error(getProjectionSnapshotErrorMessage(error, locale), {
       key: `room-view:snapshot:${roomCode}:${signature}`,
     });
   }, [locale, roomCode, snapshotQuery.error]);
@@ -842,7 +790,7 @@ export function RoomViewPage() {
     const key = `room-view:playback:${roomCode}:${state?.state ?? "unknown"}:${trackId}:${activeProvider ?? "preview"}`;
     if (lastPlaybackErrorToastRef.current === key) return;
     lastPlaybackErrorToastRef.current = key;
-    notify.error(projectionPlaybackErrorMessage(activeProvider, locale), { key });
+    notify.error(getProjectionPlaybackErrorMessage(activeProvider, locale), { key });
   }, [
     audioError,
     locale,
