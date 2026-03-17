@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "motion/react";
 import {
   formatSettingsSyncTimestamp,
   getAniListStatusMeta,
@@ -15,6 +16,7 @@ import {
 import { localizedPath } from "../i18n/locale";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
+import { impactHeroVariants, impactPageVariants, impactPanelVariants } from "../lib/impactMotion";
 import {
   getAccountTitlePreference,
   getAniListRecoveredLibrary,
@@ -40,6 +42,13 @@ export function SettingsPage() {
   const clearAccount = useGameStore((state) => state.clearAccount);
   const [anilistUsernameInput, setAniListUsernameInput] = useState("");
   const [usernameDirty, setUsernameDirty] = useState(false);
+  const reduceMotion = useReducedMotion();
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
   usePageSeo({
     title: locale === "en" ? "Kwizik settings" : "Parametres Kwizik",
     description:
@@ -227,8 +236,8 @@ export function SettingsPage() {
   }, [activeRun?.createdAtMs, activeRun?.message, activeRun?.runId, activeRun?.status, locale]);
 
   return (
-    <section className="settings-page">
-      <article className="panel-card settings-hero">
+    <motion.section className="settings-page" variants={impactPageVariants} {...stageMotion}>
+      <motion.article className="panel-card settings-hero" variants={impactHeroVariants}>
         <div className="settings-hero-copy">
           <p className="kicker">{copy.summaryKicker}</p>
           <h2 className="panel-title">{copy.title}</h2>
@@ -288,12 +297,12 @@ export function SettingsPage() {
             </div>
           </>
         )}
-      </article>
+      </motion.article>
 
       {user && (
-        <div className="settings-layout">
+        <motion.div className="settings-layout" variants={impactPageVariants} {...stageMotion}>
           <div className="settings-main">
-            <article className="panel-card settings-card settings-card-primary">
+            <motion.article className="panel-card settings-card settings-card-primary" variants={impactPanelVariants}>
               <div className="settings-card-head">
                 <div>
                   <p className="kicker">{copy.actionsTitle}</p>
@@ -325,9 +334,9 @@ export function SettingsPage() {
                   {updateAndSyncMutation.isPending ? copy.saving : primaryCtaLabel}
                 </button>
               </div>
-            </article>
+            </motion.article>
 
-            <article className="panel-card settings-card">
+            <motion.article className="panel-card settings-card" variants={impactPanelVariants}>
               <div className="settings-card-head">
                 <div>
                   <p className="kicker">{copy.animeQuiz}</p>
@@ -359,9 +368,9 @@ export function SettingsPage() {
                   </button>
                 ))}
               </div>
-            </article>
+            </motion.article>
 
-            <article className="panel-card settings-card">
+            <motion.article className="panel-card settings-card" variants={impactPanelVariants}>
               <div className="settings-card-head">
                 <div>
                   <p className="kicker">{copy.sessionActions}</p>
@@ -382,11 +391,11 @@ export function SettingsPage() {
                   {copy.backHome}
                 </Link>
               </div>
-            </article>
+            </motion.article>
           </div>
 
           <aside className="settings-side">
-            <article className="panel-card settings-card">
+            <motion.article className="panel-card settings-card" variants={impactPanelVariants}>
               <div className="settings-card-head">
                 <div>
                   <p className="kicker">{copy.statusTitle}</p>
@@ -414,9 +423,9 @@ export function SettingsPage() {
               {activeRun?.status === "error" && (
                 <p className="status error">{getSyncErrorMessage(activeRun.message, locale)}</p>
               )}
-            </article>
+            </motion.article>
 
-            <article className="panel-card settings-card">
+            <motion.article className="panel-card settings-card" variants={impactPanelVariants}>
               <div className="settings-card-head">
                 <div>
                   <p className="kicker">{copy.statusTitle}</p>
@@ -463,10 +472,10 @@ export function SettingsPage() {
                   ))}
                 </ul>
               )}
-            </article>
+            </motion.article>
           </aside>
-        </div>
+        </motion.div>
       )}
-    </section>
+    </motion.section>
   );
 }

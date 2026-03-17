@@ -1,10 +1,12 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "motion/react";
 import { getAuthCopy, getAuthErrorMessage } from "../i18n/copy/auth";
 import { localizedPath } from "../i18n/locale";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
+import { impactHeroVariants, impactPageVariants } from "../lib/impactMotion";
 import { signInWithEmail, signUpWithEmail } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
@@ -21,9 +23,16 @@ export function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(true);
+  const reduceMotion = useReducedMotion();
   const locationSearch = useRouterState({
     select: (state) => state.location.searchStr,
   });
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
 
   const redirectTarget = useMemo(() => {
     if (!locationSearch) return localizedPath(locale, "/settings");
@@ -88,8 +97,8 @@ export function AuthPage() {
   }
 
   return (
-    <section className="single-panel">
-      <article className="panel-card">
+    <motion.section className="single-panel" variants={impactPageVariants} {...stageMotion}>
+      <motion.article className="panel-card" variants={impactHeroVariants}>
         <h2 className="panel-title">{copy.title}</h2>
         <p className="panel-copy">{copy.subtitle}</p>
 
@@ -187,7 +196,7 @@ export function AuthPage() {
             </form>
           </>
         )}
-      </article>
-    </section>
+      </motion.article>
+    </motion.section>
   );
 }

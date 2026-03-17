@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "motion/react";
 import { createPortal } from "react-dom";
 import Select, { type InputActionMeta, type SingleValue } from "react-select";
 import { toRomaji } from "wanakana";
@@ -79,6 +80,7 @@ import {
   getEffectiveRoomStartedAtMs,
   getNextRoomTransitionAtMs,
 } from "../../../lib/liveRoundTiming";
+import { impactHeroVariants, impactPageVariants } from "../../../lib/impactMotion";
 import { useRoomRealtimeSubscription } from "../../../lib/useRoomRealtimeSubscription";
 import { useGameStore } from "../../../stores/gameStore";
 import { useRoomActionMutation } from "./useRoomActionMutation";
@@ -272,7 +274,14 @@ export function RoomPlayPage() {
   const { roomCode } = useParams({ from: "/$locale/room/$roomCode/play" });
   const navigate = useNavigate();
   const locale = useCurrentLocale();
+  const reduceMotion = useReducedMotion();
   const copy = getRoomCopy(locale);
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
   usePageSeo({
     title: locale === "en" ? `Room ${roomCode} | Kwizik` : `Room ${roomCode} | Kwizik`,
     description:
@@ -2564,12 +2573,13 @@ export function RoomPlayPage() {
   ];
 
   return (
-    <section className="blindtest-stage">
+    <motion.section className="blindtest-stage" variants={impactPageVariants} {...stageMotion}>
       {topbarStatusPortal}
       <h1 className="sr-only">{isWaitingLobby ? copy.controlRoomTitle : copy.liveArenaTitle}</h1>
 
-      <article
+      <motion.article
         className={`stage-main arena-layout${isResults ? " results-fullscreen" : ""}${isRevealFocused ? " reveal-focus" : ""}`}
+        variants={impactHeroVariants}
       >
         {!isResults && (
           <aside className="arena-side leaderboard-side room-rail">
@@ -3371,7 +3381,7 @@ export function RoomPlayPage() {
               </button>
             )}
           </aside>
-      </article>
+      </motion.article>
 
       <audio
         ref={audioRef}
@@ -3381,6 +3391,6 @@ export function RoomPlayPage() {
       >
         <track kind="captions" />
       </audio>
-    </section>
+    </motion.section>
   );
 }

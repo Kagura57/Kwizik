@@ -1,9 +1,11 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "motion/react";
 import { formatJoinRoomState, getJoinCopy, getJoinErrorMessage } from "../i18n/copy/join";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
+import { impactHeroVariants, impactPageVariants } from "../lib/impactMotion";
 import { getPublicRooms, joinRoom } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
@@ -14,7 +16,14 @@ export function JoinPage() {
   const setSession = useGameStore((state) => state.setSession);
   const [roomCode, setRoomCode] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const reduceMotion = useReducedMotion();
   const copy = getJoinCopy(locale);
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
   usePageSeo({
     title: locale === "en" ? "Join an anime quiz room | Kwizik" : "Rejoindre une room anime | Kwizik",
     description:
@@ -66,8 +75,8 @@ export function JoinPage() {
   }
 
   return (
-    <section className="single-panel">
-      <article className="panel-card">
+    <motion.section className="single-panel" variants={impactPageVariants} {...stageMotion}>
+      <motion.article className="panel-card" variants={impactHeroVariants}>
         <h2 className="panel-title">{copy.title}</h2>
         <p className="panel-copy">{copy.subtitle}</p>
 
@@ -117,7 +126,7 @@ export function JoinPage() {
             </li>
           ))}
         </ul>
-      </article>
-    </section>
+      </motion.article>
+    </motion.section>
   );
 }
