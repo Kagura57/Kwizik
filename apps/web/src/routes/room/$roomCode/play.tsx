@@ -1,8 +1,33 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import { createPortal } from "react-dom";
 import Select, { type InputActionMeta, type SingleValue } from "react-select";
 import { toRomaji } from "wanakana";
+import {
+  answerErrorMessage,
+  chatErrorMessage,
+  contentDecadesLabel,
+  contentGenresLabel,
+  difficultyFilterErrorMessage,
+  difficultyFilterLabel,
+  getRoomCopy,
+  kickErrorMessage,
+  livesPresetLabel,
+  lobbyReadyStatusLabel,
+  publicPlaylistErrorMessage,
+  readyErrorMessage,
+  replayErrorMessage,
+  roomMissingMessage,
+  roomPhaseLabel,
+  snapshotErrorMessage,
+  sourceModeErrorMessage,
+  sourceModeLabel,
+  startErrorMessage,
+  themeModeErrorMessage,
+  themeModeLabel,
+  skipErrorMessage,
+} from "../../../i18n/copy/room";
 import { usePageSeo } from "../../../i18n/seo";
 import { localizedPath } from "../../../i18n/locale";
 import { useCurrentLocale } from "../../../i18n/useLocale";
@@ -106,279 +131,11 @@ function errorCode(error: unknown) {
   return error instanceof Error ? error.message : null;
 }
 
-function roomMissingMessage(locale: "fr" | "en") {
-  return locale === "en" ? "This room is no longer available." : "Cette room n'est plus disponible.";
-}
-
-function playerSessionExpiredMessage(locale: "fr" | "en") {
-  return locale === "en"
-    ? "Your player session expired. Join the room again."
-    : "Ta session joueur a expire. Rejoins la room.";
-}
-
-function hostOnlyMessage(actionFr: string, actionEn: string, locale: "fr" | "en") {
-  return locale === "en" ? `Only the host can ${actionEn}.` : `Seul le host peut ${actionFr}.`;
-}
-
-function sourceModeLabel(mode: SourceMode, locale: "fr" | "en") {
-  if (mode === "anilist_union") return locale === "en" ? "Synced AniList" : "AniList synchronise";
-  if (mode === "random_classic") {
-    return locale === "en" ? "Classic random anime blind test" : "Blindtest aléatoire classique";
-  }
-  if (mode === "players_liked") {
-    return locale === "en" ? "Players' liked songs" : "Liked Songs joueurs";
-  }
-  return locale === "en" ? "Public playlist" : "Playlist publique";
-}
-
-function themeModeLabel(mode: ThemeMode, locale: "fr" | "en") {
-  if (mode === "op_only") return locale === "en" ? "OP only" : "OP uniquement";
-  if (mode === "ed_only") return locale === "en" ? "ED only" : "ED uniquement";
-  return locale === "en" ? "Mixed" : "Mix";
-}
-
-function difficultyFilterLabel(filter: DifficultyFilter, locale: "fr" | "en") {
-  if (filter === "easy") return locale === "en" ? "Easy" : "Facile";
-  if (filter === "medium") return locale === "en" ? "Medium" : "Moyen";
-  if (filter === "hard") return locale === "en" ? "Hard" : "Difficile";
-  return locale === "en" ? "All" : "Tous";
-}
-
-function contentDecadesLabel(filters: RoomContentFilters, locale: "fr" | "en") {
-  if (filters.decades.length <= 0) return locale === "en" ? "All" : "Toutes";
-  return CONTENT_FILTER_DECADES
-    .filter((entry) => filters.decades.includes(entry.start))
-    .map((entry) => entry.label)
-    .join(", ");
-}
-
-function contentGenresLabel(filters: RoomContentFilters, locale: "fr" | "en") {
-  if (filters.genres.length <= 0) return locale === "en" ? "All" : "Tous";
-  return filters.genres.join(", ");
-}
-
-function livesPresetLabel(preset: number, locale: "fr" | "en") {
-  if (preset <= 0) return locale === "en" ? "Off" : "Desactive";
-  return preset === 1
-    ? locale === "en"
-      ? "1 life"
-      : "1 vie"
-    : locale === "en"
-      ? `${preset} lives`
-      : `${preset} vies`;
-}
-
 function renderLivesHearts(lives: number, maxLives: number) {
   const safeLives = Math.max(0, Math.min(maxLives, lives));
   return `${"♥".repeat(safeLives)}${"♡".repeat(Math.max(0, maxLives - safeLives))}`;
 }
 
-function snapshotErrorMessage(error: unknown, locale: "fr" | "en") {
-  if (errorCode(error) === "ROOM_NOT_FOUND") {
-    return roomMissingMessage(locale);
-  }
-  return locale === "en" ? "Unable to synchronize." : "Synchronisation impossible.";
-}
-
-function startErrorMessage(error: unknown, spotifyCooldownRemainingSec: number, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "ANILIST_REMOTE_FAILURE":
-      return locale === "en"
-        ? "AniList is temporarily unavailable for this random mode. Try again in a few seconds."
-        : "AniList est temporairement indisponible pour ce mode aleatoire. Reessaie dans quelques secondes.";
-    case "NO_TRACKS_FOUND":
-      return locale === "en"
-        ? "No playable track was found right now. Try again in a few seconds."
-        : "Aucune chanson jouable trouvee pour le moment. Reessaie dans quelques secondes.";
-    case "SPOTIFY_RATE_LIMITED":
-      return locale === "en"
-        ? `Spotify is rate-limiting requests. Try again in ${spotifyCooldownRemainingSec}s.`
-        : `Spotify limite temporairement les requetes. Reessaie dans ${spotifyCooldownRemainingSec}s.`;
-    case "SOURCE_NOT_SET":
-      return locale === "en"
-        ? "The host must choose a playlist before starting."
-        : "Le host doit choisir une playlist avant de lancer.";
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "PLAYERS_LIBRARY_NOT_READY":
-      return locale === "en"
-        ? "AniList mode requires at least one player with a synced AniList library."
-        : "Le mode AniList necessite au moins un joueur avec une bibliotheque AniList synchronisee.";
-    case "HOST_ONLY":
-      return hostOnlyMessage("lancer la partie", "start the game", locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en" ? "Unable to start the game." : "Impossible de lancer la partie.";
-  }
-}
-
-function sourceModeErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "HOST_ONLY":
-      return hostOnlyMessage("changer le mode source", "change the source mode", locale);
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en"
-        ? "Unable to update the source mode."
-        : "Impossible de mettre a jour le mode source.";
-  }
-}
-
-function themeModeErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "HOST_ONLY":
-      return hostOnlyMessage("changer le mode themes", "change the theme mode", locale);
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en"
-        ? "Unable to update the theme mode."
-        : "Impossible de mettre a jour le mode themes.";
-  }
-}
-
-function difficultyFilterErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "HOST_ONLY":
-      return hostOnlyMessage("changer la difficulte", "change the difficulty", locale);
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en"
-        ? "Unable to update the difficulty."
-        : "Impossible de mettre a jour la difficulte.";
-  }
-}
-
-function publicPlaylistErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "HOST_ONLY":
-      return hostOnlyMessage("choisir la playlist publique", "choose the public playlist", locale);
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en"
-        ? "Unable to update the public playlist."
-        : "Impossible de mettre a jour la playlist publique.";
-  }
-}
-
-function readyErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "INVALID_STATE":
-      return locale === "en"
-        ? "Ready status can only be changed in the lobby."
-        : "Le statut pret se gere uniquement dans le lobby.";
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en"
-        ? "Unable to update your status."
-        : "Impossible de mettre a jour ton statut.";
-  }
-}
-
-function kickErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "HOST_ONLY":
-      return hostOnlyMessage("ejecter un joueur", "kick a player", locale);
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en" ? "Unable to kick this player." : "Impossible d'ejecter ce joueur.";
-  }
-}
-
-function replayErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "HOST_ONLY":
-      return hostOnlyMessage("relancer une partie", "restart a game", locale);
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en" ? "Unable to return to the lobby." : "Impossible de revenir au lobby.";
-  }
-}
-
-function skipErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "INVALID_STATE":
-      return locale === "en"
-        ? "Skip/Next voting is not available in this state."
-        : "Le vote Skip/Next n'est pas disponible dans cet etat.";
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en"
-        ? "Unable to record your vote right now."
-        : "Impossible d'enregistrer ton vote pour le moment.";
-  }
-}
-
-function chatErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en" ? "Unable to send the message." : "Impossible d'envoyer le message.";
-  }
-}
-
-function roomPhaseLabel(phase: string | undefined, locale: "fr" | "en") {
-  switch (phase) {
-    case "waiting":
-      return locale === "en" ? "Lobby" : "Lobby";
-    case "countdown":
-      return locale === "en" ? "Countdown" : "Compte a rebours";
-    case "loading":
-      return locale === "en" ? "Loading" : "Chargement";
-    case "playing":
-      return locale === "en" ? "Live round" : "Manche live";
-    case "reveal":
-      return locale === "en" ? "Reveal" : "Reveal";
-    case "leaderboard":
-      return locale === "en" ? "Leaderboard" : "Classement";
-    case "results":
-      return locale === "en" ? "Results" : "Resultats";
-    default:
-      return locale === "en" ? "Room" : "Room";
-  }
-}
-
-function answerErrorMessage(error: unknown, locale: "fr" | "en") {
-  switch (errorCode(error)) {
-    case "ANSWER_NOT_ACCEPTED":
-      return locale === "en"
-        ? "Answer not accepted (round expired or already locked)."
-        : "Reponse non prise en compte (round expire ou deja valide).";
-    case "PLAYER_NOT_FOUND":
-      return playerSessionExpiredMessage(locale);
-    case "ROOM_NOT_FOUND":
-      return roomMissingMessage(locale);
-    default:
-      return locale === "en" ? "Answer rejected." : "Reponse refusee.";
-  }
-}
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -474,74 +231,6 @@ function revealArtworkUrl(reveal: {
   return null;
 }
 
-function lobbyReadyStatusLabel(
-  state:
-    | {
-        allReady: boolean;
-        canStart: boolean;
-        isResolvingTracks: boolean;
-        poolBuild: {
-          status: "idle" | "building" | "ready" | "failed";
-        };
-        sourceMode: "public_playlist" | "players_liked" | "anilist_union" | "random_classic";
-        sourceConfig: {
-          publicPlaylist: {
-            sourceQuery: string;
-          } | null;
-        };
-      }
-    | null
-    | undefined,
-  isHost: boolean,
-  hasActivePlayerSeat: boolean,
-  locale: "fr" | "en",
-) {
-  if (!state?.allReady) return "";
-  if (!hasActivePlayerSeat) {
-    return locale === "en"
-      ? " · Your player session is no longer active. Join the room again."
-      : " · Ta session joueur n'est plus active. Rejoins la room.";
-  }
-  if (state.isResolvingTracks) {
-    return locale === "en" ? " · Audio sources are being prepared..." : " · Préparation audio en cours...";
-  }
-  if (!state.canStart) {
-    if (state.sourceMode === "public_playlist" && !state.sourceConfig.publicPlaylist?.sourceQuery) {
-      return isHost
-        ? locale === "en"
-          ? " · Choose a playlist to start."
-          : " · Choisis une playlist pour lancer."
-        : locale === "en"
-          ? " · Waiting for the host playlist."
-          : " · En attente de la playlist du host.";
-    }
-    if (state.sourceMode === "players_liked" || state.sourceMode === "anilist_union") {
-      return isHost
-        ? locale === "en"
-          ? " · Configure an AniList username and sync before starting."
-          : " · Configure un pseudo AniList puis synchronise pour lancer."
-        : locale === "en"
-          ? " · Waiting for the host configuration."
-          : " · En attente de la configuration du host.";
-    }
-    return "";
-  }
-  if (
-    (state.sourceMode === "players_liked" || state.sourceMode === "anilist_union") &&
-    state.poolBuild.status !== "ready"
-  ) {
-    return locale === "en"
-      ? " · Preparing the players' playlist..."
-      : " · Préparation de la playlist des joueurs en cours...";
-  }
-  return isHost
-    ? locale === "en"
-      ? " · Auto-start in progress..."
-      : " · Lancement auto en cours..."
-    : locale === "en"
-      ? " · Waiting for the host to start."
-      : " · En attente du host pour lancer.";
-}
 
 function isUnifiedPlaylistOption(value: unknown): value is UnifiedPlaylistOption {
   if (!value || typeof value !== "object") return false;
@@ -583,290 +272,7 @@ export function RoomPlayPage() {
   const { roomCode } = useParams({ from: "/$locale/room/$roomCode/play" });
   const navigate = useNavigate();
   const locale = useCurrentLocale();
-  const copy =
-    locale === "en"
-      ? {
-          liveLeaderboard: "Live leaderboard",
-          controlRoomKicker: "Control room",
-          controlRoomTitle: "Shape the next match before the music starts",
-          controlRoomBody:
-            "The lobby is where the host defines the anime source, the pace, and the answer rules while players get ready.",
-          liveArenaKicker: "Live arena",
-          liveArenaTitle: "Stay locked on the live round",
-          liveArenaBody:
-            "The media stage stays central, the leaderboard stays readable, and the room rails stay secondary.",
-          roomSnapshot: "Room snapshot",
-          playersPanel: "Players and ready status",
-          startZone: "Ready check and launch",
-          phaseLabel: "Phase",
-          startZoneBody:
-            "This is the final gate before the round starts. Everyone readies here, then the host launches the game.",
-          sourceGroup: "Source and themes",
-          sourceGroupBody: "Choose where the anime pool comes from and how openings and endings should appear.",
-          filterGroup: "Difficulty and filters",
-          filterGroupBody: "Tighten the AniList pool with popularity, decade, and genre filters.",
-          rulesGroup: "Pace and answer rules",
-          rulesGroupBody: "Set lives, rounds, timings, and the answer format players will use.",
-          round: "Round",
-          room: "Room",
-          noAnswer: "No answer",
-          answerValidated: "Answer validated",
-          points: "pts",
-          leaderboardEmpty: "The leaderboard will appear once players are present.",
-          playbackTitle: "Blind test playback",
-          loadingVideo: "Loading video...",
-          readySync: "Ready locally, waiting for room sync...",
-          warmupCheck: "Verifying local start...",
-          playbackStarted: "Playback started",
-          buffering: "Buffering...",
-          ready: "ready",
-          waitingTitle: "The host can start the game whenever they want.",
-          resolvingSources: "Resolving audio sources...",
-          preparingPlaylist: "Preparing the players' playlist...",
-          sourceModeHost: "Source mode (host)",
-          sourceAniListTitle: "Synced AniList",
-          sourceAniListBody: "Union of connected players' libraries",
-          sourceRandomTitle: "Classic random anime blind test",
-          sourceRandomBody: "Fresh global anime draw for each game",
-          sourceAniListHint: "Players' synced AniList libraries are used automatically.",
-          themeMode: "Theme mode",
-          openingsOnly: "Openings only",
-          endingsOnly: "Endings only",
-          openingsAndEndings: "Openings + Endings",
-          aniListDifficulty: "AniList difficulty",
-          easy: "Easy",
-          easyHint: "Very popular hits",
-          medium: "Medium",
-          mediumHint: "Mid-popularity titles",
-          hard: "Hard",
-          hardHint: "More niche series",
-          all: "All",
-          allHint: "No popularity filter",
-          decades: "Decades",
-          genres: "Genres",
-          livesMode: "Lives mode",
-          eliminationAtZero: "Eliminate at zero lives",
-          classicScore: "Classic scoring",
-          rounds: "Number of rounds",
-          guessDuration: "Guess duration",
-          revealDuration: "Reveal duration",
-          answerMode: "Answer mode",
-          mcq: "MCQ",
-          mcqOnly: "Multiple choice only",
-          text: "Text",
-          textOnly: "Free-text answers only",
-          mixed: "Mixed",
-          mixedHint: "Alternate MCQ / Text",
-          hostOnlyConfig: "Only the host can change the source configuration.",
-          sourceModeLabel: "Source mode",
-          playlist: "Playlist",
-          noPlaylist: "No playlist selected",
-          difficulty: "Difficulty",
-          readyToggleOn: "I'm ready",
-          readyToggleOff: "I'm not ready anymore",
-          starting: "Starting...",
-          startGame: "Start game",
-          playersReady: "Players ready",
-          player: "Player",
-          host: "Host",
-          readyStatus: "Ready",
-          waitingStatus: "Waiting",
-          kick: "Kick",
-          eliminated: "Eliminated",
-          spectator: "Spectator",
-          off: "Off",
-          openingsShort: "OP only",
-          endingsShort: "ED only",
-          revealArtworkAlt: "cover art",
-          spectatorHint: "Spectator mode active. You can follow the round without answering.",
-          answerLabel: "Answer (anime title)",
-          answerPlaceholder: "Anime title",
-          answerTypePrompt: "Type an anime title",
-          loadingAnime: "Loading anime titles...",
-          noSuggestion: "No suggestions",
-          answerSent: "Answer sent",
-          sending: "Sending...",
-          validate: "Submit",
-          waitingOthers: "Waiting for others...",
-          validation: "Validation",
-          reveal: "Reveal",
-          nextVotes: "Next votes",
-          next: "Next",
-          skip: "Skip",
-          final: "Final",
-          finalPodium: "Final podium",
-          noPlayer: "No player",
-          leaveRoom: "Leave room",
-          backLobby: "Back to lobby...",
-          replay: "Play again",
-          hostCanReplay: "The host can return everyone to the lobby.",
-          chat: "Chat",
-          noMessage: "No messages yet.",
-          message: "Message",
-          messagePlaceholder: "Write to the room...",
-          send: "Send",
-          roomLeft: "You left the room.",
-          sourceModeUpdated: "Source mode",
-          themeModeUpdated: "Theme mode",
-          configUpdateError: "Unable to update the configuration.",
-          answerModeUpdated: "Answer mode",
-          answerModeError: "Unable to change the answer mode.",
-          difficultyUpdated: "Difficulty",
-          contentFiltersUpdated: "Content filters updated.",
-          contentFiltersError: "Unable to update the content filters.",
-          livesModeError: "Unable to change lives mode.",
-          publicPlaylistUpdated: "Public playlist",
-          youAreReady: "You are ready.",
-          noLongerReady: "You are no longer ready.",
-          playerKicked: "Player kicked.",
-          returnedLobby: "Back to the lobby.",
-          settingsRestored: "Previous settings restored.",
-          settingsRestoreError: "Unable to restore the previous settings.",
-          playbackUnavailable: "Audio error: sample unavailable.",
-          themeLoadingLong: "Theme loading is taking longer than expected...",
-          themeLoadingRetry: "Theme is still loading, retrying...",
-        }
-      : {
-          liveLeaderboard: "Classement live",
-          controlRoomKicker: "Salle de controle",
-          controlRoomTitle: "Prepare la prochaine partie avant que la musique parte",
-          controlRoomBody:
-            "Le lobby sert a definir la source anime, le rythme et les regles de reponse pendant que les joueurs se preparent.",
-          liveArenaKicker: "Arena live",
-          liveArenaTitle: "Reste concentre sur la manche live",
-          liveArenaBody:
-            "La scene media reste prioritaire, le classement reste lisible, et les panneaux lateraux restent secondaires.",
-          roomSnapshot: "Resume de la room",
-          playersPanel: "Joueurs et statut de pret",
-          startZone: "Validation et lancement",
-          phaseLabel: "Phase",
-          startZoneBody:
-            "C'est la derniere zone avant le debut. Tout le monde se prepare ici, puis le host lance la partie.",
-          sourceGroup: "Source et themes",
-          sourceGroupBody: "Choisis l'origine du pool anime et la facon dont openings et endings apparaissent.",
-          filterGroup: "Difficulte et filtres",
-          filterGroupBody: "Affine le pool AniList avec popularite, decennies et genres.",
-          rulesGroup: "Rythme et regles de reponse",
-          rulesGroupBody: "Definis les vies, le nombre de rounds, les timings et le format de reponse.",
-          round: "Manche",
-          room: "Room",
-          noAnswer: "Pas de réponse",
-          answerValidated: "Reponse validee",
-          points: "pts",
-          leaderboardEmpty: "Le classement s’affiche dès que des joueurs sont présents.",
-          playbackTitle: "Lecture blind test",
-          loadingVideo: "Chargement de la video...",
-          readySync: "Pret localement, synchronisation de la room...",
-          warmupCheck: "Verification locale du demarrage...",
-          playbackStarted: "Lecture demarree",
-          buffering: "Buffering en cours",
-          ready: "pret",
-          waitingTitle: "Le host peut lancer la partie quand il le souhaite.",
-          resolvingSources: "Résolution des sources audio en cours...",
-          preparingPlaylist: "Préparation de la playlist des joueurs...",
-          sourceModeHost: "Mode source (host)",
-          sourceAniListTitle: "AniList synchronise",
-          sourceAniListBody: "Union des listes des joueurs connectés",
-          sourceRandomTitle: "Blindtest aléatoire classique",
-          sourceRandomBody: "Tirage anime global frais à chaque partie",
-          sourceAniListHint: "Les bibliotheques AniList synchronisees des joueurs sont utilisees automatiquement.",
-          themeMode: "Mode thèmes",
-          openingsOnly: "Openings uniquement",
-          endingsOnly: "Endings uniquement",
-          openingsAndEndings: "Openings + Endings",
-          aniListDifficulty: "Difficulte AniList",
-          easy: "Facile",
-          easyHint: "Hits tres populaires",
-          medium: "Moyen",
-          mediumHint: "Popularite intermediaire",
-          hard: "Difficile",
-          hardHint: "Series plus niche",
-          all: "Tous",
-          allHint: "Aucun filtre de popularite",
-          decades: "Décennies",
-          genres: "Genres",
-          livesMode: "Mode vies",
-          eliminationAtZero: "Elimination a zero vie",
-          classicScore: "Score classique",
-          rounds: "Nombre de rounds",
-          guessDuration: "Durée de devinette",
-          revealDuration: "Durée de révélation",
-          answerMode: "Mode réponse",
-          mcq: "QCM",
-          mcqOnly: "Choix multiples uniquement",
-          text: "Texte",
-          textOnly: "Réponse libre uniquement",
-          mixed: "Mixte",
-          mixedHint: "Alternance QCM / Texte",
-          hostOnlyConfig: "Seul le host peut modifier la configuration source.",
-          sourceModeLabel: "Mode source",
-          playlist: "Playlist",
-          noPlaylist: "Aucune playlist selectionnee",
-          difficulty: "Difficulte",
-          readyToggleOn: "Je suis prêt",
-          readyToggleOff: "Je ne suis plus prêt",
-          starting: "Lancement...",
-          startGame: "Lancer la partie",
-          playersReady: "Joueurs prêts",
-          player: "Joueur",
-          host: "Host",
-          readyStatus: "Prêt",
-          waitingStatus: "En attente",
-          kick: "Éjecter",
-          eliminated: "Éliminé",
-          spectator: "Spectateur",
-          off: "Desactive",
-          openingsShort: "OP uniquement",
-          endingsShort: "ED uniquement",
-          revealArtworkAlt: "illustration",
-          spectatorHint: "Mode spectateur actif. Tu peux suivre la manche sans répondre.",
-          answerLabel: "Réponse (nom de l'anime)",
-          answerPlaceholder: "Nom de l'anime",
-          answerTypePrompt: "Tape un nom d'anime",
-          loadingAnime: "Chargement des animes...",
-          noSuggestion: "Aucune suggestion",
-          answerSent: "Réponse envoyée",
-          sending: "Envoi...",
-          validate: "Valider",
-          waitingOthers: "En attente des autres...",
-          validation: "Validation",
-          reveal: "Revelation",
-          nextVotes: "Votes suivant",
-          next: "Suivant",
-          skip: "Passer",
-          final: "Final",
-          finalPodium: "Podium final",
-          noPlayer: "Aucun joueur",
-          leaveRoom: "Quitter la room",
-          backLobby: "Retour lobby...",
-          replay: "Rejouer",
-          hostCanReplay: "Le host peut relancer vers le lobby.",
-          chat: "Chat",
-          noMessage: "Aucun message pour l'instant.",
-          message: "Message",
-          messagePlaceholder: "Ecris a la room...",
-          send: "Envoyer",
-          roomLeft: "Tu as quitte la room.",
-          sourceModeUpdated: "Mode source",
-          themeModeUpdated: "Mode themes",
-          configUpdateError: "Erreur lors de la mise à jour de la configuration.",
-          answerModeUpdated: "Mode réponse",
-          answerModeError: "Erreur lors du changement de mode réponse.",
-          difficultyUpdated: "Difficulte",
-          contentFiltersUpdated: "Filtres de contenu mis a jour.",
-          contentFiltersError: "Erreur lors du changement des filtres de contenu.",
-          livesModeError: "Erreur lors du changement du mode vies.",
-          publicPlaylistUpdated: "Playlist publique",
-          youAreReady: "Tu es pret.",
-          noLongerReady: "Tu n'es plus pret.",
-          playerKicked: "Joueur ejecte.",
-          returnedLobby: "Retour au lobby.",
-          settingsRestored: "Réglages précédents restaurés.",
-          settingsRestoreError: "Impossible de restaurer les réglages précédents.",
-          playbackUnavailable: "Erreur audio: extrait indisponible.",
-          themeLoadingLong: "Chargement du theme plus long que prevu...",
-          themeLoadingRetry: "Chargement du theme toujours en cours, nouvelle tentative...",
-        };
+  const copy = getRoomCopy(locale);
   usePageSeo({
     title: locale === "en" ? `Room ${roomCode} | Kwizik` : `Room ${roomCode} | Kwizik`,
     description:
@@ -920,6 +326,7 @@ export function RoomPlayPage() {
   const [playlistOptions, setPlaylistOptions] = useState<UnifiedPlaylistOption[]>([]);
   const [hasMorePlaylists, setHasMorePlaylists] = useState(false);
   const [chatInput, setChatInput] = useState("");
+  const [topbarStatusSlot, setTopbarStatusSlot] = useState<HTMLElement | null>(null);
   const [spotifyRateLimitUntilMs, setSpotifyRateLimitUntilMs] = useState<number | null>(null);
   const [startRetryNotBeforeMs, setStartRetryNotBeforeMs] = useState<number | null>(null);
   const [phaseSkipVote, setPhaseSkipVote] = useState<{
@@ -958,6 +365,10 @@ export function RoomPlayPage() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const lastSnapshotErrorToastRef = useRef<string | null>(null);
   const lastAudioErrorToastRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setTopbarStatusSlot(document.getElementById("room-topbar-status-slot"));
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -2192,6 +1603,32 @@ export function RoomPlayPage() {
     Boolean(currentPlayer?.hasAnsweredCurrentRound) ||
     hasLockedGuessVote;
   const skipRevealDisabled = skipMutation.isPending || !session.playerId || isSpectating || hasLockedRevealVote;
+  const topbarStatusPortal =
+    topbarStatusSlot !== null
+      ? createPortal(
+          <div className="room-topbar-status" role="status" aria-label={copy.phaseLabel}>
+            <div className="room-topbar-state-pill">
+              <span>{copy.room}</span>
+              <strong>{roomCode}</strong>
+            </div>
+            <div className="room-topbar-state-pill">
+              <span>{copy.round}</span>
+              <strong>{roundLabel}</strong>
+            </div>
+            <div className="room-topbar-state-pill">
+              <span>{copy.playersReady}</span>
+              <strong>
+                {state?.readyCount ?? 0}/{state?.players.length ?? 0}
+              </strong>
+            </div>
+            <div className="room-topbar-state-pill">
+              <span>{copy.phaseLabel}</span>
+              <strong>{phaseLabel}</strong>
+            </div>
+          </div>,
+          topbarStatusSlot,
+        )
+      : null;
 
   function cancelAnimeWarmupVerification() {
     if (animeWarmupRafRef.current !== null) {
@@ -3128,58 +2565,8 @@ export function RoomPlayPage() {
 
   return (
     <section className="blindtest-stage">
-      {isWaitingLobby ? (
-        <section className="room-scene-header lobby">
-          <div className="room-scene-copy">
-            <p className="kicker">{copy.controlRoomKicker}</p>
-            <h1 className="room-scene-title">{copy.controlRoomTitle}</h1>
-            <p className="panel-copy">{copy.controlRoomBody}</p>
-          </div>
-          <div className="room-scene-stats">
-            <div className="room-scene-stat">
-              <span>{copy.room}</span>
-              <strong>{roomCode}</strong>
-            </div>
-            <div className="room-scene-stat">
-              <span>{copy.round}</span>
-              <strong>{roundLabel}</strong>
-            </div>
-            <div className="room-scene-stat">
-              <span>{copy.playersReady}</span>
-              <strong>
-                {state?.readyCount ?? 0}/{state?.players.length ?? 0}
-              </strong>
-            </div>
-            <div className="room-scene-stat">
-              <span>{copy.phaseLabel}</span>
-              <strong>{phaseLabel}</strong>
-            </div>
-          </div>
-        </section>
-      ) : (
-        <section className={`live-status-bar${isRevealFocused ? " reveal-focus" : ""}`}>
-          <div className="live-status-stats">
-            <div className="room-scene-stat">
-              <span>{copy.room}</span>
-              <strong>{roomCode}</strong>
-            </div>
-            <div className="room-scene-stat">
-              <span>{copy.round}</span>
-              <strong>{roundLabel}</strong>
-            </div>
-            <div className="room-scene-stat">
-              <span>{copy.playersReady}</span>
-              <strong>
-                {state?.readyCount ?? 0}/{state?.players.length ?? 0}
-              </strong>
-            </div>
-            <div className="room-scene-stat">
-              <span>{copy.phaseLabel}</span>
-              <strong>{phaseLabel}</strong>
-            </div>
-          </div>
-        </section>
-      )}
+      {topbarStatusPortal}
+      <h1 className="sr-only">{isWaitingLobby ? copy.controlRoomTitle : copy.liveArenaTitle}</h1>
 
       <article
         className={`stage-main arena-layout${isResults ? " results-fullscreen" : ""}${isRevealFocused ? " reveal-focus" : ""}`}

@@ -12,10 +12,12 @@ describe("room play anime mode", () => {
 
   it("keeps anime playback continuous into reveal without preloading the next animethemes track on the player page", () => {
     const file = readFileSync("apps/web/src/routes/room/$roomCode/play.tsx", "utf8");
-    expect(file).toContain("Nom de l'anime");
+    const copyFile = readFileSync("apps/web/src/i18n/copy/room.ts", "utf8");
+    expect(file).toContain("getRoomCopy(locale)");
     expect(file).toContain("media-shell");
     expect(file).toContain("anime-video-layer");
-    expect(file).toContain("Chargement de la video");
+    expect(copyFile).toContain("Titre de l'anime");
+    expect(copyFile).toContain("Chargement de la vidéo");
     expect(file).toContain("video.removeAttribute(\"src\")");
     expect(file).toContain("anilist_union");
     expect(file).toContain("ANIME_MEDIA_SOFT_RETRY_TIMEOUT_MS");
@@ -29,11 +31,11 @@ describe("room play anime mode", () => {
     expect(file).toContain("tryStartAnimeWarmup");
     expect(file).toContain("disposeAnimeVideoElement");
     expect(file).toContain("video.muted = true");
-    expect(file).toContain("Pret localement, synchronisation de la room...");
+    expect(copyFile).toContain("Prêt localement, en attente de la sync de la room...");
     expect(file).toContain("shouldKeepMediaPlaying");
     expect(file).toContain('effectivePhase === "reveal"');
     expect(file).toContain("if (!shouldKeepMediaPlaying)");
-    expect(file).toContain("Chargement du theme toujours en cours, nouvelle tentative...");
+    expect(copyFile).toContain("Le thème charge toujours. Nouvelle tentative...");
     expect(file).toContain("video.buffered.end(index)");
     expect(file).toContain("anime_video_warmup_verify_timeout");
     expect(file).toContain("anime_video_soft_reload");

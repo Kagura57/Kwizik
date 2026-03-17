@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toRomaji } from "wanakana";
+import { formatHomeRoomState, getHomeCopy, getHomeJoinErrorMessage } from "../i18n/copy/home";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
 import { createRoom, getPublicRooms, joinRoom } from "../lib/api";
@@ -15,33 +16,6 @@ function withRomajiLabel(value: string) {
   return romaji;
 }
 
-function joinErrorMessage(error: unknown, locale: "fr" | "en") {
-  if (!(error instanceof Error)) {
-    return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
-  }
-  if (error.message === "ROOM_NOT_JOINABLE") {
-    return locale === "en"
-      ? "This room is finished and no longer accepts new players."
-      : "La room est terminée et n’accepte plus de nouveaux joueurs.";
-  }
-  return locale === "en" ? "Unable to join this room." : "Impossible de rejoindre cette room.";
-}
-
-function formatRoomState(state: string, locale: "fr" | "en") {
-  switch (state) {
-    case "waiting":
-      return locale === "en" ? "Lobby open" : "Lobby ouvert";
-    case "playing":
-      return locale === "en" ? "Live match" : "Partie en cours";
-    case "results":
-      return locale === "en" ? "Results" : "Resultats";
-    case "finished":
-      return locale === "en" ? "Finished" : "Terminee";
-    default:
-      return state;
-  }
-}
-
 export function HomePage() {
   const navigate = useNavigate();
   const locale = useCurrentLocale();
@@ -53,178 +27,7 @@ export function HomePage() {
   const [joinDisplayName, setJoinDisplayName] = useState("Player One");
   const [joinRoomCode, setJoinRoomCode] = useState("");
   const [isPublicRoom, setIsPublicRoom] = useState(true);
-  const copy =
-    locale === "en"
-      ? {
-          joinTitle: "Join a room",
-          joinSubtitle: "The first player in a room becomes the lobby host.",
-          roomCode: "Room code",
-          nickname: "Nickname",
-          nicknamePlaceholder: "Your nickname",
-          joining: "Joining...",
-          enterRoom: "Enter the room",
-          createTitle: "Create a room",
-          createSubtitle: "Create a lobby in one click, choose visibility, then launch the game.",
-          syncHint:
-            "Tip: sign in, then add your AniList username in Settings to sync your anime library.",
-          visibility: "Visibility",
-          publicGame: "Public game",
-          publicGameHint: "Visible in the public list",
-          privateGame: "Private game",
-          privateGameHint: "Accessible with the room code",
-          hostHint: "The host configures the AniList mode and themes, then starts when everyone is ready.",
-          creating: "Creating...",
-          createRoom: "Create a room",
-          publicRooms: "Public rooms",
-          players: "players",
-          mode: "Mode",
-          synchronizedAniList: "Synced AniList",
-          anime: "Anime",
-          joinPublicRoom: "Join",
-          closed: "Closed",
-          roomCreated: "Room created.",
-          roomJoined: "Joined room.",
-          createError: "Unable to create the room.",
-          promptNickname: "Choose a nickname to join this room",
-          heroKicker: "Anime multiplayer rooms",
-          heroTitle: "Anime blind test rooms that go live instantly",
-          heroBody:
-            "Create a lobby, sync your anime taste, invite friends with one code, and launch a real-time opening and ending showdown directly in the browser.",
-          heroActionPrimary: "Create a live lobby",
-          heroActionSecondary: "Join with a code",
-          heroFeatureOneTitle: "Shared playback",
-          heroFeatureOneBody: "Everyone follows the same reveal rhythm with synchronized live audio.",
-          heroFeatureTwoTitle: "Public or private",
-          heroFeatureTwoBody: "Run open community rooms or keep the match invite-only for your group.",
-          heroFeatureThreeTitle: "AniList-ready",
-          heroFeatureThreeBody: "Build broader anime rounds or lean on synced AniList libraries when you want a sharper pool.",
-          heroSignalRooms: "Public rooms",
-          heroSignalJoinable: "Open to join",
-          heroSignalModes: "Playlist modes",
-          heroSignalModesValue: "Anime + AniList",
-          heroSignalAccess: "Setup",
-          heroSignalAccessValue: "Browser only",
-          consoleKicker: "Lobby console",
-          actionTitle: "Launch or join the next room",
-          actionSubtitle:
-            "One surface to jump into a running lobby or spin up your own room without losing the live-game energy.",
-          joinBlockTitle: "Join room",
-          createBlockTitle: "Create lobby",
-          joinModeHint: "Enter a room code and keep your nickname ready. The first player in becomes host.",
-          createModeHint:
-            "Open a room instantly, choose whether it should be public, then configure the anime source from the lobby.",
-          joinModeMeta: "Fastest path when someone already sent you the code.",
-          createModeMeta: "Best choice when you want to host and shape the match flow yourself.",
-          publicRoomsTitle: "Rooms you can join now",
-          publicRoomsSubtitle:
-            "A live queue of public lobbies, with just enough state and mode detail to pick the right room fast.",
-          publicRoomsCount: "listed rooms",
-          publicRoomsEmpty:
-            "No public room is open right now. Create one and it will appear here for the next players.",
-          publicRoomsKicker: "Live room feed",
-          seoH1: "Anime Blind Test Online for Multiplayer Rooms",
-          seoLead:
-            "Kwizik lets you create a live anime blind test room, challenge friends on openings and endings, and launch the game instantly in your browser.",
-          howItWorksTitle: "How Kwizik works",
-          howItWorksBody:
-            "Create a room, pick your anime source, invite players with a short code, then start a real-time blind test with shared playback and live scoring.",
-          whyTitle: "Why anime fans use Kwizik",
-          whyBody:
-            "Kwizik mixes public rooms, private lobbies, AniList-based playlists, and live multiplayer gameplay for anime quiz nights with friends or communities.",
-          faqTitle: "FAQ",
-          faqQ1: "Can I play an anime blind test with friends online?",
-          faqA1:
-            "Yes. Create a room, share the code, and everyone can join from their browser before the host starts the match.",
-          faqQ2: "Does Kwizik support anime openings and endings?",
-          faqA2:
-            "Yes. Hosts can configure the theme mode and build games around openings, endings, or mixed anime theme rounds.",
-        }
-      : {
-          joinTitle: "Rejoindre une room",
-          joinSubtitle: "Le premier joueur de la room devient host du lobby.",
-          roomCode: "Code room",
-          nickname: "Pseudo",
-          nicknamePlaceholder: "Ton pseudo",
-          joining: "Connexion...",
-          enterRoom: "Entrer dans la room",
-          createTitle: "Créer une room",
-          createSubtitle: "Crée un lobby en un clic, choisis la visibilité, puis lance la partie.",
-          syncHint:
-            "Astuce: connecte-toi puis renseigne ton pseudo AniList dans Settings pour synchroniser ta liste anime.",
-          visibility: "Visibilité",
-          publicGame: "Partie publique",
-          publicGameHint: "Visible dans la liste publique",
-          privateGame: "Partie privée",
-          privateGameHint: "Accessible avec le code room",
-          hostHint: "Le host configure le mode AniList et les themes, puis lance quand tout le monde est pret.",
-          creating: "Création...",
-          createRoom: "Créer une room",
-          publicRooms: "Rooms publiques",
-          players: "joueurs",
-          mode: "Mode",
-          synchronizedAniList: "AniList synchronise",
-          anime: "Anime",
-          joinPublicRoom: "Rejoindre",
-          closed: "Fermée",
-          roomCreated: "Room créée.",
-          roomJoined: "Room rejointe.",
-          createError: "Impossible de créer la room.",
-          promptNickname: "Choisis un pseudo pour rejoindre cette room",
-          heroKicker: "Rooms anime multijoueur",
-          heroTitle: "Des rooms de blind test anime qui partent en direct instantanement",
-          heroBody:
-            "Cree un lobby, synchronise ton univers anime, invite tes amis avec un code court, puis lance un duel openings et endings en temps reel dans le navigateur.",
-          heroActionPrimary: "Creer un lobby live",
-          heroActionSecondary: "Rejoindre avec un code",
-          heroFeatureOneTitle: "Lecture partagee",
-          heroFeatureOneBody: "Tout le monde suit le meme rythme de reveal avec un audio synchronise en direct.",
-          heroFeatureTwoTitle: "Public ou prive",
-          heroFeatureTwoBody: "Ouvre des rooms communautaires ou garde la partie reservee a ton groupe.",
-          heroFeatureThreeTitle: "Pret pour AniList",
-          heroFeatureThreeBody:
-            "Construis des rounds larges ou appuie-toi sur des bibliotheques AniList synchronisees pour une selection plus pointue.",
-          heroSignalRooms: "Rooms publiques",
-          heroSignalJoinable: "Ouvertes",
-          heroSignalModes: "Modes de playlist",
-          heroSignalModesValue: "Anime + AniList",
-          heroSignalAccess: "Installation",
-          heroSignalAccessValue: "Navigateur uniquement",
-          consoleKicker: "Console de lobby",
-          actionTitle: "Lancer ou rejoindre la prochaine room",
-          actionSubtitle:
-            "Une seule surface pour entrer dans un lobby existant ou ouvrir ta propre room sans perdre l'energie live du jeu.",
-          joinBlockTitle: "Rejoindre une room",
-          createBlockTitle: "Creer un lobby",
-          joinModeHint:
-            "Entre un code room et prepare ton pseudo. Le premier joueur qui entre devient host du lobby.",
-          createModeHint:
-            "Ouvre une room instantanement, choisis sa visibilite, puis configure la source anime depuis le lobby.",
-          joinModeMeta: "Le chemin le plus rapide quand quelqu'un t'a deja envoye le code.",
-          createModeMeta: "Le meilleur choix si tu veux host et piloter le rythme de la partie.",
-          publicRoomsTitle: "Rooms disponibles maintenant",
-          publicRoomsSubtitle:
-            "Une file live de lobbies publics, avec juste assez d'etat et de contexte pour choisir la bonne room rapidement.",
-          publicRoomsCount: "rooms listees",
-          publicRoomsEmpty:
-            "Aucune room publique n'est ouverte pour le moment. Cree-en une et elle apparaitra ici pour les prochains joueurs.",
-          publicRoomsKicker: "File de rooms live",
-          seoH1: "Blind Test Anime en ligne pour jouer en multijoueur",
-          seoLead:
-            "Kwizik te permet de créer une room de blind test anime, de défier tes amis sur des openings et endings, puis de lancer la partie directement dans le navigateur.",
-          howItWorksTitle: "Comment fonctionne Kwizik",
-          howItWorksBody:
-            "Crée une room, choisis la source anime, invite les joueurs avec un code court, puis lance un blind test en direct avec lecture synchronisée et score live.",
-          whyTitle: "Pourquoi utiliser Kwizik",
-          whyBody:
-            "Kwizik combine rooms publiques, lobbies privés, playlists AniList et gameplay multijoueur en direct pour organiser facilement un quiz anime entre amis ou en communauté.",
-          faqTitle: "FAQ",
-          faqQ1: "Peut-on jouer a un blind test anime en ligne avec des amis ?",
-          faqA1:
-            "Oui. Cree une room, partage le code, puis chacun peut rejoindre depuis son navigateur avant que le host lance la partie.",
-          faqQ2: "Kwizik gere-t-il les openings et endings d'anime ?",
-          faqA2:
-            "Oui. Le host peut configurer le mode de themes pour jouer sur les openings, les endings, ou un mix des deux.",
-        };
+  const copy = getHomeCopy(locale);
   usePageSeo({
     title:
       locale === "en"
@@ -351,7 +154,7 @@ export function HomePage() {
       });
     },
     onError: (error) => {
-      notify.error(joinErrorMessage(error, locale), {
+      notify.error(getHomeJoinErrorMessage(error, locale), {
         key: "room:join:error",
       });
     },
@@ -627,7 +430,7 @@ export function HomePage() {
                   <div className="home-room-topline">
                     <strong className="home-room-code">{room.roomCode}</strong>
                     <span className={`home-room-state home-room-state-${room.state}`}>
-                      {formatRoomState(room.state, locale)}
+                      {formatHomeRoomState(room.state, locale)}
                     </span>
                   </div>
                   <div className="home-room-meta">

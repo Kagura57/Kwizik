@@ -1,5 +1,14 @@
 # Lessons
 
+## 2026-03-17
+
+- Quand un utilisateur signale qu'un round montrait deja le mauvais anime pour la musique en cours, ne pas partir sur un scenario de transition entre reveal et round suivant; traiter d'abord le bug comme une incoherence interne au meme round.
+- Quand un utilisateur signale un fail CI en pointant un test exact, repartir du scenario de test reel avant d'affirmer que la branche est deja bonne; verifier le contrat produit implicite de ce test et les cas voisins qui semblent contradictoires.
+- Quand du code ou des tests contiennent encore des references legacy a d'anciens providers, ne pas presenter l'analyse en termes produit autour de ces providers; raisonner d'abord en termes de modes internes et verifier si le vrai probleme vient plutot d'un contrat de test devenu incoherent.
+- Quand l'utilisateur dit qu'il n'y a aucune contrainte de delai et veut que le SEO soit "bien fait", ne pas cadrer la recommandation autour d'un gain rapide ou d'un refresh minimal; requalifier vers une architecture SEO plus durable, quitte a proposer une landing dediee et un enrichissement de contenu.
+- Quand l'utilisateur dit qu'il a installe de nouveaux skills et demande de les prendre en compte, verifier immediatement l'inventaire local des skills disponibles avant de continuer, puis integrer explicitement ceux qui sont pertinents dans la suite du travail.
+- Quand une refonte de page ajoute plusieurs cartes de synthese, verifier explicitement qu'aucune ne repete la meme information avec une autre etiquette; chaque carte de hero doit apporter une donnee distincte ou une action differente.
+
 ## 2026-03-13
 
 - Quand l'utilisateur dit que la disposition d'une page est "desastreuse", ne pas se limiter a corriger un bloc isole; reevaluer la composition complete (hero, hierarchy, grid, density, breathing room, CTA, responsive balance) avant de proposer un redesign.
