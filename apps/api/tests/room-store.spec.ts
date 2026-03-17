@@ -1476,7 +1476,7 @@ describe("RoomStore gameplay progression", () => {
         playingMs: 20,
         revealMs: 5,
         leaderboardMs: 5,
-        maxRounds: 3,
+        maxRounds: 1,
       },
     });
 

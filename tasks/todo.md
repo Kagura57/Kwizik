@@ -1,3 +1,35 @@
+# RoomStore Start Failure Investigation
+
+- [x] Reproduce the exact failing `RoomStore` test locally.
+- [x] Compare the failing scenario against neighboring start-game tests to identify the intended contract.
+- [x] Remove the incorrect provider-specific patch and restore the test to the coherent contract.
+- [x] Re-run the focused `RoomStore` tests and document the result.
+
+## Review
+
+- The failing scenario was not a fresh `RoomStore` regression: the test itself had been widened to `maxRounds: 3` even though it only injects a single playable track.
+- A nearby existing test already covers the opposite contract and expects `NO_TRACKS_FOUND` when the fetched pool is smaller than the configured round count.
+- The right fix is to restore this specific MCQ-downgrade test to a one-round scenario and keep `startGame()` strict about insufficient pools.
+- Verification:
+  - `bun test apps/api/tests/room-store.spec.ts -t "downgrades MCQ to text when coherent distractors are insufficient"` ✅
+  - `bun test apps/api/tests/room-store.spec.ts -t "does not reuse previously-correct tracks as later MCQ distractors"` ✅
+  - `bun test apps/api/tests/room-store.spec.ts` ✅
+
+# AnimeThemes Round Mismatch Fix
+
+- [x] Re-check the current branch state, lessons, and existing task notes before restarting the fix.
+- [ ] Re-verify on this branch whether the mismatch is best explained by AnimeThemes backend data/keying rather than frontend round transitions.
+- [ ] Validate the exact fix scope before implementation.
+- [ ] Implement the approved fix with minimal surface area.
+- [ ] Add regression coverage for the reported mismatch shape.
+- [ ] Run targeted verification and document the result.
+
+## Review
+
+- Restart requested because the earlier investigation happened on the wrong branch.
+- Current branch confirmed: `feat/batch-features-march-2026`.
+- Working assumption from the previous investigation still needs to be revalidated on this branch: one round can show clip/media from anime A while the accepted answer and reveal metadata come from anime B if AnimeThemes video identity collides in backend catalog/proxy state.
+
 # Replay Room Settings Preservation
 
 - [x] Confirm exactly which room settings are lost on replay and where replay resets them.
