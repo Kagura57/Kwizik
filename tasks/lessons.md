@@ -2,12 +2,18 @@
 
 ## 2026-03-17
 
+- Quand un utilisateur demande un rollback apres plusieurs passes de DA ratees, ne pas negocier une nouvelle iteration visuelle; revenir d'abord a la base saine du produit et ne reintroduire que la couche explicitement demandee, ici la motion initiale.
+- Quand l'utilisateur dit qu'une "refonte totale" reste encore trop ressemblante a l'original, ne pas conclure a partir des nouvelles classes, couleurs ou slogans; comparer brutalement la silhouette generale, les proportions, la densite et la relation hero/actions/contenu avec l'ancien produit, puis repartir si la structure percue reste la meme.
 - Quand un utilisateur signale qu'un round montrait deja le mauvais anime pour la musique en cours, ne pas partir sur un scenario de transition entre reveal et round suivant; traiter d'abord le bug comme une incoherence interne au meme round.
 - Quand un utilisateur signale un fail CI en pointant un test exact, repartir du scenario de test reel avant d'affirmer que la branche est deja bonne; verifier le contrat produit implicite de ce test et les cas voisins qui semblent contradictoires.
 - Quand du code ou des tests contiennent encore des references legacy a d'anciens providers, ne pas presenter l'analyse en termes produit autour de ces providers; raisonner d'abord en termes de modes internes et verifier si le vrai probleme vient plutot d'un contrat de test devenu incoherent.
 - Quand l'utilisateur dit qu'il n'y a aucune contrainte de delai et veut que le SEO soit "bien fait", ne pas cadrer la recommandation autour d'un gain rapide ou d'un refresh minimal; requalifier vers une architecture SEO plus durable, quitte a proposer une landing dediee et un enrichissement de contenu.
 - Quand l'utilisateur dit qu'il a installe de nouveaux skills et demande de les prendre en compte, verifier immediatement l'inventaire local des skills disponibles avant de continuer, puis integrer explicitement ceux qui sont pertinents dans la suite du travail.
 - Quand une refonte de page ajoute plusieurs cartes de synthese, verifier explicitement qu'aucune ne repete la meme information avec une autre etiquette; chaque carte de hero doit apporter une donnee distincte ou une action differente.
+- Quand l'utilisateur demande explicitement d'utiliser un skill non encore installe, ne pas improviser avec une approximation: chercher ce skill, l'installer si possible, lire son workflow, puis reformuler la proposition ou l'implementation en s'y alignant explicitement.
+- Quand l'utilisateur elargit explicitement le scope a des changements backend pour enrichir une fonctionnalite frontend, ne pas rester enferme dans le contrat existant; reouvrir le design et proposer des donnees plus utiles tant que le changement reste propre et justifie.
+- Quand l'utilisateur dit explicitement de ne pas hesiter a installer des libs si cela peut nettement ameliorer la qualite du design ou de la motion, ne pas rester bloque par une preference par defaut pour du CSS natif; evaluer franchement la dependance la plus utile et l'ajouter si elle clarifie l'orchestration.
+- Quand l'utilisateur dit que l'esthetique du site n'a "pas du tout change", ne pas defendre une passe de skinning reussie sur le papier; traiter le retour comme la preuve que la composition, la silhouette des pages et les reperes visuels restent trop proches de l'ancien produit, puis repartir d'une direction plus radicale.
 
 ## 2026-03-13
 

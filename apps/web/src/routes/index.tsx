@@ -1,10 +1,12 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "motion/react";
 import { toRomaji } from "wanakana";
 import { formatHomeRoomState, getHomeCopy, getHomeJoinErrorMessage } from "../i18n/copy/home";
 import { usePageSeo } from "../i18n/seo";
 import { useCurrentLocale } from "../i18n/useLocale";
+import { impactHeroVariants, impactPageVariants, impactPanelVariants } from "../lib/impactMotion";
 import { createRoom, getPublicRooms, joinRoom } from "../lib/api";
 import { notify } from "../lib/notify";
 import { useGameStore } from "../stores/gameStore";
@@ -27,7 +29,14 @@ export function HomePage() {
   const [joinDisplayName, setJoinDisplayName] = useState("Player One");
   const [joinRoomCode, setJoinRoomCode] = useState("");
   const [isPublicRoom, setIsPublicRoom] = useState(true);
+  const reduceMotion = useReducedMotion();
   const copy = getHomeCopy(locale);
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
   usePageSeo({
     title:
       locale === "en"
@@ -225,9 +234,9 @@ export function HomePage() {
 
   return (
     <>
-      <section className="home-landing">
+      <motion.section className="home-landing" variants={impactPageVariants} {...stageMotion}>
         <div className="home-premium-shell">
-          <article className="panel-card home-story-card">
+          <motion.article className="panel-card home-story-card" variants={impactHeroVariants}>
             <div className="home-story-copy">
               <p className="kicker">{copy.heroKicker}</p>
               <h1 className="hero-title home-story-title">{copy.heroTitle}</h1>
@@ -242,9 +251,9 @@ export function HomePage() {
                 {copy.heroActionSecondary}
               </button>
             </div>
-          </article>
+          </motion.article>
 
-          <aside className="panel-card home-console-card" id="home-console">
+          <motion.aside className="panel-card home-console-card" id="home-console" variants={impactPanelVariants}>
             <div className="home-console-head">
               <p className="kicker">{copy.consoleKicker}</p>
               <h2 className="panel-title">{copy.actionTitle}</h2>
@@ -364,7 +373,7 @@ export function HomePage() {
                 </div>
               </section>
             )}
-          </aside>
+          </motion.aside>
         </div>
 
         <section className="home-support-strip">
@@ -402,8 +411,13 @@ export function HomePage() {
             </div>
           </div>
         </section>
-      </section>
-      <section className="panel-card home-public-section" id="home-live-rooms">
+      </motion.section>
+      <motion.section
+        className="panel-card home-public-section"
+        id="home-live-rooms"
+        variants={impactPageVariants}
+        {...stageMotion}
+      >
         <div className="home-section-head">
           <div className="home-section-heading">
             <p className="kicker">{copy.publicRoomsKicker}</p>
@@ -462,20 +476,20 @@ export function HomePage() {
         ) : (
           <p className="status home-empty-state">{copy.publicRoomsEmpty}</p>
         )}
-      </section>
+      </motion.section>
 
-      <section className="home-editorial-grid">
-        <article className="panel-card home-editorial-card">
+      <motion.section className="home-editorial-grid" variants={impactPageVariants} {...stageMotion}>
+        <motion.article className="panel-card home-editorial-card" variants={impactHeroVariants}>
           <h2 className="panel-title">{copy.howItWorksTitle}</h2>
           <p className="panel-copy">{copy.howItWorksBody}</p>
-        </article>
+        </motion.article>
 
-        <article className="panel-card home-editorial-card">
+        <motion.article className="panel-card home-editorial-card" variants={impactPanelVariants}>
           <h2 className="panel-title">{copy.whyTitle}</h2>
           <p className="panel-copy">{copy.whyBody}</p>
-        </article>
+        </motion.article>
 
-        <article className="panel-card home-editorial-card">
+        <motion.article className="panel-card home-editorial-card" variants={impactPanelVariants}>
           <h2 className="panel-title">{copy.faqTitle}</h2>
           <div className="faq-list">
             <div className="faq-item">
@@ -487,8 +501,8 @@ export function HomePage() {
               <p className="panel-copy">{copy.faqA2}</p>
             </div>
           </div>
-        </article>
-      </section>
+        </motion.article>
+      </motion.section>
     </>
   );
 }

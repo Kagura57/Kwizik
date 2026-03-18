@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
+import { motion, useReducedMotion } from "motion/react";
 import { toRomaji } from "wanakana";
 import {
   getProjectionCopy,
@@ -21,6 +22,7 @@ import {
   getEffectiveRoomStartedAtMs,
   getNextRoomTransitionAtMs,
 } from "../../../lib/liveRoundTiming";
+import { impactHeroVariants, impactPageVariants } from "../../../lib/impactMotion";
 import { logClientEvent } from "../../../lib/logger";
 import { notify } from "../../../lib/notify";
 import { fetchLiveRoomState } from "../../../lib/realtime";
@@ -121,7 +123,14 @@ function formatProjectionRevealTitle(
 export function RoomViewPage() {
   const { roomCode } = useParams({ from: "/$locale/room/$roomCode/view" });
   const locale = useCurrentLocale();
+  const reduceMotion = useReducedMotion();
   const copy = getProjectionCopy(locale);
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
   usePageSeo({
     title: locale === "en" ? `Projection ${roomCode} | Kwizik` : `Projection ${roomCode} | Kwizik`,
     description:
@@ -917,8 +926,11 @@ export function RoomViewPage() {
   }, []);
 
   return (
-    <section className="projection-stage">
-      <article className="projection-center-stage projection-arena">
+    <motion.section className="projection-stage" variants={impactPageVariants} {...stageMotion}>
+      <motion.article
+        className="projection-center-stage projection-arena"
+        variants={impactHeroVariants}
+      >
         <div className="round-strip">
           <span>{copy.projection} {roomCode}</span>
           <strong>{copy.round} {roundLabel}</strong>
@@ -1080,7 +1092,7 @@ export function RoomViewPage() {
             </li>
           ))}
         </ol>
-      </article>
+      </motion.article>
 
       <audio
         ref={audioRef}
@@ -1090,6 +1102,6 @@ export function RoomViewPage() {
       >
         <track kind="captions" />
       </audio>
-    </section>
+    </motion.section>
   );
 }

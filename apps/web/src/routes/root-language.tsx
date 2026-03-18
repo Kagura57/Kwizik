@@ -1,6 +1,15 @@
+import { motion, useReducedMotion } from "motion/react";
 import { usePageSeo } from "../i18n/seo";
+import { impactHeroVariants, impactPageVariants } from "../lib/impactMotion";
 
 export function RootLanguagePage() {
+  const reduceMotion = useReducedMotion();
+  const stageMotion = reduceMotion
+    ? {}
+    : ({
+        initial: "hidden",
+        animate: "show",
+      } as const);
   usePageSeo({
     title: "Kwizik | Choose your language",
     description:
@@ -13,9 +22,9 @@ export function RootLanguagePage() {
   });
 
   return (
-    <main className="app-shell language-entry-shell">
+    <motion.main className="app-shell language-entry-shell" variants={impactPageVariants} {...stageMotion}>
       <section className="single-panel">
-        <article className="panel-card language-entry-card">
+        <motion.article className="panel-card language-entry-card" variants={impactHeroVariants}>
           <p className="kicker">Kwizik</p>
           <h1 className="panel-title">Choose your language</h1>
           <p className="panel-copy">
@@ -30,8 +39,8 @@ export function RootLanguagePage() {
               English
             </a>
           </div>
-        </article>
+        </motion.article>
       </section>
-    </main>
+    </motion.main>
   );
 }
