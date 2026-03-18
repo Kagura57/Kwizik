@@ -1,3 +1,30 @@
+# Remembered Language Entry
+
+- [x] Inspect the current locale routing and confirm where the language entry page is mounted.
+- [x] Define the persistence strategy so the language choice is remembered per browser.
+- [x] Implement remembered locale storage plus automatic redirect away from `/` after a choice exists.
+- [x] Update language selection entry points so changing language refreshes the remembered preference.
+- [x] Add targeted regression coverage for the remembered-language behavior.
+- [x] Run focused verification and document the result.
+
+## Review
+
+- Root cause:
+  - the neutral `/` entry page is always rendered because no persisted locale preference is currently read anywhere in the web app;
+  - switching language in the top bar changes the route but does not store any preference for future visits.
+- Intended fix:
+  - persist the chosen locale in browser storage;
+  - redirect `/` to the remembered localized home when a valid stored locale exists;
+  - keep the stored locale in sync both when the user chooses from the landing page and when they switch language later.
+- Delivered:
+  - added `apps/web/src/i18n/localeMemory.ts` as the browser-side locale preference store;
+  - `apps/web/src/router.tsx` now redirects the neutral landing page to the remembered locale home and stores any valid locale reached through localized routes;
+  - `apps/web/src/routes/layout.spec.tsx` now covers redirect and persistence behavior.
+- Verification:
+  - `bun test apps/web/src/routes/layout.spec.tsx` ✅
+  - `bun test apps/web/src/routes` ✅
+  - `cd apps/web && bun run build` ✅
+
 # RoomStore Start Failure Investigation
 
 - [x] Reproduce the exact failing `RoomStore` test locally.

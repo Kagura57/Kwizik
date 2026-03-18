@@ -1,5 +1,6 @@
-import { createRootRoute, createRoute, createRouter, notFound } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, notFound, redirect } from "@tanstack/react-router";
 import { isSupportedLocale } from "./i18n/locale";
+import { persistRememberedLocale, resolveRememberedLocaleHomePath } from "./i18n/localeMemory";
 import { RootLayout } from "./routes/__root";
 import { AuthPage } from "./routes/auth";
 import { HomePage } from "./routes/index";
@@ -14,9 +15,30 @@ const rootRoute = createRootRoute({
   component: RootLayout,
 });
 
+export function redirectToRememberedLocaleHome() {
+  return resolveRememberedLocaleHomePath();
+}
+
+export function validateAndRememberLocale(locale: string) {
+  if (!isSupportedLocale(locale)) {
+    throw notFound();
+  }
+
+  persistRememberedLocale(locale);
+  return locale;
+}
+
 const rootLanguageRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  beforeLoad: () => {
+    const rememberedHomePath = redirectToRememberedLocaleHome();
+    if (!rememberedHomePath) return;
+
+    throw redirect({
+      to: rememberedHomePath,
+    });
+  },
   component: RootLanguagePage,
 });
 
@@ -24,9 +46,7 @@ const localeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/$locale",
   beforeLoad: ({ params }) => {
-    if (!isSupportedLocale(params.locale)) {
-      throw notFound();
-    }
+    validateAndRememberLocale(params.locale);
   },
   component: LocalizedLayout,
 });
